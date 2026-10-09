@@ -53,6 +53,13 @@
         "description": "Save each PDF page as an image. Several pages download as a ZIP.",
         "accept": ".pdf", "multiple": false, "hint": "One PDF, up to 300 pages",
       },
+      {
+        "id": "pdfmerge", "title": "Merge PDFs", "from": "PDF", "to": "PDF", "tone": "purple",
+        "description": "Combine several PDFs into one file, in the order you choose.",
+        "accept": ".pdf,application/pdf", "multiple": true, "min": 2,
+        "choose": "Choose PDFs", "action": "Merge PDFs", "busy": "Merging…",
+        "hint": "2 to 50 PDFs, up to 200 MB in total",
+      },
     ] %}
 
     <section class="convert-grid" aria-label="Conversion tools">
@@ -60,7 +67,7 @@
         <article class="convert-card" id="{{ tool.id }}">
           <div class="convert-card-head">
             <span class="convert-badge tone-{{ tool.tone }}" aria-hidden="true">
-              {{ tool.from }}<span class="convert-arrow">→</span>{{ tool.to }}
+              {{ tool.from }}<span class="convert-arrow">{{ '+' if tool.id == 'pdfmerge' else '→' }}</span>{{ tool.to }}
             </span>
             <div>
               <h2>{{ tool.title }}</h2>
@@ -69,18 +76,29 @@
           </div>
 
           <form class="convert-form" action="{{ url_for('convert', tool=tool.id) }}" method="post"
-                enctype="multipart/form-data">
+                enctype="multipart/form-data" data-min-files="{{ tool.min or 1 }}"
+                data-busy="{{ tool.busy or 'Converting…' }}">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <label class="convert-drop" for="{{ tool.id }}-files">
               <input id="{{ tool.id }}-files" name="files" type="file" accept="{{ tool.accept }}"
                      {% if tool.multiple %}multiple{% endif %} required>
               <span class="convert-drop-title">
-                {{ 'Choose images' if tool.multiple else 'Choose a file' }}
+                {{ tool.choose or ('Choose images' if tool.multiple else 'Choose a file') }}
                 <span class="convert-drop-extra">or drop {{ 'them' if tool.multiple else 'it' }} here</span>
               </span>
               <span class="convert-drop-hint">{{ tool.hint }}</span>
               <span class="convert-file-list" data-file-list></span>
             </label>
+            {% if tool.multiple %}
+              <div class="convert-queue" data-queue hidden>
+                <div class="convert-queue-head">
+                  <span data-queue-summary></span>
+                  <button class="convert-link-button" type="button" data-clear>Remove all</button>
+                </div>
+                <ol class="convert-queue-list" data-queue-list aria-label="Chosen files, in order"></ol>
+                <p class="convert-queue-hint">Drag files to change their order, or use the arrows.</p>
+              </div>
+            {% endif %}
 
             {% if tool.id == "image2pdf" %}
               <div class="convert-options">
@@ -111,7 +129,7 @@
             {% endif %}
 
             <div class="convert-actions">
-              <button type="submit">Convert</button>
+              <button type="submit">{{ tool.action or 'Convert' }}</button>
               <span class="convert-status" data-status aria-live="polite"></span>
             </div>
           </form>
@@ -136,22 +154,205 @@
       return plain ? plain[1] : fallback;
     }
 
+    // Dropping a file outside a drop area would open it and leave the app.
+    ["dragover", "drop"].forEach(function (type) {
+      window.addEventListener(type, function (event) {
+        if (!event.target.closest || !event.target.closest(".convert-drop")) event.preventDefault();
+      });
+    });
+
+    var canSetFiles = (function () {
+      try { return typeof DataTransfer === "function" && !!new DataTransfer().items; } catch (error) { return false; }
+    })();
+
+    function formatSize(bytes) {
+      if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
+      return (bytes / 1024 / 1024).toFixed(1) + " MB";
+    }
+
+    function makeButton(className, label, html) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = className;
+      button.setAttribute("aria-label", label);
+      button.title = label;
+      button.innerHTML = html;
+      return button;
+    }
+
     document.querySelectorAll(".convert-form").forEach(function (form) {
       var input = form.querySelector('input[type="file"]');
       var drop = form.querySelector(".convert-drop");
       var list = form.querySelector("[data-file-list]");
       var status = form.querySelector("[data-status]");
       var button = form.querySelector('button[type="submit"]');
+      var queue = form.querySelector("[data-queue]");
+      var queueList = form.querySelector("[data-queue-list]");
+      var minFiles = parseInt(form.dataset.minFiles, 10) || 1;
+      var accepted = input.accept.split(",").map(function (item) { return item.trim().toLowerCase(); });
+      var ordered = input.multiple && canSetFiles && queue;
+      var files = [];
+      var dragIndex = null;
 
       function setStatus(text, tone) {
         status.textContent = text;
         status.className = "convert-status" + (tone ? " " + tone : "");
       }
 
+      function isAccepted(file) {
+        var name = file.name.toLowerCase();
+        var type = (file.type || "").toLowerCase();
+        return accepted.some(function (rule) {
+          if (rule.charAt(0) === ".") return name.slice(-rule.length) === rule;
+          if (rule.slice(-2) === "/*") return type.indexOf(rule.slice(0, -1)) === 0;
+          return type === rule;
+        });
+      }
+
+      // Keep the real file input in step with the list, so the form posts files in this order.
+      function sync() {
+        var transfer = new DataTransfer();
+        files.forEach(function (file) { transfer.items.add(file); });
+        input.files = transfer.files;
+      }
+
+      function move(from, to, focusAction) {
+        if (to < 0 || to >= files.length || from === to) return;
+        files.splice(to, 0, files.splice(from, 1)[0]);
+        sync();
+        render();
+        // Keep keyboard focus on the moved file's arrow so it can be pressed again.
+        var row = queueList.children[to];
+        var target = row && (row.querySelector('[data-action="' + focusAction + '"]:not(:disabled)') ||
+          row.querySelector(".convert-queue-button:not(:disabled)"));
+        if (target) target.focus();
+      }
+
+      function render() {
+        drop.classList.toggle("has-files", files.length > 0);
+        if (!ordered) return;
+        list.textContent = "";
+        queue.hidden = files.length === 0;
+        var total = files.reduce(function (sum, file) { return sum + file.size; }, 0);
+        form.querySelector("[data-queue-summary]").textContent =
+          files.length + (files.length === 1 ? " file" : " files") + " · " + formatSize(total);
+        queueList.textContent = "";
+        files.forEach(function (file, index) {
+          var item = document.createElement("li");
+          item.className = "convert-queue-row";
+          item.draggable = true;
+          item.dataset.index = index;
+
+          var body = document.createElement("div");
+          body.className = "convert-queue-item";
+          body.innerHTML = '<span class="convert-queue-grip" aria-hidden="true">⋮⋮</span>' +
+            '<span class="convert-queue-number"></span><span class="convert-queue-name"></span>' +
+            '<span class="convert-queue-size"></span>';
+          body.querySelector(".convert-queue-number").textContent = index + 1;
+          body.querySelector(".convert-queue-name").textContent = file.name;
+          body.querySelector(".convert-queue-size").textContent = formatSize(file.size);
+
+          var actions = document.createElement("div");
+          actions.className = "convert-queue-actions";
+          var up = makeButton("convert-queue-button", "Move " + file.name + " up", "↑");
+          var down = makeButton("convert-queue-button", "Move " + file.name + " down", "↓");
+          var remove = makeButton("convert-queue-button is-remove", "Remove " + file.name, "×");
+          up.dataset.action = "up";
+          down.dataset.action = "down";
+          up.disabled = index === 0;
+          down.disabled = index === files.length - 1;
+          up.addEventListener("click", function () { move(index, index - 1, "up"); });
+          down.addEventListener("click", function () { move(index, index + 1, "down"); });
+          remove.addEventListener("click", function () {
+            files.splice(index, 1);
+            sync();
+            render();
+            setStatus("");
+          });
+          actions.append(up, down, remove);
+          item.append(body, actions);
+          queueList.appendChild(item);
+        });
+      }
+
+      function addFiles(incoming) {
+        var chosen = Array.prototype.slice.call(incoming);
+        if (!chosen.length) return;
+        var skipped = chosen.filter(function (file) { return !isAccepted(file); });
+        chosen = chosen.filter(isAccepted);
+        if (!input.multiple) {
+          if (chosen.length > 1 || (chosen.length && skipped.length)) {
+            setStatus("Drop one file at a time here.", "error");
+            return;
+          }
+          files = chosen;
+        } else {
+          chosen.forEach(function (file) {
+            var duplicate = files.some(function (existing) {
+              return existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified;
+            });
+            if (!duplicate) files.push(file);
+          });
+        }
+        if (canSetFiles) {
+          sync();
+        } else if (incoming !== input.files) {
+          try { input.files = incoming; } catch (error) {}
+        }
+        if (!ordered) list.textContent = describe(files);
+        render();
+        setStatus(skipped.length ? skipped.length + " file(s) skipped: not a supported type." : "", skipped.length ? "error" : "");
+      }
+
+      if (queue) {
+        form.querySelector("[data-clear]").addEventListener("click", function () {
+          files = [];
+          sync();
+          render();
+          setStatus("");
+        });
+
+        // Drag rows to reorder them.
+        queueList.addEventListener("dragstart", function (event) {
+          var row = event.target.closest(".convert-queue-row");
+          if (!row) return;
+          dragIndex = parseInt(row.dataset.index, 10);
+          row.classList.add("is-dragging");
+          event.dataTransfer.effectAllowed = "move";
+          event.dataTransfer.setData("text/plain", String(dragIndex));
+        });
+        queueList.addEventListener("dragover", function (event) {
+          if (dragIndex === null) return;
+          event.preventDefault();
+          var row = event.target.closest(".convert-queue-row");
+          queueList.querySelectorAll(".is-drop-before, .is-drop-after").forEach(function (el) {
+            el.classList.remove("is-drop-before", "is-drop-after");
+          });
+          if (!row) return;
+          var box = row.getBoundingClientRect();
+          row.classList.add(event.clientY < box.top + box.height / 2 ? "is-drop-before" : "is-drop-after");
+        });
+        queueList.addEventListener("drop", function (event) {
+          if (dragIndex === null) return;
+          event.preventDefault();
+          var row = event.target.closest(".convert-queue-row");
+          if (!row) return;
+          var target = parseInt(row.dataset.index, 10);
+          if (row.classList.contains("is-drop-after")) target += 1;
+          if (target > dragIndex) target -= 1;
+          var from = dragIndex;
+          dragIndex = null;
+          move(from, target);
+        });
+        queueList.addEventListener("dragend", function () {
+          dragIndex = null;
+          render();
+        });
+      }
+
       input.addEventListener("change", function () {
-        list.textContent = describe(input.files);
-        drop.classList.toggle("has-files", input.files.length > 0);
-        setStatus("");
+        // With an ordered list, picked files are added; the input is then refilled from the list.
+        if (input.files.length) addFiles(input.files);
       });
 
       ["dragenter", "dragover"].forEach(function (type) {
@@ -162,13 +363,7 @@
       });
       drop.addEventListener("drop", function (event) {
         event.preventDefault();
-        if (!event.dataTransfer.files.length) return;
-        if (!input.multiple && event.dataTransfer.files.length > 1) {
-          setStatus("Drop one file at a time here.", "error");
-          return;
-        }
-        input.files = event.dataTransfer.files;
-        input.dispatchEvent(new Event("change"));
+        if (event.dataTransfer.files.length) addFiles(event.dataTransfer.files);
       });
 
       // Convert without leaving the page, then download the result.
@@ -176,9 +371,10 @@
         if (!window.fetch || !window.URL || !URL.createObjectURL) return;
         event.preventDefault();
         if (!input.files.length) { setStatus("Choose a file first.", "error"); return; }
+        if (input.files.length < minFiles) { setStatus("Choose at least " + minFiles + " files.", "error"); return; }
         button.disabled = true;
         form.classList.add("is-busy");
-        setStatus("Converting…");
+        setStatus(form.dataset.busy);
         fetch(form.action, {
           method: "POST",
           body: new FormData(form),

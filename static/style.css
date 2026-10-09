@@ -524,3 +524,45 @@ select {
   .settings-info div { flex-direction: column; gap: 2px; }
   .settings-info dd { text-align: left; }
 }
+
+/* Convert: Merge PDFs and the ordered file list */
+.tone-purple { background: #f4f3ff; color: #5925dc; }
+.convert-queue { display: flex; flex-direction: column; gap: 8px; }
+.convert-queue[hidden] { display: none; }
+.convert-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #475467; font-size: 13px; font-weight: 600; }
+.convert-link-button, .convert-link-button:hover {
+  min-height: 32px; padding: 4px 6px; background: none; color: #b42318; font-size: 13px; font-weight: 600;
+}
+.convert-link-button:hover { text-decoration: underline; }
+.convert-queue-list { margin: 0; padding: 0; list-style: none; border: 1px solid #e4e7ec; border-radius: 8px; overflow: hidden; }
+.convert-queue-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; background: #fff;
+  border-top: 1px solid #eaecf0; cursor: grab; transition: background .15s;
+}
+.convert-queue-row:first-child { border-top: 0; }
+.convert-queue-row.is-dragging { opacity: .45; }
+.convert-queue-row.is-drop-before { box-shadow: inset 0 2px 0 #155eef; }
+.convert-queue-row.is-drop-after { box-shadow: inset 0 -2px 0 #155eef; }
+.convert-queue-item { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 13px; }
+.convert-queue-grip { color: #98a2b3; letter-spacing: -2px; user-select: none; }
+.convert-queue-number {
+  flex: none; display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 5px;
+  border-radius: 999px; background: #f4f3ff; color: #5925dc; font-size: 12px; font-weight: 700;
+}
+.convert-queue-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #182230; font-weight: 600; }
+.convert-queue-size { flex: none; color: #667085; }
+.convert-queue-actions { flex: none; display: flex; gap: 2px; }
+.convert-queue-button, .convert-queue-button:hover {
+  width: 32px; min-height: 32px; padding: 0; border-radius: 6px; background: transparent; color: #475467; font-size: 16px;
+}
+.convert-queue-button:not(:disabled):hover { background: #f2f4f7; }
+.convert-queue-button:disabled { opacity: .3; cursor: default; }
+.convert-queue-button.is-remove { color: #b42318; font-size: 18px; }
+.convert-queue-hint { margin: 0; color: #667085; font-size: 12px; }
+@media (pointer: coarse) {
+  .convert-queue-button, .convert-queue-button:hover { width: 40px; min-height: 40px; }
+  .convert-queue-grip { display: none; }
+}
+@media (max-width: 600px) {
+  .convert-queue-size { display: none; }
+}

@@ -293,7 +293,7 @@ class FileManagerTests(unittest.TestCase):
     def test_convert_page_lists_all_tools(self):
         response = self.client.get("/convert")
         self.assertEqual(response.status_code, 200)
-        for title in (b"Word to PDF", b"PDF to Word", b"Image to PDF", b"PDF to Image"):
+        for title in (b"Word to PDF", b"PDF to Word", b"Image to PDF", b"PDF to Image", b"Merge PDFs"):
             self.assertIn(title, response.data)
 
     def test_image_to_pdf_combines_images(self):
@@ -322,6 +322,56 @@ class FileManagerTests(unittest.TestCase):
         self.assertAlmostEqual(first.height, 595.3, delta=1)
         self.assertAlmostEqual(second.width, 595.3, delta=1)
         response.close()
+
+    def test_merge_pdfs_keeps_upload_order(self):
+        import pymupdf
+
+        token = self._csrf()
+        response = self.client.post(
+            "/convert/pdfmerge",
+            data={
+                "_csrf_token": token,
+                "files": [
+                    (io.BytesIO(self._pdf_bytes(2)), "สัญญา.pdf"),
+                    (io.BytesIO(self._pdf_bytes(1)), "appendix.pdf"),
+                    (io.BytesIO(self._pdf_bytes(3)), "photos.pdf"),
+                ],
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/pdf")
+        self.assertIn("-merged.pdf", response.headers["Content-Disposition"])
+        document = pymupdf.open(stream=response.data, filetype="pdf")
+        self.assertEqual(document.page_count, 6)
+        self.assertEqual(
+            [(title, page) for _, title, page in document.get_toc()],
+            [("สัญญา", 1), ("appendix", 3), ("photos", 4)],
+        )
+        self.assertIn("Hello page 1", document[2].get_text())
+        document.close()
+        response.close()
+
+        one = self.client.post(
+            "/convert/pdfmerge",
+            data={"_csrf_token": token, "files": (io.BytesIO(self._pdf_bytes(1)), "only.pdf")},
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "fetch"},
+        )
+        self.assertEqual(one.status_code, 400)
+        self.assertIn("at least two", one.get_json()["error"])
+
+        broken = self.client.post(
+            "/convert/pdfmerge",
+            data={"_csrf_token": token, "files": [
+                (io.BytesIO(self._pdf_bytes(1)), "good.pdf"),
+                (io.BytesIO(b"not a pdf"), "bad.pdf"),
+            ]},
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "fetch"},
+        )
+        self.assertEqual(broken.status_code, 400)
+        self.assertIn("“bad”", broken.get_json()["error"])
 
     def test_pdf_to_image_returns_png_or_zip(self):
         token = self._csrf()

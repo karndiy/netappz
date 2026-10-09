@@ -23,6 +23,8 @@ IMAGE_EXTENSIONS = {
 
 MAX_IMAGES = 100
 MAX_PDF_PAGES = 300
+MAX_MERGE_FILES = 50
+MAX_MERGE_PAGES = 2000
 PAGE_SIZES_MM = {"a4": (210, 297), "letter": (215.9, 279.4)}
 
 
@@ -181,4 +183,40 @@ def pdf_to_images(source, workdir, image_format="png", dpi=150, name=None):
     with zipfile.ZipFile(result, "w", zipfile.ZIP_STORED) as archive:
         for page in pages:
             archive.write(page, page.name)
+    return result
+
+
+def merge_pdfs(sources, workdir, names=None):
+    """Join PDFs in the given order, with a bookmark at the start of each file."""
+    import pymupdf
+
+    names = names or [source.stem for source in sources]
+    if len(sources) < 2:
+        raise ConversionError("Choose at least two PDFs to merge.")
+    if len(sources) > MAX_MERGE_FILES:
+        raise ConversionError(f"Choose at most {MAX_MERGE_FILES} PDFs at a time.")
+
+    merged = pymupdf.open()
+    try:
+        bookmarks = []
+        for source, name in zip(sources, names):
+            try:
+                document = open_pdf(source)
+            except ConversionError as error:
+                raise ConversionError(f"“{name}”: {error}")
+            try:
+                if merged.page_count + document.page_count > MAX_MERGE_PAGES:
+                    raise ConversionError(f"The merged PDF would have more than {MAX_MERGE_PAGES} pages.")
+                bookmarks.append([1, name, merged.page_count + 1])
+                merged.insert_pdf(document)
+            finally:
+                document.close()
+        merged.set_toc(bookmarks)
+        result = workdir / "merged.pdf"
+        try:
+            merged.save(result, garbage=3, deflate=True)
+        except Exception:
+            raise ConversionError("Could not save the merged PDF.")
+    finally:
+        merged.close()
     return result

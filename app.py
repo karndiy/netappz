@@ -442,6 +442,16 @@ def create_app(test_config=None):
     def updates():
         entries = [
             {
+                "version": "1.15.0",
+                "date": "2026-10-09",
+                "changes": [
+                    "Added Merge PDFs to the Convert page: combine up to 50 PDFs into one, with a bookmark for each file.",
+                    "Drag the chosen files into a different order, or use the arrow buttons on phones and tablets; remove files one by one.",
+                    "Dropping or choosing more files now adds them to the list instead of replacing it.",
+                    "Dropping a file outside a drop area no longer opens it in the browser and leaves the app.",
+                ],
+            },
+            {
                 "version": "1.14.1",
                 "date": "2026-10-09",
                 "changes": [
@@ -821,7 +831,9 @@ def create_app(test_config=None):
         "pdf2word": converters.PDF_EXTENSIONS,
         "image2pdf": converters.IMAGE_EXTENSIONS,
         "pdf2image": converters.PDF_EXTENSIONS,
+        "pdfmerge": converters.PDF_EXTENSIONS,
     }
+    multi_file_tools = {"image2pdf", "pdfmerge"}
     max_convert_bytes = 200 * 1024 * 1024
 
     def download_stem(filename):
@@ -1031,7 +1043,7 @@ def create_app(test_config=None):
         uploads = [upload for upload in request.files.getlist("files") if upload.filename]
         if not uploads:
             return fail("Choose a file to convert.")
-        if tool != "image2pdf" and len(uploads) > 1:
+        if tool not in multi_file_tools and len(uploads) > 1:
             return fail("Choose one file at a time for this conversion.")
         for upload in uploads:
             if Path(upload.filename).suffix.lower() not in convert_tools[tool]:
@@ -1058,6 +1070,10 @@ def create_app(test_config=None):
                         page_size = "a4"
                     result = converters.images_to_pdf(sources, workdir, page_size)
                     download_name = f"{stem}.pdf"
+                elif tool == "pdfmerge":
+                    names = [download_stem(upload.filename) for upload in uploads]
+                    result = converters.merge_pdfs(sources, workdir, names)
+                    download_name = f"{stem}-merged.pdf"
                 else:
                     image_format = "jpg" if request.form.get("image_format") == "jpg" else "png"
                     dpi = {"96": 96, "150": 150, "300": 300}.get(request.form.get("dpi"), 150)
