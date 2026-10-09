@@ -1,0 +1,18 @@
+# Secrets and local settings
+.env
+
+# Data created while the app runs
+instance/
+shared/
+*.sqlite3
+output.log
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store

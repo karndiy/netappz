@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f5f3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#262626" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <title>Chat · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="notes-page chat-page">
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}" aria-current="page">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+    </nav>
+  </header>
+
+  <main class="notes-app{% if explicit %} has-selection{% endif %}">
+    <aside class="notes-sidebar" aria-label="Chats">
+      <div class="notes-toolbar">
+        <span class="chat-sidebar-title">Chats</span>
+        <a class="notes-icon-button" href="{{ url_for('chat_page', new=1) }}" title="New chat" aria-label="New chat">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M9 3H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/><path d="M14.5 2.5a1.4 1.4 0 0 1 2 2L10 11l-2.7.7.7-2.7z"/></svg>
+        </a>
+      </div>
+      <ul class="notes-list">
+        {% for conversation in conversations %}
+          <li>
+            <a class="notes-item{% if selected and conversation.id == selected.id %} is-selected{% endif %}"
+               href="{{ url_for('chat_page', id=conversation.id) }}"
+               {% if selected and conversation.id == selected.id %}aria-current="true"{% endif %}>
+              <strong class="notes-item-title">{{ conversation.title }}</strong>
+              <span class="notes-item-meta">
+                <time datetime="{{ conversation.updated_at | note_iso }}" data-format="short">{{ conversation.updated_at | note_short_date }}</time>
+              </span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if not conversations %}
+        <p class="notes-empty">No chats yet.</p>
+      {% endif %}
+      <p class="chat-telegram-status">
+        {% if telegram_enabled %}
+          <span class="chat-dot is-on" aria-hidden="true"></span>Telegram bot is on: chats from Telegram appear here.
+        {% else %}
+          <span class="chat-dot" aria-hidden="true"></span>Telegram bot is off. Add TELEGRAM_BOT_TOKEN to turn it on.
+        {% endif %}
+      </p>
+    </aside>
+
+    <section class="notes-editor chat-pane" aria-label="Conversation">
+      <div class="notes-toolbar notes-editor-toolbar">
+        <a class="notes-back" href="{{ url_for('chat_page') }}">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4-6 6 6 6"/></svg>Chats
+        </a>
+        <span class="notes-status chat-title" id="chat-title">{{ selected.title if selected else 'New chat' }}</span>
+        <div class="notes-toolbar-actions">
+          {% if selected %}
+            <form action="{{ url_for('chat_delete', conversation_id=selected.id) }}" method="post"
+                  onsubmit="return confirm('Delete this chat?');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button class="notes-icon-button" type="submit" title="Delete chat" aria-label="Delete chat">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.5h13M8 5.5V3.5h4v2M5.5 5.5l.8 11h7.4l.8-11M8.5 8.5v5M11.5 8.5v5"/></svg>
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="chat-scroll" id="chat-scroll">
+        {% with flashes = get_flashed_messages(with_categories=true) %}
+          {% for category, message in flashes %}
+            <p class="chat-notice {{ category }}">{{ message }}</p>
+          {% endfor %}
+        {% endwith %}
+        {% if not configured %}
+          <div class="chat-notice error">
+            <strong>Chat is not set up yet.</strong>
+            Add <code>ANTHROPIC_API_KEY=…</code> to the <code>.env</code> file next to <code>docker-compose.yml</code>,
+            then run <code>docker-compose up -d</code>.
+          </div>
+        {% endif %}
+        <div class="chat-thread" id="chat-thread">
+          {% for message in messages %}
+            <div class="chat-message is-{{ message.role }}" data-id="{{ message.id }}">
+              <div class="chat-bubble" data-markdown="{{ 'true' if message.role == 'assistant' else 'false' }}">{{ message.content }}</div>
+              {% if message.source == 'telegram' %}<span class="chat-source">via Telegram</span>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+        <div class="chat-empty" id="chat-empty" {% if messages %}hidden{% endif %}>
+          <p class="chat-empty-title">How can I help?</p>
+          <p>Ask anything in Thai or English. This chat is shared with the Telegram bot.</p>
+        </div>
+      </div>
+
+      <form class="chat-composer" id="chat-form" action="{{ url_for('chat_send') }}" method="post">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="conversation_id" value="{{ selected.id if selected else '' }}">
+        <textarea name="message" rows="1" maxlength="20000" placeholder="Message Claude…" aria-label="Message"
+                  enterkeyhint="send" required {% if not configured %}disabled{% endif %}></textarea>
+        <button class="chat-send" type="submit" title="Send" aria-label="Send" {% if not configured %}disabled{% endif %}>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4M5 9l5-5 5 5"/></svg>
+        </button>
+      </form>
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    // Times in the viewer's local time zone.
+    document.querySelectorAll("time[data-format]").forEach(function (el) {
+      var date = new Date(el.getAttribute("datetime"));
+      if (isNaN(date)) return;
+      var today = new Date().toDateString() === date.toDateString();
+      el.textContent = today
+        ? date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+        : date.toLocaleDateString();
+    });
+
+    // Small, safe Markdown renderer: escape everything first, then add a few formats.
+    function escapeHtml(text) {
+      return text.replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function inline(text) {
+      return text
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    }
+    function renderMarkdown(source) {
+      var parts = escapeHtml(source).split(/```/);
+      return parts.map(function (part, index) {
+        if (index % 2 === 1) {
+          return "<pre><code>" + part.replace(/^[\w+-]*\n/, "") + "</code></pre>";
+        }
+        var html = "";
+        var list = null;
+        part.split("\n").forEach(function (line) {
+          var bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+          var numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+          var heading = /^(#{1,4})\s+(.*)$/.exec(line);
+          var kind = bullet ? "ul" : numbered ? "ol" : null;
+          if (list && kind !== list) { html += "</" + list + ">"; list = null; }
+          if (kind) {
+            if (!list) { html += "<" + kind + ">"; list = kind; }
+            html += "<li>" + inline((bullet || numbered)[1]) + "</li>";
+          } else if (heading) {
+            html += "<p class=\"chat-heading\">" + inline(heading[2]) + "</p>";
+          } else if (line.trim()) {
+            html += "<p>" + inline(line) + "</p>";
+          }
+        });
+        if (list) html += "</" + list + ">";
+        return html;
+      }).join("");
+    }
+    function render(bubble, text) {
+      if (bubble.dataset.markdown === "true") { bubble.innerHTML = renderMarkdown(text); }
+      else { bubble.textContent = text; }
+    }
+    document.querySelectorAll('.chat-bubble[data-markdown="true"]').forEach(function (bubble) {
+      render(bubble, bubble.textContent);
+    });
+
+    var form = document.getElementById("chat-form");
+    var input = form.elements.message;
+    var sendButton = form.querySelector(".chat-send");
+    var thread = document.getElementById("chat-thread");
+    var scroller = document.getElementById("chat-scroll");
+    var empty = document.getElementById("chat-empty");
+    var conversationField = form.elements.conversation_id;
+    var busy = false;
+    var lastId = 0;
+    thread.querySelectorAll(".chat-message").forEach(function (el) {
+      lastId = Math.max(lastId, Number(el.dataset.id) || 0);
+    });
+
+    function scrollToEnd() { scroller.scrollTop = scroller.scrollHeight; }
+    scrollToEnd();
+
+    function addMessage(role, text, source, id) {
+      var wrapper = document.createElement("div");
+      wrapper.className = "chat-message is-" + role;
+      if (id) wrapper.dataset.id = id;
+      var bubble = document.createElement("div");
+      bubble.className = "chat-bubble";
+      bubble.dataset.markdown = role === "assistant" ? "true" : "false";
+      render(bubble, text);
+      wrapper.appendChild(bubble);
+      if (source === "telegram") {
+        var tag = document.createElement("span");
+        tag.className = "chat-source";
+        tag.textContent = "via Telegram";
+        wrapper.appendChild(tag);
+      }
+      thread.appendChild(wrapper);
+      empty.hidden = true;
+      scrollToEnd();
+      return { wrapper: wrapper, bubble: bubble };
+    }
+
+    function fitInput() {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight, 200) + "px";
+    }
+    input.addEventListener("input", fitInput);
+
+    // Enter sends on keyboards; on touch screens Enter adds a new line and the button sends.
+    var touch = window.matchMedia("(pointer: coarse)").matches;
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !touch) {
+        event.preventDefault();
+        form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event("submit"));
+      }
+    });
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var text = input.value.trim();
+      if (!text || busy) return;
+      busy = true;
+      sendButton.disabled = true;
+      var body = new FormData(form);
+      input.value = "";
+      fitInput();
+      var userMessage = addMessage("user", text, "web");
+      var reply = addMessage("assistant", "", "web");
+      reply.wrapper.classList.add("is-thinking");
+      var replyText = "";
+
+      fetch(form.action, { method: "POST", body: body, credentials: "same-origin" })
+        .then(function (response) {
+          if (!response.ok) {
+            return response.json()
+              .catch(function () { return { error: "Could not send (error " + response.status + ")." }; })
+              .then(function (data) { throw new Error(data.error || "Could not send."); });
+          }
+          var reader = response.body.getReader();
+          var decoder = new TextDecoder();
+          var buffer = "";
+          function handle(line) {
+            if (!line.trim()) return;
+            var item = JSON.parse(line);
+            if (item.type === "start") {
+              if (!conversationField.value) {
+                conversationField.value = item.conversation_id;
+                history.replaceState(null, "", "?id=" + item.conversation_id);
+              }
+              userMessage.wrapper.dataset.id = item.user_message_id;
+              lastId = Math.max(lastId, item.user_message_id);
+            } else if (item.type === "text" || item.type === "replace") {
+              reply.wrapper.classList.remove("is-thinking");
+              replyText = item.type === "text" ? replyText + item.text : item.text;
+              render(reply.bubble, replyText);
+              scrollToEnd();
+            } else if (item.type === "done") {
+              if (item.message_id) {
+                reply.wrapper.dataset.id = item.message_id;
+                lastId = Math.max(lastId, item.message_id);
+              }
+            } else if (item.type === "error") {
+              throw new Error(item.error);
+            }
+          }
+          function pump() {
+            return reader.read().then(function (chunk) {
+              if (chunk.done) { handle(buffer); return; }
+              buffer += decoder.decode(chunk.value, { stream: true });
+              var lines = buffer.split("\n");
+              buffer = lines.pop();
+              lines.forEach(handle);
+              return pump();
+            });
+          }
+          return pump();
+        })
+        .catch(function (error) {
+          reply.wrapper.classList.remove("is-thinking");
+          reply.wrapper.classList.add("is-error");
+          reply.bubble.dataset.markdown = "false";
+          render(reply.bubble, error.message === "Failed to fetch" ? "Could not reach the server." : error.message);
+        })
+        .then(function () {
+          busy = false;
+          sendButton.disabled = false;
+          if (!touch) input.focus();
+        });
+    });
+
+    // Show messages that arrive from Telegram while this page is open.
+    setInterval(function () {
+      var id = conversationField.value;
+      if (!id || busy || document.hidden) return;
+      fetch("/chat/" + id + "/messages?after=" + lastId, { credentials: "same-origin" })
+        .then(function (response) { return response.ok ? response.json() : { messages: [] }; })
+        .then(function (data) {
+          if (busy) return;
+          data.messages.forEach(function (message) {
+            if (thread.querySelector('[data-id="' + message.id + '"]')) return;
+            addMessage(message.role, message.content, message.source, message.id);
+            lastId = Math.max(lastId, message.id);
+          });
+        })
+        .catch(function () {});
+    }, 5000);
+  })();
+  </script>
+</body>
+</html>

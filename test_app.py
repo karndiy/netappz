@@ -1,0 +1,575 @@
+import io
+import json
+import shutil
+import sqlite3
+import tempfile
+import unittest
+from unittest import mock
+import zipfile
+from pathlib import Path
+
+import chat
+import telegram_bot
+from app import create_app
+
+
+class FileManagerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name) / "files"
+        self.app = create_app(
+            {
+                "TESTING": True,
+                "FILES_ROOT": str(self.root),
+                "NOTES_DATABASE": str(Path(self.temp_dir.name) / "notes.sqlite3"),
+                "SECRET_KEY": "test-secret",
+            }
+        )
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _csrf(self):
+        self.client.get("/")
+        with self.client.session_transaction() as sess:
+            return sess["_csrf_token"]
+
+    def test_create_folder_upload_and_download_file(self):
+        token = self._csrf()
+        response = self.client.post(
+            "/folder",
+            data={"_csrf_token": token, "path": "", "name": "docs"},
+        )
+        self.assertEqual(response.status_code, 302)
+        response = self.client.post(
+            "/upload",
+            data={
+                "_csrf_token": token,
+                "path": "docs",
+                "files": (io.BytesIO(b"hello"), "hello.txt"),
+                "folder_files": (io.BytesIO(b"image"), "photos/picture.jpg"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 302)
+        response = self.client.get("/download/docs/hello.txt")
+        self.assertEqual(response.data, b"hello")
+        self.assertEqual(response.headers["Content-Disposition"], "attachment; filename=hello.txt")
+        response.close()
+        self.assertEqual((self.root / "docs" / "photos" / "picture.jpg").read_bytes(), b"image")
+
+    def test_folder_download_is_zip(self):
+        (self.root / "folder").mkdir()
+        (self.root / "folder" / "note.txt").write_text("hello")
+        response = self.client.get("/download/folder")
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            self.assertEqual(archive.namelist(), ["folder/note.txt"])
+            self.assertEqual(archive.read("folder/note.txt"), b"hello")
+        response.close()
+
+    def test_no_login_is_required_and_path_traversal_is_rejected(self):
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get("/?path=../outside").status_code, 400)
+
+    def test_update_log_page_lists_versions_and_changes(self):
+        response = self.client.get("/updates")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Update log", response.data)
+        self.assertIn(b"Version 1.3.0", response.data)
+        self.assertIn(b"Version 1.2.0", response.data)
+        self.assertIn(b"rename actions", response.data)
+        self.assertIn(b"does not automatically check", response.data)
+
+    def test_update_log_search_filters_entries(self):
+        response = self.client.get("/updates?q=redis")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'name="q"', response.data)
+        self.assertIn(b"Version 1.7.0", response.data)
+        self.assertNotIn(b"Version 1.0.0", response.data)
+        self.assertNotIn(b"Notes are now stored in PostgreSQL", response.data)
+
+        response = self.client.get("/updates?q=1.2.0")
+        self.assertIn(b"Version 1.2.0", response.data)
+        self.assertIn(b"Added confirmed deletion", response.data)
+
+        response = self.client.get("/updates?q=nothing-matches-this")
+        self.assertIn(b"No updates match", response.data)
+
+    def test_pages_include_mobile_viewport(self):
+        for url in ("/", "/updates", "/notes"):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertIn(
+                    b'<meta name="viewport" content="width=device-width, initial-scale=1',
+                    response.data,
+                )
+
+    def test_notes_can_be_created_updated_and_deleted(self):
+        token = self._csrf()
+        response = self.client.get("/notes")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"No notes yet", response.data)
+
+        response = self.client.post(
+            "/notes/create",
+            data={
+                "_csrf_token": token,
+                "title": "Shopping",
+                "content": "Apples\nBread",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        response = self.client.get("/notes")
+        self.assertIn(b"Shopping", response.data)
+        self.assertIn(b"Apples\nBread", response.data)
+        connection = sqlite3.connect(self.app.config["NOTES_DATABASE"])
+        try:
+            note_id = connection.execute("SELECT id FROM notes").fetchone()[0]
+        finally:
+            connection.close()
+
+        response = self.client.post(
+            f"/notes/{note_id}/edit",
+            data={
+                "_csrf_token": token,
+                "title": "Shopping list",
+                "content": "Apples\nBread\nTea",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        response = self.client.get("/notes")
+        self.assertIn(b"Shopping list", response.data)
+        self.assertIn(b"Apples\nBread\nTea", response.data)
+
+        response = self.client.post(
+            f"/notes/{note_id}/delete", data={"_csrf_token": token}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(b"No notes yet", self.client.get("/notes").data)
+
+    def test_notes_list_selection_search_and_new_note(self):
+        token = self._csrf()
+        response = self.client.get("/notes")
+        self.assertIn(b"Create note", response.data)
+
+        response = self.client.post(
+            "/notes/create",
+            data={"_csrf_token": token, "title": "Groceries", "content": "Milk"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/notes?id=", response.headers["Location"])
+        self.client.post(
+            "/notes/create",
+            data={"_csrf_token": token, "title": "Work", "content": "Send report"},
+        )
+        connection = sqlite3.connect(self.app.config["NOTES_DATABASE"])
+        try:
+            groceries_id = connection.execute(
+                "SELECT id FROM notes WHERE title = 'Groceries'"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+
+        response = self.client.get(f"/notes?id={groceries_id}")
+        self.assertIn(b'class="notes-app has-selection"', response.data)
+        self.assertIn(f"/notes/{groceries_id}/edit".encode(), response.data)
+        self.assertIn(b"2 notes", response.data)
+
+        response = self.client.get("/notes?q=report")
+        self.assertIn(b"Send report", response.data)
+        self.assertNotIn(b"Groceries", response.data)
+
+        response = self.client.get("/notes?q=nothing-here")
+        self.assertIn(b"No notes match", response.data)
+
+        self.client.post(
+            "/notes/create",
+            data={"_csrf_token": token, "title": "Line one\nLine two", "content": "Body"},
+        )
+        connection = sqlite3.connect(self.app.config["NOTES_DATABASE"])
+        try:
+            self.assertIsNotNone(
+                connection.execute(
+                    "SELECT id FROM notes WHERE title = 'Line one Line two'"
+                ).fetchone()
+            )
+        finally:
+            connection.close()
+
+        response = self.client.get("/notes?new=1")
+        self.assertIn(b"Create note", response.data)
+        self.assertEqual(self.client.get("/notes?id=999").status_code, 404)
+
+    def test_notes_require_title_and_content(self):
+        response = self.client.post(
+            "/notes/create",
+            data={"_csrf_token": self._csrf(), "title": "Title", "content": ""},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(b"Enter both a title and note text", self.client.get("/notes").data)
+
+    def test_renames_file_and_folder(self):
+        (self.root / "old.txt").write_text("contents")
+        (self.root / "old-folder").mkdir()
+        token = self._csrf()
+
+        response = self.client.post(
+            "/rename",
+            data={"_csrf_token": token, "path": "old.txt", "name": "new.txt"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse((self.root / "old.txt").exists())
+        self.assertEqual((self.root / "new.txt").read_text(), "contents")
+
+        response = self.client.post(
+            "/rename",
+            data={
+                "_csrf_token": token,
+                "path": "old-folder",
+                "name": "new-folder",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue((self.root / "new-folder").is_dir())
+
+    def test_delete_file_and_folder(self):
+        (self.root / "remove.txt").write_text("contents")
+        nested = self.root / "remove-folder" / "nested"
+        nested.mkdir(parents=True)
+        (nested / "file.txt").write_text("contents")
+        token = self._csrf()
+
+        for path in ("remove.txt", "remove-folder"):
+            response = self.client.post(
+                "/delete", data={"_csrf_token": token, "path": path}
+            )
+            self.assertEqual(response.status_code, 302)
+            self.assertFalse((self.root / path).exists())
+
+    def test_rename_rejects_existing_destination_and_traversal(self):
+        (self.root / "source.txt").write_text("source")
+        (self.root / "existing.txt").write_text("existing")
+        token = self._csrf()
+
+        response = self.client.post(
+            "/rename",
+            data={
+                "_csrf_token": token,
+                "path": "source.txt",
+                "name": "existing.txt",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual((self.root / "source.txt").read_text(), "source")
+
+        response = self.client.post(
+            "/rename",
+            data={"_csrf_token": token, "path": "source.txt", "name": "../outside"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse((self.root.parent / "outside").exists())
+        self.assertTrue((self.root / "source.txt").exists())
+
+
+    def _png_bytes(self, color="red", size=(40, 30)):
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", size, color).save(buffer, "PNG")
+        return buffer.getvalue()
+
+    def _pdf_bytes(self, pages=1):
+        import pymupdf
+
+        document = pymupdf.open()
+        for number in range(pages):
+            document.new_page().insert_text((72, 72), f"Hello page {number + 1}")
+        data = document.tobytes()
+        document.close()
+        return data
+
+    def test_convert_page_lists_all_tools(self):
+        response = self.client.get("/convert")
+        self.assertEqual(response.status_code, 200)
+        for title in (b"Word to PDF", b"PDF to Word", b"Image to PDF", b"PDF to Image"):
+            self.assertIn(title, response.data)
+
+    def test_image_to_pdf_combines_images(self):
+        import pymupdf
+
+        response = self.client.post(
+            "/convert/image2pdf",
+            data={
+                "_csrf_token": self._csrf(),
+                "page_size": "a4",
+                "files": [
+                    (io.BytesIO(self._png_bytes("red")), "รูปภาพ.png"),
+                    (io.BytesIO(self._png_bytes("blue", (30, 60))), "second.png"),
+                ],
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/pdf")
+        self.assertIn("filename*=UTF-8''%E0%B8%A3", response.headers["Content-Disposition"])
+        document = pymupdf.open(stream=response.data, filetype="pdf")
+        self.assertEqual(document.page_count, 2)
+        # A4 pages, turned to landscape for the wide first image.
+        first, second = document[0].rect, document[1].rect
+        self.assertAlmostEqual(first.width, 841.9, delta=1)
+        self.assertAlmostEqual(first.height, 595.3, delta=1)
+        self.assertAlmostEqual(second.width, 595.3, delta=1)
+        response.close()
+
+    def test_pdf_to_image_returns_png_or_zip(self):
+        token = self._csrf()
+        response = self.client.post(
+            "/convert/pdf2image",
+            data={"_csrf_token": token, "image_format": "png", "dpi": "96",
+                  "files": (io.BytesIO(self._pdf_bytes(1)), "one.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data.startswith(b"\x89PNG"))
+        response.close()
+
+        response = self.client.post(
+            "/convert/pdf2image",
+            data={"_csrf_token": token, "image_format": "jpg", "dpi": "96",
+                  "files": (io.BytesIO(self._pdf_bytes(3)), "three.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            self.assertEqual(
+                archive.namelist(),
+                ["three-page-001.jpg", "three-page-002.jpg", "three-page-003.jpg"],
+            )
+        response.close()
+
+    def test_pdf_to_word_returns_docx(self):
+        response = self.client.post(
+            "/convert/pdf2word",
+            data={"_csrf_token": self._csrf(), "files": (io.BytesIO(self._pdf_bytes(1)), "letter.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            self.assertIn(b"Hello page 1", archive.read("word/document.xml"))
+        response.close()
+
+    @unittest.skipUnless(shutil.which("soffice") or shutil.which("libreoffice"), "LibreOffice not installed")
+    def test_word_to_pdf_uses_libreoffice(self):
+        import docx
+
+        buffer = io.BytesIO()
+        document = docx.Document()
+        document.add_paragraph("Converted by LibreOffice")
+        document.save(buffer)
+        buffer.seek(0)
+        response = self.client.post(
+            "/convert/word2pdf",
+            data={"_csrf_token": self._csrf(), "files": (buffer, "report.docx")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200, response.data[:200])
+        self.assertTrue(response.data.startswith(b"%PDF"))
+        self.assertIn("report.pdf", response.headers["Content-Disposition"])
+        response.close()
+
+    def test_convert_rejects_wrong_type_and_bad_files(self):
+        token = self._csrf()
+        response = self.client.post(
+            "/convert/pdf2word",
+            data={"_csrf_token": token, "files": (io.BytesIO(b"hello"), "notes.txt")},
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "fetch"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not a supported file type", response.get_json()["error"])
+
+        response = self.client.post(
+            "/convert/pdf2image",
+            data={"_csrf_token": token, "files": (io.BytesIO(b"not a pdf"), "fake.pdf")},
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "fetch"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not a readable PDF", response.get_json()["error"])
+
+        response = self.client.post(
+            "/convert/image2pdf",
+            data={"_csrf_token": token},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(b"Choose a file to convert", self.client.get("/convert").data)
+        self.assertEqual(self.client.post("/convert/nope", data={"_csrf_token": token}).status_code, 404)
+
+
+    def _fake_reply(self, *chunks):
+        def stream_reply(history, for_telegram=False):
+            self.seen_history = history
+            for chunk in chunks:
+                yield {"type": "text", "text": chunk}
+            return "".join(chunks)
+
+        return stream_reply
+
+    def _stream_lines(self, response):
+        return [json.loads(line) for line in response.get_data(as_text=True).splitlines() if line]
+
+    def test_chat_streams_reply_and_saves_conversation(self):
+        token = self._csrf()
+        self.assertEqual(self.client.get("/chat").status_code, 200)
+        with mock.patch.object(chat, "stream_reply", self._fake_reply("สวัสดี", " ครับ")):
+            response = self.client.post("/chat/send", data={"_csrf_token": token, "message": "Hello Claude"})
+            events = self._stream_lines(response)
+        self.assertEqual(response.mimetype, "application/x-ndjson")
+        self.assertEqual([event["type"] for event in events], ["start", "text", "text", "done"])
+        self.assertEqual(self.seen_history[-1]["content"], "Hello Claude")
+        conversation_id = events[0]["conversation_id"]
+
+        page = self.client.get(f"/chat?id={conversation_id}").get_data(as_text=True)
+        self.assertIn("Hello Claude", page)
+        self.assertIn("สวัสดี ครับ", page)
+
+        with mock.patch.object(chat, "stream_reply", self._fake_reply("Second answer")):
+            events = self._stream_lines(self.client.post(
+                "/chat/send",
+                data={"_csrf_token": token, "message": "Again", "conversation_id": conversation_id},
+            ))
+        self.assertEqual(events[0]["conversation_id"], conversation_id)
+        self.assertEqual(
+            [item["content"] for item in self.seen_history],
+            ["Hello Claude", "สวัสดี ครับ", "Again"],
+        )
+
+        after = events[0]["user_message_id"]
+        data = self.client.get(f"/chat/{conversation_id}/messages?after={after}").get_json()
+        self.assertEqual([item["content"] for item in data["messages"]], ["Second answer"])
+
+        response = self.client.post(f"/chat/{conversation_id}/delete", data={"_csrf_token": token})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.client.get(f"/chat?id={conversation_id}").status_code, 404)
+
+    def test_chat_reports_errors_without_saving_a_reply(self):
+        token = self._csrf()
+
+        def failing(history, for_telegram=False):
+            raise chat.ChatError("Chat is not set up yet")
+            yield
+
+        with mock.patch.object(chat, "stream_reply", failing):
+            events = self._stream_lines(self.client.post("/chat/send", data={"_csrf_token": token, "message": "Hi"}))
+        self.assertEqual(events[-1], {"type": "error", "error": "Chat is not set up yet"})
+        store = self.app.extensions["chat"]
+        self.assertEqual([m["role"] for m in store.messages(events[0]["conversation_id"])], ["user"])
+
+        response = self.client.post("/chat/send", data={"_csrf_token": token, "message": "  "})
+        self.assertEqual(response.status_code, 400)
+
+    def test_telegram_bot_only_answers_allowed_users(self):
+        store = self.app.extensions["chat"]
+        telegram = mock.Mock()
+        message = {"chat": {"id": 5}, "from": {"id": 999}, "text": "hello"}
+
+        telegram_bot.handle(telegram, store, message, allowed={111})
+        self.assertIn("999", telegram.send.call_args[0][1])
+        self.assertEqual(store.conversations(), [])
+
+        message["from"]["id"] = 111
+        with mock.patch.object(chat, "complete_reply", return_value="Hi from Claude") as complete:
+            telegram_bot.handle(telegram, store, message, allowed={111})
+        self.assertTrue(complete.call_args.kwargs["for_telegram"])
+        telegram.send.assert_called_with(5, "Hi from Claude")
+        conversation_id = store.latest_id()
+        self.assertEqual(
+            [(m["role"], m["source"]) for m in store.messages(conversation_id)],
+            [("user", "telegram"), ("assistant", "telegram")],
+        )
+
+        telegram_bot.handle(telegram, store, {**message, "text": "/new"}, allowed={111})
+        self.assertNotEqual(store.latest_id(), conversation_id)
+
+    def test_settings_page_saves_values_and_hides_secrets(self):
+        token = self._csrf()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(self.client.get("/settings").status_code, 200)
+            response = self.client.post("/settings", data={
+                "_csrf_token": token,
+                "ANTHROPIC_API_KEY": "test-anthropic-key-0123456789WXYZ",
+                "CHAT_MODEL": "claude-sonnet-5-5",
+                "CHAT_EFFORT": "high",
+                "CHAT_INSTRUCTIONS": "Always reply in Thai.",
+                "TELEGRAM_ALLOWED_USERS": "111, 222",
+            })
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(chat.setting("CHAT_MODEL"), "claude-sonnet-5-5")
+            self.assertEqual(chat.setting("CHAT_EFFORT"), "high")
+            self.assertTrue(chat.is_configured())
+            self.assertIn("Always reply in Thai.", chat.system_prompt())
+            self.assertEqual(telegram_bot.allowed_users(), {111, 222})
+
+            page = self.client.get("/settings").get_data(as_text=True)
+            self.assertNotIn("test-anthropic-key-0123456789WXYZ", page)
+            self.assertIn("…WXYZ", page)
+
+            # A blank secret keeps the saved one; defaults are not pinned.
+            self.client.post("/settings", data={
+                "_csrf_token": token, "CHAT_MODEL": "claude-opus-5-5", "CHAT_EFFORT": "high",
+            })
+            settings = self.app.extensions["settings"].all()
+            self.assertEqual(settings["ANTHROPIC_API_KEY"], "test-anthropic-key-0123456789WXYZ")
+            self.assertNotIn("CHAT_MODEL", settings)
+            self.assertNotIn("TELEGRAM_ALLOWED_USERS", settings)
+
+            self.client.post("/settings", data={
+                "_csrf_token": token, "CHAT_EFFORT": "high", "clear_ANTHROPIC_API_KEY": "1",
+            })
+            self.assertFalse(chat.is_configured())
+
+    def test_settings_rejects_invalid_values_without_saving(self):
+        token = self._csrf()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            response = self.client.post("/settings", data={
+                "_csrf_token": token,
+                "CHAT_EFFORT": "extreme",
+                "TELEGRAM_ALLOWED_USERS": "me",
+                "CHAT_MODEL": "claude-haiku-5-5",
+            })
+            self.assertEqual(response.status_code, 400)
+            page = response.get_data(as_text=True)
+            self.assertIn("Choose low, medium, or high.", page)
+            self.assertIn("numeric Telegram user IDs", page)
+            self.assertIn('value="claude-haiku-5-5"', page)
+            self.assertEqual(self.app.extensions["settings"].all(), {})
+
+            bot_token = "123456:" + "A" * 35
+            with mock.patch("app.verify_telegram_token", side_effect=ValueError("Telegram did not accept it.")):
+                response = self.client.post("/settings", data={"_csrf_token": token, "TELEGRAM_BOT_TOKEN": bot_token})
+            self.assertEqual(response.status_code, 400)
+            with mock.patch("app.verify_telegram_token", return_value="netappz_bot"):
+                response = self.client.post("/settings", data={"_csrf_token": token, "TELEGRAM_BOT_TOKEN": bot_token})
+            self.assertEqual(response.status_code, 302)
+            self.assertEqual(chat.setting("TELEGRAM_BOT_TOKEN"), bot_token)
+
+    def test_saved_settings_override_environment(self):
+        with mock.patch.dict("os.environ", {"CHAT_MODEL": "env-model", "TELEGRAM_ALLOWED_USERS": "5"}):
+            self.assertEqual(chat.setting("CHAT_MODEL"), "env-model")
+            self.app.extensions["settings"].save({"CHAT_MODEL": "claude-haiku-5-5", "TELEGRAM_ALLOWED_USERS": ""})
+            self.assertEqual(chat.setting("CHAT_MODEL"), "claude-haiku-5-5")
+            self.assertEqual(telegram_bot.allowed_users(), set())
+            self.app.extensions["settings"].save({"CHAT_MODEL": None})
+            self.assertEqual(chat.setting("CHAT_MODEL"), "env-model")
+
+    def test_telegram_messages_get_plain_text_instruction(self):
+        messages = chat.to_api_messages([{"role": "user", "content": "hi"}], for_telegram=True)
+        self.assertEqual(messages[-1]["role"], "system")
+        self.assertEqual(chat.to_api_messages([{"role": "user", "content": "hi"}]), [{"role": "user", "content": "hi"}])
+
+
+if __name__ == "__main__":
+    unittest.main()

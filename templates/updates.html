@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Update log · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      <a class="topbar-link" href="{{ url_for('index') }}">Back to files</a>
+    </nav>
+  </header>
+  <main class="container">
+    <section class="heading">
+      <div>
+        <h1>Update log</h1>
+        <p class="page-description">Patch notes for this file manager.</p>
+      </div>
+    </section>
+
+    <form class="update-search" action="{{ url_for('updates') }}" method="get" role="search">
+      <label for="update-search">Search updates</label>
+      <div class="inline-form">
+        <input id="update-search" name="q" type="search" value="{{ query }}"
+               placeholder="Version, date, or keyword" maxlength="100">
+        <button type="submit">Search</button>
+        {% if query %}
+          <a class="button secondary" href="{{ url_for('updates') }}">Clear</a>
+        {% endif %}
+      </div>
+    </form>
+
+    <section class="update-list" aria-label="Application updates">
+      {% for entry in entries %}
+        <article class="update-entry">
+          <div class="update-heading">
+            <h2>Version {{ entry.version }}</h2>
+            <time datetime="{{ entry.date }}">{{ entry.date }}</time>
+          </div>
+          <ul>
+            {% for change in entry.changes %}
+              <li>{{ change }}</li>
+            {% endfor %}
+          </ul>
+        </article>
+      {% else %}
+        <p class="empty">No updates match “{{ query }}”.</p>
+      {% endfor %}
+    </section>
+    <p class="update-note">This page lists changes included in the app. It does not automatically check for or install updates.</p>
+  </main>
+</body>
+</html>

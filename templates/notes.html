@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f5f3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#262626" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <title>Notes · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="notes-page">
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('notes') }}" aria-current="page">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+    </nav>
+  </header>
+
+  <main class="notes-app{% if explicit %} has-selection{% endif %}">
+    <script>
+      // Restore the hidden-sidebar preference before first paint.
+      try {
+        if (localStorage.getItem("notes-sidebar-hidden") === "1") {
+          document.currentScript.parentElement.classList.add("sidebar-hidden");
+        }
+      } catch (error) {}
+    </script>
+    <aside class="notes-sidebar" id="notes-sidebar" aria-label="Notes list">
+      <div class="notes-toolbar">
+        <form class="notes-search" action="{{ url_for('notes') }}" method="get" role="search">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+          <input id="notes-search" name="q" type="search" value="{{ query }}" placeholder="Search"
+                 aria-label="Search notes" maxlength="100" autocomplete="off">
+        </form>
+        <a class="notes-icon-button" href="{{ url_for('notes', new=1) }}" title="New note" aria-label="New note">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M9 3H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/><path d="M14.5 2.5a1.4 1.4 0 0 1 2 2L10 11l-2.7.7.7-2.7z"/></svg>
+        </a>
+      </div>
+
+      <p class="notes-count">{{ total }} note{{ '' if total == 1 else 's' }}</p>
+
+      <ul class="notes-list" id="notes-list">
+        {% for note in notes %}
+          <li data-search="{{ (note.title ~ ' ' ~ note.content) | lower }}">
+            <a class="notes-item{% if selected and note.id == selected.id %} is-selected{% endif %}"
+               href="{{ url_for('notes', id=note.id, q=query or None) }}"
+               {% if selected and note.id == selected.id %}aria-current="true"{% endif %}>
+              <strong class="notes-item-title" data-note-title="{{ note.id }}">{{ note.title }}</strong>
+              <span class="notes-item-meta">
+                <time datetime="{{ note.updated_at | note_iso }}" data-format="short">{{ note.updated_at | note_short_date }}</time>
+                <span class="notes-item-preview" data-note-preview="{{ note.id }}">{{ note.content.splitlines()[0] if note.content else '' }}</span>
+              </span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if not notes %}
+        <p class="notes-empty">{% if query %}No notes match “{{ query }}”.{% else %}No notes yet.{% endif %}</p>
+      {% endif %}
+      <p class="notes-empty" id="notes-no-match" hidden>No matching notes.</p>
+    </aside>
+
+    <section class="notes-editor" aria-label="Note editor">
+      <div class="notes-toolbar notes-editor-toolbar">
+        <button class="notes-icon-button notes-sidebar-toggle" id="notes-sidebar-toggle" type="button"
+                title="Show or hide the note list" aria-label="Toggle note list" aria-controls="notes-sidebar">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><path d="M7.5 3.5v13"/></svg>
+        </button>
+        <a class="notes-back" href="{{ url_for('notes', q=query or None) }}">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4-6 6 6 6"/></svg>Notes
+        </a>
+        <span class="notes-status" id="notes-status" aria-live="polite">
+          {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+              <span class="notes-flash {{ category }}">{{ message }}</span>
+            {% endfor %}
+          {% endwith %}
+        </span>
+        <div class="notes-toolbar-actions">
+          <button class="notes-icon-button" id="notes-fullscreen" type="button" hidden
+                  title="Enter full screen" aria-label="Enter full screen">
+            <svg class="icon-enter" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5"/></svg>
+            <svg class="icon-exit" viewBox="0 0 20 20" aria-hidden="true" hidden><path d="M7.5 3v4.5H3M17 7.5h-4.5V3M12.5 17v-4.5H17M3 12.5h4.5V17"/></svg>
+          </button>
+          {% if selected or creating %}
+            <button class="notes-save-button" type="submit" form="note-form"
+                    title="{{ 'Save now · changes also save automatically (⌘S)' if selected else 'Create note (⌘S)' }}">
+              {{ 'Save' if selected else 'Create note' }}
+            </button>
+          {% endif %}
+          {% if selected %}
+            <form action="{{ url_for('delete_note', note_id=selected.id) }}" method="post"
+                  onsubmit="return confirm('Delete this note?');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button class="notes-icon-button" type="submit" title="Delete note" aria-label="Delete note">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 5.5h13M8 5.5V3.5h4v2M5.5 5.5l.8 11h7.4l.8-11M8.5 8.5v5M11.5 8.5v5"/></svg>
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if selected or creating %}
+        <form class="notes-sheet" id="note-form" method="post"
+              action="{{ url_for('edit_note', note_id=selected.id) if selected else url_for('create_note') }}"
+              {% if selected %}data-autosave="true" data-note-id="{{ selected.id }}"{% endif %}>
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <p class="notes-date">
+            {% if selected %}
+              <time datetime="{{ selected.updated_at | note_iso }}" data-format="long">{{ selected.updated_at | note_long_date }}</time>
+            {% else %}
+              New note
+            {% endif %}
+          </p>
+          <textarea class="notes-title-input" name="title" rows="1" maxlength="120" required
+                    placeholder="Title" aria-label="Title" enterkeyhint="next"
+                    {% if creating %}autofocus{% endif %}>{{ selected.title if selected else '' }}</textarea>
+          <textarea class="notes-body-input" name="content" maxlength="10000" required
+                    placeholder="Start writing…" aria-label="Note">{{ selected.content if selected else '' }}</textarea>
+        </form>
+      {% else %}
+        <p class="notes-placeholder">No note selected</p>
+      {% endif %}
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    // Show note times in the viewer's local time zone.
+    document.querySelectorAll("time[data-format]").forEach(function (el) {
+      var date = new Date(el.getAttribute("datetime"));
+      if (isNaN(date)) return;
+      if (el.dataset.format === "long") {
+        el.textContent = date.toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) +
+          " at " + date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+      } else {
+        var today = new Date().toDateString() === date.toDateString();
+        el.textContent = today
+          ? date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+          : date.toLocaleDateString();
+      }
+    });
+
+    // Filter the list instantly while typing; Enter still runs a server search.
+    var search = document.getElementById("notes-search");
+    var items = document.querySelectorAll("#notes-list li");
+    var noMatch = document.getElementById("notes-no-match");
+    search.addEventListener("input", function () {
+      var needle = search.value.trim().toLowerCase();
+      var visible = 0;
+      items.forEach(function (li) {
+        var show = !needle || li.dataset.search.indexOf(needle) !== -1;
+        li.hidden = !show;
+        if (show) visible++;
+      });
+      noMatch.hidden = visible > 0 || items.length === 0;
+    });
+
+    // Sidebar toggle for tablets and desktops; phones use the back button instead.
+    var app = document.querySelector(".notes-app");
+    var sidebarToggle = document.getElementById("notes-sidebar-toggle");
+    function syncSidebarToggle() {
+      sidebarToggle.setAttribute("aria-pressed", app.classList.contains("sidebar-hidden") ? "true" : "false");
+    }
+    syncSidebarToggle();
+    sidebarToggle.addEventListener("click", function () {
+      var hidden = app.classList.toggle("sidebar-hidden");
+      syncSidebarToggle();
+      try { localStorage.setItem("notes-sidebar-hidden", hidden ? "1" : "0"); } catch (error) {}
+    });
+
+    // Full screen where the browser supports it (not iPhone Safari).
+    var root = document.documentElement;
+    var requestFullscreen = root.requestFullscreen || root.webkitRequestFullscreen;
+    var exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+    var fullscreenButton = document.getElementById("notes-fullscreen");
+    function fullscreenElement() { return document.fullscreenElement || document.webkitFullscreenElement; }
+    if (requestFullscreen && (document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
+      fullscreenButton.hidden = false;
+      fullscreenButton.addEventListener("click", function () {
+        if (fullscreenElement()) { exitFullscreen.call(document); } else { requestFullscreen.call(root); }
+      });
+      var onFullscreenChange = function () {
+        var active = !!fullscreenElement();
+        document.body.classList.toggle("is-fullscreen", active);
+        var label = active ? "Exit full screen" : "Enter full screen";
+        fullscreenButton.title = label;
+        fullscreenButton.setAttribute("aria-label", label);
+        fullscreenButton.querySelector(".icon-enter").hidden = active;
+        fullscreenButton.querySelector(".icon-exit").hidden = !active;
+      };
+      document.addEventListener("fullscreenchange", onFullscreenChange);
+      document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+    }
+
+    var form = document.getElementById("note-form");
+    if (!form) return;
+    var status = document.getElementById("notes-status");
+    var title = form.elements.title;
+    var body = form.elements.content;
+
+    // The title wraps like macOS Notes: grow to fit, and Enter moves to the body.
+    function fitTitle() {
+      title.style.height = "auto";
+      title.style.height = title.scrollHeight + "px";
+    }
+    fitTitle();
+    window.addEventListener("resize", fitTitle);
+    title.addEventListener("input", fitTitle);
+    title.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        body.focus();
+      }
+    });
+
+    function setStatus(text) { status.textContent = text; }
+    function isValid() { return title.value.trim() && body.value.trim(); }
+
+    document.addEventListener("keydown", function (event) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (form.dataset.autosave) { save(); } else if (form.reportValidity()) { form.submit(); }
+      }
+    });
+
+    if (!form.dataset.autosave) return;
+
+    // Autosave existing notes shortly after typing stops, like macOS Notes.
+    var id = form.dataset.noteId;
+    var timer = null;
+    var dirty = false;
+
+    function save() {
+      clearTimeout(timer);
+      if (!dirty) { setStatus("Saved"); return; }
+      if (!isValid()) { setStatus("A title and note text are required"); return; }
+      dirty = false;
+      setStatus("Saving…");
+      fetch(form.action, { method: "POST", body: new FormData(form), credentials: "same-origin" })
+        .then(function (response) {
+          if (!response.ok) throw new Error(response.status);
+          setStatus("Saved");
+          var listTitle = document.querySelector('[data-note-title="' + id + '"]');
+          var listPreview = document.querySelector('[data-note-preview="' + id + '"]');
+          if (listTitle) listTitle.textContent = title.value.trim();
+          if (listPreview) listPreview.textContent = body.value.trim().split("\n")[0];
+        })
+        .catch(function () { dirty = true; setStatus("Not saved. Check your connection"); });
+    }
+
+    function changed() {
+      dirty = true;
+      setStatus("Editing…");
+      clearTimeout(timer);
+      timer = setTimeout(save, 800);
+    }
+
+    title.addEventListener("input", changed);
+    body.addEventListener("input", changed);
+    form.addEventListener("submit", function (event) { event.preventDefault(); save(); });
+    window.addEventListener("pagehide", function () {
+      if (dirty && isValid()) navigator.sendBeacon(form.action, new FormData(form));
+    });
+  })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Keeps netappz.local announced on the LAN. Install: see README "Open as netappz.local". -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.netappz.mdns</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/emr/py/p1/scripts/netappz-mdns.sh</string>
+    <string>netappz</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/netappz-mdns.log</string>
+  <key>StandardErrorPath</key><string>/tmp/netappz-mdns.log</string>
+</dict>
+</plist>

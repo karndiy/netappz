@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <section class="heading">
+      <div>
+        <h1>Shared files</h1>
+        <nav class="breadcrumbs" aria-label="Breadcrumb">
+          <a href="{{ url_for('index') }}">Home</a>
+          {% if current %}
+            {% set ns = namespace(path='') %}
+            {% for part in current.split('/') %}
+              {% set ns.path = (ns.path ~ '/' ~ part).lstrip('/') %}
+              <span>/</span><a href="{{ url_for('index', path=ns.path) }}">{{ part }}</a>
+            {% endfor %}
+          {% endif %}
+        </nav>
+      </div>
+      {% if current %}
+        <a class="button secondary" href="{{ url_for('download', relative=current) }}">Download folder (.zip)</a>
+      {% endif %}
+    </section>
+
+    <section class="tools">
+      <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="path" value="{{ current }}">
+        <label for="files">Upload files</label>
+        <div class="inline-form">
+          <input id="files" name="files" type="file" multiple>
+          <button type="submit">Upload</button>
+        </div>
+        <label class="folder-picker" for="folder-files">Or upload a folder</label>
+        <input id="folder-files" name="folder_files" type="file" webkitdirectory multiple>
+        <small>Choose files from your device. Folder selection is available in browsers that support it.</small>
+      </form>
+      <form action="{{ url_for('create_folder') }}" method="post">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="path" value="{{ current }}">
+        <label for="folder-name">Create folder</label>
+        <div class="inline-form">
+          <input id="folder-name" name="name" type="text" placeholder="Folder name" required>
+          <button type="submit">Create</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="file-list" aria-label="Files">
+      {% if parent is not none %}
+        <a class="file-row parent-row" href="{{ url_for('index', path=parent) }}">
+          <span class="file-name"><span class="icon">↩</span> ..</span><span></span>
+        </a>
+      {% endif %}
+      {% for entry in entries %}
+        <div class="file-row">
+          <a class="file-name" href="{% if entry.is_dir %}{{ url_for('index', path=entry.path) }}{% else %}{{ url_for('download', relative=entry.path) }}{% endif %}">
+            <span class="icon">{{ '📁' if entry.is_dir else '📄' }}</span>{{ entry.name }}
+          </a>
+          <div class="file-actions">
+            {% if entry.is_dir %}
+              <a class="download-link" href="{{ url_for('download', relative=entry.path) }}">Download ZIP</a>
+            {% else %}
+              <span class="size">{{ "{:,}".format(entry.size) }} bytes</span>
+            {% endif %}
+            <form class="rename-form" action="{{ url_for('rename_item') }}" method="post">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="path" value="{{ entry.path }}">
+              <input type="text" name="name" aria-label="New name for {{ entry.name }}" placeholder="New name" required>
+              <button class="secondary" type="submit">Rename</button>
+            </form>
+            <form action="{{ url_for('delete_item') }}" method="post"
+                  onsubmit="return confirm('Permanently delete this item{% if entry.is_dir %} and all its contents{% endif %}?');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="path" value="{{ entry.path }}">
+              <button class="danger" type="submit">Delete</button>
+            </form>
+          </div>
+        </div>
+      {% else %}
+        <p class="empty">This folder is empty.</p>
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

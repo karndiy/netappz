@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}" aria-current="page">Settings</a>
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <section class="heading">
+      <div>
+        <h1>Settings</h1>
+        <p class="page-description">Changes are saved on this server and apply right away. Anyone who can open this app can see and change them.</p>
+      </div>
+    </section>
+
+    <form class="settings-form" action="{{ url_for('save_settings') }}" method="post" autocomplete="off">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+      {% for group in groups %}
+        <section class="settings-card" aria-labelledby="group-{{ loop.index }}">
+          <div class="settings-card-head">
+            <h2 id="group-{{ loop.index }}">{{ group.title }}</h2>
+            <p>{{ group.description }}</p>
+          </div>
+
+          {% for field in group.fields %}
+            {% set field_id = "setting-" ~ field.name|lower %}
+            <div class="settings-field{% if field.error %} has-error{% endif %}">
+              <div class="settings-label-row">
+                <label for="{{ field_id }}">{{ field.label }}</label>
+                {% if field.source == "saved" %}
+                  <span class="settings-source is-saved">Saved here</span>
+                {% elif field.source == "environment" %}
+                  <span class="settings-source">From server .env</span>
+                {% elif field.is_set %}
+                  <span class="settings-source">Default</span>
+                {% endif %}
+              </div>
+
+              {% if field.secret %}
+                <input id="{{ field_id }}" name="{{ field.name }}" type="password" spellcheck="false"
+                       autocomplete="new-password" aria-describedby="{{ field_id }}-help"
+                       placeholder="{% if field.is_set %}Set {{ field.hint }} · type a new one to replace it{% else %}Not set{% endif %}">
+                {% if field.source == "saved" %}
+                  <label class="settings-check">
+                    <input type="checkbox" name="clear_{{ field.name }}" value="1">
+                    Remove the saved {{ field.label|lower }}{% if field.has_env %} and use the server .env value{% endif %}
+                  </label>
+                {% endif %}
+              {% elif field.options %}
+                <select id="{{ field_id }}" name="{{ field.name }}" aria-describedby="{{ field_id }}-help">
+                  {% for value, text in field.options %}
+                    <option value="{{ value }}" {% if value == field.value %}selected{% endif %}>{{ text }}</option>
+                  {% endfor %}
+                </select>
+              {% elif field.multiline %}
+                <textarea id="{{ field_id }}" name="{{ field.name }}" rows="4" maxlength="4000"
+                          aria-describedby="{{ field_id }}-help">{{ field.value }}</textarea>
+              {% else %}
+                <input id="{{ field_id }}" name="{{ field.name }}" type="text" value="{{ field.value }}"
+                       spellcheck="false" aria-describedby="{{ field_id }}-help"
+                       {% if field.choices %}list="{{ field_id }}-choices"{% endif %}
+                       {% if field.name == "TELEGRAM_ALLOWED_USERS" %}inputmode="numeric" placeholder="123456789, 987654321"{% endif %}>
+                {% if field.choices %}
+                  <datalist id="{{ field_id }}-choices">
+                    {% for choice in field.choices %}<option value="{{ choice }}">{% endfor %}
+                  </datalist>
+                {% endif %}
+              {% endif %}
+
+              {% if field.error %}<p class="settings-error">{{ field.error }}</p>{% endif %}
+              <small id="{{ field_id }}-help">{{ field.help }}</small>
+            </div>
+          {% endfor %}
+        </section>
+      {% endfor %}
+
+      <div class="settings-actions">
+        <button type="submit">Save settings</button>
+        <a class="button secondary" href="{{ url_for('settings_page') }}">Discard changes</a>
+      </div>
+    </form>
+
+    <section class="settings-card" aria-labelledby="server-heading">
+      <div class="settings-card-head">
+        <h2 id="server-heading">Server</h2>
+        <p>Set in the server's .env or docker-compose.yml. Changing these needs a restart.</p>
+      </div>
+      <dl class="settings-info">
+        {% for label, value in server %}
+          <div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
+        {% endfor %}
+      </dl>
+    </section>
+  </main>
+</body>
+</html>

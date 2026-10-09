@@ -1,0 +1,77 @@
+# Version 2.4 supports "depends_on: condition: service_healthy" on docker-compose 1.x.
+version: "2.4"
+
+services:
+  web:
+    build: .
+    image: network-files
+    container_name: network-files
+    ports:
+      # Port 80 lets LAN devices open http://netappz.local without typing a port.
+      - "80:5000"
+      - "5000:5000"
+    environment:
+      # Set a fixed value so sessions survive restarts (optional).
+      FILES_SECRET_KEY: ${FILES_SECRET_KEY:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-notes}:${POSTGRES_PASSWORD:-notes}@db:5432/${POSTGRES_DB:-notes}
+      REDIS_URL: redis://redis:6379/0
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    volumes:
+      - ./shared:/data/shared
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Telegram bot for chatting with Claude from anywhere. It only connects out
+  # to Telegram (long polling), so no ports are opened. Idle until a token is set.
+  telegram:
+    image: network-files
+    container_name: network-files-telegram
+    command: ["python", "telegram_bot.py"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-notes}:${POSTGRES_PASSWORD:-notes}@db:5432/${POSTGRES_DB:-notes}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Alpine (musl) images avoid the clone3 seccomp issue on Docker 19.03.
+  db:
+    image: postgres:16-alpine
+    container_name: network-files-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-notes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-notes}
+      POSTGRES_DB: ${POSTGRES_DB:-notes}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: network-files-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Convert · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}" aria-current="page">Convert</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <section class="heading">
+      <div>
+        <h1>Convert files</h1>
+        <p class="page-description">Convert documents, PDFs, and images on this server. Files are deleted as soon as the result is downloaded.</p>
+      </div>
+    </section>
+
+    {% set tools = [
+      {
+        "id": "word2pdf", "title": "Word to PDF", "from": "DOC", "to": "PDF", "tone": "blue",
+        "description": "Turn .docx, .doc, .odt, or .rtf documents into a PDF.",
+        "accept": ".doc,.docx,.odt,.rtf", "multiple": false, "hint": "One document, up to 200 MB",
+      },
+      {
+        "id": "pdf2word", "title": "PDF to Word", "from": "PDF", "to": "DOC", "tone": "red",
+        "description": "Make an editable .docx from a PDF. Works best with text-based PDFs, not scans.",
+        "accept": ".pdf", "multiple": false, "hint": "One PDF, up to 200 MB",
+      },
+      {
+        "id": "image2pdf", "title": "Image to PDF", "from": "IMG", "to": "PDF", "tone": "green",
+        "description": "Combine photos or scans into one PDF, one image per page, in the order chosen.",
+        "accept": ".jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.webp,.heic,.heif,image/*", "multiple": true,
+        "hint": "Up to 100 images: JPG, PNG, HEIC, WebP, GIF, BMP, TIFF",
+      },
+      {
+        "id": "pdf2image", "title": "PDF to Image", "from": "PDF", "to": "IMG", "tone": "amber",
+        "description": "Save each PDF page as an image. Several pages download as a ZIP.",
+        "accept": ".pdf", "multiple": false, "hint": "One PDF, up to 300 pages",
+      },
+    ] %}
+
+    <section class="convert-grid" aria-label="Conversion tools">
+      {% for tool in tools %}
+        <article class="convert-card" id="{{ tool.id }}">
+          <div class="convert-card-head">
+            <span class="convert-badge tone-{{ tool.tone }}" aria-hidden="true">
+              {{ tool.from }}<span class="convert-arrow">→</span>{{ tool.to }}
+            </span>
+            <div>
+              <h2>{{ tool.title }}</h2>
+              <p>{{ tool.description }}</p>
+            </div>
+          </div>
+
+          <form class="convert-form" action="{{ url_for('convert', tool=tool.id) }}" method="post"
+                enctype="multipart/form-data">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <label class="convert-drop" for="{{ tool.id }}-files">
+              <input id="{{ tool.id }}-files" name="files" type="file" accept="{{ tool.accept }}"
+                     {% if tool.multiple %}multiple{% endif %} required>
+              <span class="convert-drop-title">
+                {{ 'Choose images' if tool.multiple else 'Choose a file' }}
+                <span class="convert-drop-extra">or drop {{ 'them' if tool.multiple else 'it' }} here</span>
+              </span>
+              <span class="convert-drop-hint">{{ tool.hint }}</span>
+              <span class="convert-file-list" data-file-list></span>
+            </label>
+
+            {% if tool.id == "image2pdf" %}
+              <div class="convert-options">
+                <label>Page size
+                  <select name="page_size">
+                    <option value="a4" selected>A4</option>
+                    <option value="letter">US Letter</option>
+                    <option value="original">Same as image</option>
+                  </select>
+                </label>
+              </div>
+            {% elif tool.id == "pdf2image" %}
+              <div class="convert-options">
+                <label>Format
+                  <select name="image_format">
+                    <option value="png" selected>PNG</option>
+                    <option value="jpg">JPG (smaller files)</option>
+                  </select>
+                </label>
+                <label>Quality
+                  <select name="dpi">
+                    <option value="96">Screen (96 dpi)</option>
+                    <option value="150" selected>Standard (150 dpi)</option>
+                    <option value="300">Print (300 dpi)</option>
+                  </select>
+                </label>
+              </div>
+            {% endif %}
+
+            <div class="convert-actions">
+              <button type="submit">Convert</button>
+              <span class="convert-status" data-status aria-live="polite"></span>
+            </div>
+          </form>
+        </article>
+      {% endfor %}
+    </section>
+  </main>
+
+  <script>
+  (function () {
+    function describe(files) {
+      if (!files.length) return "";
+      if (files.length === 1) return files[0].name;
+      return files.length + " files: " + Array.prototype.map.call(files, function (f) { return f.name; }).join(", ");
+    }
+
+    function filenameFrom(response, fallback) {
+      var header = response.headers.get("Content-Disposition") || "";
+      var encoded = /filename\*=UTF-8''([^;]+)/i.exec(header);
+      if (encoded) { try { return decodeURIComponent(encoded[1]); } catch (error) {} }
+      var plain = /filename="?([^";]+)"?/i.exec(header);
+      return plain ? plain[1] : fallback;
+    }
+
+    document.querySelectorAll(".convert-form").forEach(function (form) {
+      var input = form.querySelector('input[type="file"]');
+      var drop = form.querySelector(".convert-drop");
+      var list = form.querySelector("[data-file-list]");
+      var status = form.querySelector("[data-status]");
+      var button = form.querySelector('button[type="submit"]');
+
+      function setStatus(text, tone) {
+        status.textContent = text;
+        status.className = "convert-status" + (tone ? " " + tone : "");
+      }
+
+      input.addEventListener("change", function () {
+        list.textContent = describe(input.files);
+        drop.classList.toggle("has-files", input.files.length > 0);
+        setStatus("");
+      });
+
+      ["dragenter", "dragover"].forEach(function (type) {
+        drop.addEventListener(type, function (event) { event.preventDefault(); drop.classList.add("is-dragging"); });
+      });
+      ["dragleave", "drop"].forEach(function (type) {
+        drop.addEventListener(type, function () { drop.classList.remove("is-dragging"); });
+      });
+      drop.addEventListener("drop", function (event) {
+        event.preventDefault();
+        if (!event.dataTransfer.files.length) return;
+        if (!input.multiple && event.dataTransfer.files.length > 1) {
+          setStatus("Drop one file at a time here.", "error");
+          return;
+        }
+        input.files = event.dataTransfer.files;
+        input.dispatchEvent(new Event("change"));
+      });
+
+      // Convert without leaving the page, then download the result.
+      form.addEventListener("submit", function (event) {
+        if (!window.fetch || !window.URL || !URL.createObjectURL) return;
+        event.preventDefault();
+        if (!input.files.length) { setStatus("Choose a file first.", "error"); return; }
+        button.disabled = true;
+        form.classList.add("is-busy");
+        setStatus("Converting…");
+        fetch(form.action, {
+          method: "POST",
+          body: new FormData(form),
+          headers: { "X-Requested-With": "fetch" },
+          credentials: "same-origin",
+        })
+          .then(function (response) {
+            if (!response.ok) {
+              return response.json()
+                .catch(function () { return { error: "Conversion failed (error " + response.status + ")." }; })
+                .then(function (data) { throw new Error(data.error || "Conversion failed."); });
+            }
+            var name = filenameFrom(response, "converted");
+            return response.blob().then(function (blob) {
+              var url = URL.createObjectURL(blob);
+              var link = document.createElement("a");
+              link.href = url;
+              link.download = name;
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+              setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+              setStatus("Done: " + name, "success");
+            });
+          })
+          .catch(function (error) {
+            setStatus(error.message === "Failed to fetch" ? "Could not reach the server." : error.message, "error");
+          })
+          .then(function () {
+            button.disabled = false;
+            form.classList.remove("is-busy");
+          });
+      });
+    });
+  })();
+  </script>
+</body>
+</html>
