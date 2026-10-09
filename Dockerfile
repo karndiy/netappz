@@ -11,6 +11,7 @@ WORKDIR /app
 
 # LibreOffice powers Word to PDF. Carlito/Caladea match Word's Calibri/Cambria
 # metrics, and TLWG adds Thai fonts so Thai documents render correctly.
+# Tesseract reads scanned PDFs (Thai + English) for PDF to Word.
 # Debian 11 reached end of life, so packages come from the frozen archive.
 RUN printf '%s\n' \
         'deb http://archive.debian.org/debian bullseye main' \
@@ -22,12 +23,17 @@ RUN printf '%s\n' \
     && apt-get install -y --no-install-recommends \
         libreoffice-writer-nogui \
         fonts-dejavu-core fonts-liberation2 fonts-crosextra-carlito fonts-crosextra-caladea fonts-thai-tlwg \
+        tesseract-ocr tesseract-ocr-tha tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
+
+# Word documents name Windows Thai fonts; map them to the matching TLWG fonts
+# (Laksaman is TH Sarabun) so LibreOffice lays Thai text out the same way.
+COPY fonts-thai-aliases.conf /etc/fonts/conf.d/60-thai-aliases.conf
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
-COPY app.py converters.py pdf_editor.py chat.py telegram_bot.py ./
+COPY app.py converters.py pdf_editor.py pdf_word.py chat.py telegram_bot.py ./
 COPY templates ./templates
 COPY static ./static
 

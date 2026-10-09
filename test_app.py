@@ -7,6 +7,9 @@ import unittest
 from unittest import mock
 import zipfile
 from pathlib import Path
+from urllib.parse import unquote
+
+THAI_FONTS = "/usr/share/fonts/truetype/tlwg"
 
 import chat
 import telegram_bot
@@ -510,6 +513,97 @@ class FileManagerTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
             self.assertIn(b"Hello page 1", archive.read("word/document.xml"))
         response.close()
+
+    def _thai_pdf_bytes(self, scanned=False):
+        import pymupdf
+
+        document = pymupdf.open()
+        page = document.new_page()
+        page.insert_htmlbox(
+            pymupdf.Rect(60, 60, 540, 400),
+            "<p><b>รายงานประจำปี Annual Report</b></p>"
+            "<p>บริษัทได้ดำเนินโครงการพัฒนาระบบจัดการเอกสาร (Document Management System) สำเร็จตามแผน</p>",
+            css="* { font-family: sans-serif; font-size: 18px; } p { margin-bottom: 12px; }",
+        )
+        if scanned:
+            # A picture of the page with no text layer, like a scan.
+            picture = page.get_pixmap(dpi=300, colorspace=pymupdf.csGRAY)
+            document = pymupdf.open()
+            document.new_page().insert_image(pymupdf.Rect(0, 0, 595, 842), pixmap=picture)
+        data = document.tobytes()
+        document.close()
+        return data
+
+    @unittest.skipUnless(Path(THAI_FONTS, "Laksaman-Bold.ttf").exists(), "TLWG Thai fonts not installed")
+    def test_pdf_to_word_keeps_thai_fonts_sizes_and_bold(self):
+        import pymupdf
+
+        # Laksaman is TLWG's TH Sarabun, the usual font of Thai Word documents.
+        document = pymupdf.open()
+        page = document.new_page()
+        page.insert_font(fontname="lak-b", fontfile=str(Path(THAI_FONTS, "Laksaman-Bold.ttf")))
+        page.insert_font(fontname="lak", fontfile=str(Path(THAI_FONTS, "Laksaman.ttf")))
+        page.insert_text((72, 90), "รายงานประจำปี Annual Report", fontname="lak-b", fontsize=20)
+        page.insert_text((72, 130), "บริษัทได้ดำเนินโครงการพัฒนาระบบ (Document System)", fontname="lak", fontsize=16)
+        data = document.tobytes()
+        document.close()
+
+        response = self.client.post(
+            "/convert/pdf2word",
+            data={"_csrf_token": self._csrf(), "files": (io.BytesIO(data), "รายงาน.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            xml = archive.read("word/document.xml").decode()
+            styles = archive.read("word/styles.xml").decode()
+        response.close()
+        self.assertIn("ดำเนินโครงการ", xml)
+        runs = [run for run in xml.split("<w:r>") if "รายงาน" in run or "บริษัท" in run]
+        self.assertEqual(len(runs), 2)
+        for run in runs:
+            self.assertIn('w:cs="TH Sarabun New"', run)  # Not the Linux name, Laksaman.
+            self.assertIn("<w:szCs ", run)
+            self.assertIn('w:bidi="th-TH"', run)
+        title = [run for run in runs if "รายงาน" in run][0]
+        self.assertIn("<w:b/><w:bCs/>", title)  # Word needs bCs to show Thai in bold.
+        self.assertIn('<w:sz w:val="40"/><w:szCs w:val="40"/>', title)
+        self.assertIn('w:cs="TH Sarabun New"', styles)
+
+    def test_thai_text_repairs_and_font_names(self):
+        import pdf_word
+
+        # Private-use glyphs from legacy Thai fonts, a split sara am, and a tone before its vowel.
+        self.assertEqual(pdf_word.normalize_thai("\u0e1b\uf70b"), "\u0e1b\u0e49")
+        self.assertEqual(pdf_word.normalize_thai("\u0e19\uf70f"), "\u0e19\u0e0d")
+        self.assertEqual(pdf_word.normalize_thai("ดํา"), "ดำ")
+        self.assertEqual(pdf_word.normalize_thai("น\u0e4d\u0e49\u0e32"), "น\u0e49\u0e33")
+        self.assertEqual(pdf_word.normalize_thai("ก\u0e48\u0e34"), "ก\u0e34\u0e48")
+        self.assertEqual(pdf_word.normalize_thai("Hello ไทย"), "Hello ไทย")
+        self.assertEqual(pdf_word.word_font("BAAAAA+Laksaman-Bold"), "TH Sarabun New")
+        self.assertEqual(pdf_word.word_font("THSarabunPSK"), "TH SarabunPSK")
+        self.assertEqual(pdf_word.word_font("AngsanaNew-Italic"), "Angsana New")
+        self.assertEqual(pdf_word.word_font("Calibri"), "Calibri")
+        self.assertEqual(pdf_word.word_font("Nimbus Sans Bold"), "Arial")
+
+    @unittest.skipUnless(__import__("pdf_word").ocr_available(), "Tesseract with Thai not installed")
+    def test_scanned_pdf_to_word_uses_thai_ocr(self):
+        import difflib
+        import docx
+
+        response = self.client.post(
+            "/convert/pdf2word",
+            data={"_csrf_token": self._csrf(), "files": (io.BytesIO(self._thai_pdf_bytes(scanned=True)), "scan.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("OCR", unquote(response.headers["X-Convert-Note"]))
+        text = "\n".join(p.text for p in docx.Document(io.BytesIO(response.data)).paragraphs)
+        response.close()
+        expected = "รายงานประจำปี Annual Report บริษัทได้ดำเนินโครงการพัฒนาระบบจัดการเอกสาร (Document Management System) สำเร็จตามแผน"
+        ratio = difflib.SequenceMatcher(None, expected.replace(" ", ""), text.replace(" ", "").replace("\n", "")).ratio()
+        self.assertGreater(ratio, 0.9, text)
+        self.assertIn("Document Management System", text)
 
     @unittest.skipUnless(shutil.which("soffice") or shutil.which("libreoffice"), "LibreOffice not installed")
     def test_word_to_pdf_uses_libreoffice(self):

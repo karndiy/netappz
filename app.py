@@ -12,6 +12,7 @@ import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote
 
 from flask import (
     Flask,
@@ -32,6 +33,7 @@ from werkzeug.utils import secure_filename
 import chat
 import converters
 import pdf_editor
+import pdf_word
 
 
 # Settings that can be changed on the Settings page. A saved value overrides the
@@ -443,6 +445,18 @@ def create_app(test_config=None):
     @app.get("/updates")
     def updates():
         entries = [
+            {
+                "version": "1.17.0",
+                "date": "2026-10-09",
+                "changes": [
+                    "PDF to Word now keeps Thai text at the right size and in bold in Word (Thai uses Word's complex-script settings, which were missing).",
+                    "Thai fonts get the names Word knows, such as TH Sarabun New, and Thai lines no longer clip their tone marks.",
+                    "Scanned PDFs are read with Thai + English text recognition (OCR) and rebuilt as editable paragraphs, headings, and table rows.",
+                    "English inside Thai sentences is read correctly, and broken Thai from older PDFs (split sara am, shifted tone marks) is repaired.",
+                    "Choose whether scanned pages are recognized automatically, always, or never; the result says what was done.",
+                    "Word to PDF lays out documents that use TH Sarabun, Angsana, Cordia, or Tahoma with matching Thai fonts.",
+                ],
+            },
             {
                 "version": "1.16.0",
                 "date": "2026-10-09",
@@ -1064,6 +1078,7 @@ def create_app(test_config=None):
                 return fail(f"“{download_stem(upload.filename)}” is not a supported file type here.")
 
         stem = download_stem(uploads[0].filename)
+        note = ""
         with tempfile.TemporaryDirectory(prefix="convert-") as temp_dir:
             workdir = Path(temp_dir)
             sources = []
@@ -1076,7 +1091,8 @@ def create_app(test_config=None):
                     result = converters.word_to_pdf(sources[0], workdir)
                     download_name = f"{stem}.pdf"
                 elif tool == "pdf2word":
-                    result = converters.pdf_to_word(sources[0], workdir)
+                    ocr = request.form.get("ocr", "auto")
+                    result, note = pdf_word.pdf_to_word(sources[0], workdir, ocr if ocr in ("auto", "on", "off") else "auto")
                     download_name = f"{stem}.docx"
                 elif tool == "image2pdf":
                     page_size = request.form.get("page_size", "a4")
@@ -1103,12 +1119,16 @@ def create_app(test_config=None):
                 shutil.copyfileobj(handle, output)
             output.seek(0)
 
-        return send_file(
+        response = send_file(
             output,
             as_attachment=True,
             download_name=download_name,
             mimetype=mimetypes.guess_type(download_name)[0] or "application/octet-stream",
         )
+        if note:
+            # Headers are Latin-1 only, so the note travels URL-encoded.
+            response.headers["X-Convert-Note"] = quote(note)
+        return response
 
     def editor_workspace(doc_id):
         folder = pdf_editor.workspace(doc_id)

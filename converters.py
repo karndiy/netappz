@@ -81,22 +81,6 @@ def open_pdf(source):
     return document
 
 
-def pdf_to_word(source, workdir):
-    from pdf2docx import Converter
-
-    open_pdf(source).close()
-    result = workdir / f"{source.stem}.docx"
-    try:
-        converter = Converter(str(source))
-        try:
-            converter.convert(str(result))
-        finally:
-            converter.close()
-    except Exception:
-        raise ConversionError("Could not convert this PDF to Word.")
-    return result
-
-
 def images_to_pdf(sources, workdir, page_size="a4"):
     import img2pdf
     from PIL import Image, ImageOps, UnidentifiedImageError

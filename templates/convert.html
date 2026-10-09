@@ -39,7 +39,7 @@
       },
       {
         "id": "pdf2word", "title": "PDF to Word", "from": "PDF", "to": "DOC", "tone": "red",
-        "description": "Make an editable .docx from a PDF. Works best with text-based PDFs, not scans.",
+        "description": "Make an editable .docx from a PDF, with Thai and English kept in the right fonts and sizes. Scanned PDFs are read with OCR.",
         "accept": ".pdf", "multiple": false, "hint": "One PDF, up to 200 MB",
       },
       {
@@ -109,7 +109,17 @@
               </div>
             {% endif %}
 
-            {% if tool.id == "image2pdf" %}
+            {% if tool.id == "pdf2word" %}
+              <div class="convert-options">
+                <label>Scanned pages (OCR, Thai + English)
+                  <select name="ocr">
+                    <option value="auto" selected>Detect automatically</option>
+                    <option value="on">Always recognize text</option>
+                    <option value="off">Never, keep as pictures</option>
+                  </select>
+                </label>
+              </div>
+            {% elif tool.id == "image2pdf" %}
               <div class="convert-options">
                 <label>Page size
                   <select name="page_size">
@@ -406,7 +416,9 @@
               link.click();
               link.remove();
               setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
-              setStatus("Done: " + name, "success");
+              var note = response.headers.get("X-Convert-Note");
+              if (note) { try { note = decodeURIComponent(note); } catch (error) { note = ""; } }
+              setStatus("Done: " + name + (note ? ". " + note : ""), "success");
             });
           })
           .catch(function (error) {
