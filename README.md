@@ -8,6 +8,8 @@ Open **Update log** from the app header, or visit `/updates`, to review the incl
 
 Open **Convert** from the app header, or visit `/convert`, to convert Word to PDF, PDF to Word, images to PDF, or PDF pages to images. Uploads go to a temporary folder that is deleted after each conversion; nothing is saved to `shared/`. Word to PDF needs LibreOffice, which the Docker image includes; the other tools only need the Python packages in `requirements.txt`. Each conversion accepts up to 200 MB.
 
+Open **Convert → Edit PDF**, or visit `/convert/edit`, to edit a PDF in the browser, much like Acrobat's Edit PDF mode: change existing lines of text, add text, images and a drawn signature, draw, add shapes, highlight, comment, white out, redact (content under a redaction box is permanently removed), rotate/reorder/duplicate/delete/insert pages, and add a watermark or page numbers. Edits save automatically on the server for 12 hours, so a reload keeps them; **Download** builds the edited PDF and **Save to Files** puts a copy in `shared/`. Thai text is supported.
+
 ## Run
 
 Python 3.9 or newer is recommended.

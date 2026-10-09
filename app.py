@@ -31,6 +31,7 @@ from werkzeug.utils import secure_filename
 
 import chat
 import converters
+import pdf_editor
 
 
 # Settings that can be changed on the Settings page. A saved value overrides the
@@ -403,7 +404,8 @@ def create_app(test_config=None):
     @app.before_request
     def validate_csrf():
         if request.method == "POST":
-            supplied = request.form.get("_csrf_token", "")
+            # Forms send the token as a field; the PDF editor's JSON requests send a header.
+            supplied = request.form.get("_csrf_token") or request.headers.get("X-CSRF-Token", "")
             if not hmac.compare_digest(supplied, session.get("_csrf_token", "")):
                 abort(400, "Invalid form token. Reload the page and try again.")
 
@@ -441,6 +443,18 @@ def create_app(test_config=None):
     @app.get("/updates")
     def updates():
         entries = [
+            {
+                "version": "1.16.0",
+                "date": "2026-10-09",
+                "changes": [
+                    "Added Edit PDF, an Acrobat-style editor opened from the Convert page.",
+                    "Click any line of text in a PDF to change it; add text, pictures, and a drawn signature; draw, add shapes, highlight, and comment.",
+                    "Whiteout covers content, and Redact permanently removes text, pictures, and drawings under the box.",
+                    "Rotate, reorder, duplicate, delete, and insert blank pages; add a watermark and page numbers.",
+                    "Undo and redo, zoom, drag-and-drop pictures onto a page, and automatic saving so a reload keeps your edits for 12 hours.",
+                    "Download the edited PDF or save a copy straight into Files. Works on phones and tablets too.",
+                ],
+            },
             {
                 "version": "1.15.0",
                 "date": "2026-10-09",
@@ -1094,6 +1108,97 @@ def create_app(test_config=None):
             as_attachment=True,
             download_name=download_name,
             mimetype=mimetypes.guess_type(download_name)[0] or "application/octet-stream",
+        )
+
+    def editor_workspace(doc_id):
+        folder = pdf_editor.workspace(doc_id)
+        if folder is None:
+            abort(404)
+        return folder
+
+    @app.get("/convert/edit")
+    def pdf_editor_start():
+        return render_template("pdf_editor.html", doc_id=None, info=None)
+
+    @app.post("/convert/edit/open")
+    def pdf_editor_open():
+        wants_json = request.headers.get("X-Requested-With") == "fetch"
+
+        def fail(message, status=400):
+            if wants_json:
+                return jsonify(error=message), status
+            flash(message, "error")
+            return redirect(url_for("pdf_editor_start"))
+
+        if (request.content_length or 0) > max_convert_bytes:
+            return fail("PDFs to edit must be 200 MB or smaller.", 413)
+        upload = request.files.get("files")
+        if not upload or not upload.filename:
+            return fail("Choose a PDF to edit.")
+        if Path(upload.filename).suffix.lower() != ".pdf":
+            return fail(f"“{download_stem(upload.filename)}” is not a PDF.")
+        try:
+            doc_id, _info = pdf_editor.create_workspace(upload, download_stem(upload.filename))
+        except converters.ConversionError as error:
+            return fail(str(error))
+        url = url_for("pdf_editor_page", doc_id=doc_id)
+        return jsonify(url=url) if wants_json else redirect(url)
+
+    @app.get("/convert/edit/<doc_id>")
+    def pdf_editor_page(doc_id):
+        folder = pdf_editor.workspace(doc_id)
+        if folder is None:
+            flash("That PDF is no longer open. Open it again to keep editing.", "error")
+            return redirect(url_for("pdf_editor_start"))
+        return render_template("pdf_editor.html", doc_id=doc_id, info=pdf_editor.load_info(folder))
+
+    @app.get("/convert/edit/<doc_id>/page/<int:number>.png")
+    def pdf_editor_page_image(doc_id, number):
+        image = pdf_editor.render_page(editor_workspace(doc_id), number, request.args.get("w", type=int))
+        if image is None:
+            abort(404)
+        response = Response(image, mimetype="image/png")
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
+
+    @app.get("/convert/edit/<doc_id>/page/<int:number>/text")
+    def pdf_editor_page_text(doc_id, number):
+        lines = pdf_editor.page_text(editor_workspace(doc_id), number)
+        if lines is None:
+            abort(404)
+        return jsonify(lines=lines)
+
+    @app.post("/convert/edit/<doc_id>/state")
+    def pdf_editor_state(doc_id):
+        try:
+            pdf_editor.save_state(editor_workspace(doc_id), request.get_data())
+        except (converters.ConversionError, ValueError) as error:
+            return jsonify(error=str(error) or "Could not keep these edits."), 400
+        return jsonify(ok=True)
+
+    @app.post("/convert/edit/<doc_id>/save")
+    def pdf_editor_save(doc_id):
+        folder = editor_workspace(doc_id)
+        payload = request.get_json(silent=True) or {}
+        name = download_stem(payload.get("name") or json.loads((folder / "meta.json").read_text())["name"])
+        try:
+            data = pdf_editor.build_pdf(folder, payload.get("state"))
+        except converters.ConversionError as error:
+            return jsonify(error=str(error)), 400
+        if payload.get("target") == "files":
+            # Save a copy into the shared files, next to everything else, without overwriting.
+            target = root / f"{name}-edited.pdf"
+            counter = 2
+            while target.exists():
+                target = root / f"{name}-edited ({counter}).pdf"
+                counter += 1
+            target.write_bytes(data)
+            return jsonify(saved=target.name, url=url_for("index"))
+        return send_file(
+            io.BytesIO(data),
+            as_attachment=True,
+            download_name=f"{name}-edited.pdf",
+            mimetype="application/pdf",
         )
 
     @app.errorhandler(413)

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% if info %}{{ info.name }} · {% endif %}Edit PDF · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='pdf-editor.css') }}">
+</head>
+{% if not doc_id %}
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}" aria-current="page">Convert</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+    <section class="heading">
+      <div>
+        <h1>Edit PDF</h1>
+        <p class="page-description">Change text, add text, pictures, signatures, drawings, highlights and comments, redact, and organize pages.</p>
+      </div>
+    </section>
+    <form class="pe-open" id="pe-open" action="{{ url_for('pdf_editor_open') }}" method="post" enctype="multipart/form-data">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <label class="pe-open-drop" for="pe-open-file">
+        <input id="pe-open-file" name="files" type="file" accept=".pdf,application/pdf" required>
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M14 6h14l10 10v24a2 2 0 0 1-2 2H14a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/><path d="M28 6v10h10M19 31l9-9 3 3-9 9h-3z"/></svg>
+        <span class="pe-open-title">Choose a PDF <span>or drop it here</span></span>
+        <span class="pe-open-hint">Up to 200 MB and 500 pages. Your edits are kept on this server for 12 hours.</span>
+        <span class="pe-open-status" id="pe-open-status" aria-live="polite"></span>
+      </label>
+      <noscript><button type="submit">Open</button></noscript>
+    </form>
+  </main>
+  <script>
+  (function () {
+    var form = document.getElementById("pe-open");
+    var input = document.getElementById("pe-open-file");
+    var drop = form.querySelector(".pe-open-drop");
+    var status = document.getElementById("pe-open-status");
+    function open(file) {
+      if (!file) return;
+      if (!/\.pdf$/i.test(file.name)) { status.textContent = "Choose a PDF file."; status.className = "pe-open-status error"; return; }
+      var data = new FormData();
+      data.append("_csrf_token", form.querySelector('[name="_csrf_token"]').value);
+      data.append("files", file);
+      drop.classList.add("is-busy");
+      status.className = "pe-open-status";
+      status.textContent = "Opening " + file.name + "…";
+      fetch(form.action, { method: "POST", body: data, headers: { "X-Requested-With": "fetch" }, credentials: "same-origin" })
+        .then(function (response) { return response.json().then(function (body) { if (!response.ok) throw new Error(body.error || "Could not open this PDF."); return body; }); })
+        .then(function (body) { window.location.href = body.url; })
+        .catch(function (error) {
+          drop.classList.remove("is-busy");
+          status.className = "pe-open-status error";
+          status.textContent = error.message === "Failed to fetch" ? "Could not reach the server." : error.message;
+        });
+    }
+    input.addEventListener("change", function () { open(input.files[0]); });
+    ["dragenter", "dragover"].forEach(function (type) {
+      window.addEventListener(type, function (event) { event.preventDefault(); drop.classList.add("is-dragging"); });
+    });
+    ["dragleave", "drop"].forEach(function (type) {
+      window.addEventListener(type, function (event) { if (type === "drop" || !event.relatedTarget) drop.classList.remove("is-dragging"); });
+    });
+    window.addEventListener("drop", function (event) {
+      event.preventDefault();
+      if (event.dataTransfer.files.length) open(event.dataTransfer.files[0]);
+    });
+  })();
+  </script>
+</body>
+{% else %}
+<body class="pe-body">
+  <div class="pe-app" id="pe-app"
+       data-csrf="{{ csrf_token() }}"
+       data-base="{{ url_for('pdf_editor_page', doc_id=doc_id) }}"
+       data-files-url="{{ url_for('index') }}">
+    <header class="pe-top">
+      <a class="pe-back" href="{{ url_for('convert_page') }}" title="Back to Convert" aria-label="Back to Convert">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 4-6 6 6 6"/></svg>
+      </a>
+      <div class="pe-title">
+        <input class="pe-name" id="pe-name" value="{{ info.name }}" aria-label="File name" spellcheck="false">
+        <span class="pe-status" id="pe-status" aria-live="polite"></span>
+      </div>
+      <div class="pe-top-group" role="group" aria-label="History">
+        <button class="pe-icon" id="pe-undo" type="button" title="Undo (⌘Z)" aria-label="Undo" disabled>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 5 3.5 9l4 4M3.5 9h8a5 5 0 0 1 0 10h-2"/></svg>
+        </button>
+        <button class="pe-icon" id="pe-redo" type="button" title="Redo (⇧⌘Z)" aria-label="Redo" disabled>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m12.5 5 4 4-4 4M16.5 9h-8a5 5 0 0 0 0 10h2"/></svg>
+        </button>
+      </div>
+      <div class="pe-top-group pe-zoom" role="group" aria-label="Zoom">
+        <button class="pe-icon" id="pe-zoom-out" type="button" title="Zoom out" aria-label="Zoom out">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10h10"/></svg>
+        </button>
+        <button class="pe-zoom-label" id="pe-zoom-fit" type="button" title="Fit to width">100%</button>
+        <button class="pe-icon" id="pe-zoom-in" type="button" title="Zoom in" aria-label="Zoom in">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 10h10M10 5v10"/></svg>
+        </button>
+      </div>
+      <div class="pe-top-actions">
+        <button class="pe-button secondary" id="pe-save-files" type="button" title="Save a copy into the shared files">Save to Files</button>
+        <button class="pe-button" id="pe-download" type="button">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M5.5 8.5 10 13l4.5-4.5M4 16.5h12"/></svg>
+          <span>Download</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="pe-main">
+      <nav class="pe-rail" id="pe-rail" aria-label="Edit tools"></nav>
+      <aside class="pe-pages" id="pe-pages" aria-label="Pages" hidden>
+        <div class="pe-panel-head">
+          <h2>Pages</h2>
+          <button class="pe-text-button" id="pe-add-page" type="button">+ Blank page</button>
+        </div>
+        <p class="pe-panel-hint">Drag to reorder.</p>
+        <ol class="pe-thumbs" id="pe-thumbs"></ol>
+      </aside>
+      <div class="pe-canvas" id="pe-canvas" tabindex="-1">
+        <div class="pe-hint" id="pe-hint" hidden></div>
+        <div class="pe-doc" id="pe-doc"></div>
+      </div>
+      <aside class="pe-props" id="pe-props" aria-label="Properties"></aside>
+    </div>
+    <div class="pe-pageinfo" id="pe-pageinfo"></div>
+  </div>
+
+  <input type="file" id="pe-image-input" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+
+  <dialog class="pe-dialog" id="pe-signature" aria-labelledby="pe-signature-title">
+    <form method="dialog" class="pe-dialog-body">
+      <h2 id="pe-signature-title">Your signature</h2>
+      <p class="pe-panel-hint">Sign with your mouse, trackpad, finger, or pen.</p>
+      <canvas class="pe-signature-pad" id="pe-signature-pad" width="560" height="200"></canvas>
+      <div class="pe-dialog-row">
+        <div class="pe-swatches" role="radiogroup" aria-label="Ink color">
+          <button type="button" class="pe-swatch is-active" data-color="#111111" style="--swatch:#111111" aria-label="Black" aria-pressed="true"></button>
+          <button type="button" class="pe-swatch" data-color="#1d3fbb" style="--swatch:#1d3fbb" aria-label="Blue" aria-pressed="false"></button>
+        </div>
+        <button type="button" class="pe-text-button" id="pe-signature-clear">Clear</button>
+      </div>
+      <div class="pe-dialog-actions">
+        <button type="button" class="pe-button secondary" id="pe-signature-saved" hidden>Use saved signature</button>
+        <span class="pe-spacer"></span>
+        <button type="submit" class="pe-button secondary" value="cancel">Cancel</button>
+        <button type="button" class="pe-button" id="pe-signature-use">Place signature</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="pe-toast" id="pe-toast" role="status" aria-live="polite" hidden></div>
+
+  <script id="pe-data" type="application/json">{{ info|tojson }}</script>
+  <script src="{{ url_for('static', filename='pdf-editor.js') }}"></script>
+</body>
+{% endif %}
+</html>

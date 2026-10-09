@@ -27,7 +27,7 @@ RUN printf '%s\n' \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
-COPY app.py converters.py chat.py telegram_bot.py ./
+COPY app.py converters.py pdf_editor.py chat.py telegram_bot.py ./
 COPY templates ./templates
 COPY static ./static
 

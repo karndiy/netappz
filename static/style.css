@@ -566,3 +566,18 @@ select {
 @media (max-width: 600px) {
   .convert-queue-size { display: none; }
 }
+
+/* Convert: Edit PDF entry */
+.convert-feature {
+  display: flex; align-items: center; gap: 16px; margin-top: 22px; padding: 18px 20px;
+  background: linear-gradient(135deg, #f4f3ff, #eff4ff); border: 1px solid #d9d6fe; border-radius: 12px; color: #182230;
+}
+.convert-feature:hover { text-decoration: none; border-color: #9b8afb; box-shadow: 0 4px 14px rgba(89, 37, 220, .1); }
+.convert-feature-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.convert-feature-text strong { font-size: 18px; }
+.convert-feature-text span { color: #475467; font-size: 14px; line-height: 1.5; }
+.convert-feature-go { flex: none; color: #5925dc; font-weight: 700; white-space: nowrap; }
+@media (max-width: 600px) {
+  .convert-feature { flex-wrap: wrap; padding: 16px; }
+  .convert-feature-go { width: 100%; }
+}

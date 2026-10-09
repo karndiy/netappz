@@ -62,6 +62,15 @@
       },
     ] %}
 
+    <a class="convert-feature" href="{{ url_for('pdf_editor_start') }}" id="edit">
+      <span class="convert-badge tone-purple" aria-hidden="true">PDF<span class="convert-arrow">✎</span></span>
+      <span class="convert-feature-text">
+        <strong>Edit PDF</strong>
+        <span>Change existing text, add text, pictures and signatures, draw, highlight, comment, redact, add a watermark or page numbers, and rotate, reorder or delete pages.</span>
+      </span>
+      <span class="convert-feature-go" aria-hidden="true">Open editor →</span>
+    </a>
+
     <section class="convert-grid" aria-label="Conversion tools">
       {% for tool in tools %}
         <article class="convert-card" id="{{ tool.id }}">

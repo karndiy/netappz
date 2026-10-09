@@ -293,7 +293,7 @@ class FileManagerTests(unittest.TestCase):
     def test_convert_page_lists_all_tools(self):
         response = self.client.get("/convert")
         self.assertEqual(response.status_code, 200)
-        for title in (b"Word to PDF", b"PDF to Word", b"Image to PDF", b"PDF to Image", b"Merge PDFs"):
+        for title in (b"Word to PDF", b"PDF to Word", b"Image to PDF", b"PDF to Image", b"Merge PDFs", b"Edit PDF"):
             self.assertIn(title, response.data)
 
     def test_image_to_pdf_combines_images(self):
@@ -372,6 +372,107 @@ class FileManagerTests(unittest.TestCase):
         )
         self.assertEqual(broken.status_code, 400)
         self.assertIn("“bad”", broken.get_json()["error"])
+
+    def _open_in_editor(self, token, pages=2):
+        response = self.client.post(
+            "/convert/edit/open",
+            data={"_csrf_token": token, "files": (io.BytesIO(self._pdf_bytes(pages)), "สัญญา.pdf")},
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "fetch"},
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.get_json()["url"]
+
+    def test_pdf_editor_edits_text_adds_items_and_reorders_pages(self):
+        import base64
+        import pymupdf
+        import pdf_editor
+
+        with mock.patch.object(pdf_editor, "WORKSPACE_ROOT", Path(self.temp_dir.name) / "edit"):
+            token = self._csrf()
+            url = self._open_in_editor(token)
+            page = self.client.get(url)
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b"pe-data", page.data)
+
+            image = self.client.get(url + "/page/0.png?w=400")
+            self.assertTrue(image.data.startswith(b"\x89PNG"))
+            self.assertEqual(self.client.get(url + "/page/9.png").status_code, 404)
+            lines = self.client.get(url + "/page/0/text").get_json()["lines"]
+            self.assertEqual(lines[0]["text"], "Hello page 1")
+
+            line = lines[0]
+            png = "data:image/png;base64," + base64.b64encode(self._png_bytes("red")).decode()
+            state = {
+                "pages": [
+                    {"src": 1, "rotate": 90, "objects": []},
+                    {"src": 0, "rotate": 0, "objects": [
+                        {**line, "type": "textedit", "orig": dict(line), "text": "แก้ไขแล้ว Changed"},
+                        {"type": "text", "x": 72, "y": 200, "w": 200, "h": 20, "text": "Added note", "size": 12},
+                        {"type": "image", "x": 72, "y": 260, "w": 50, "h": 50, "data": png},
+                        {"type": "ink", "points": [[[10, 10], [40, 40]]], "color": "#ff0000", "width": 2},
+                        {"type": "highlight", "x": 72, "y": 195, "w": 80, "h": 18},
+                        {"type": "note", "x": 300, "y": 300, "text": "Check this"},
+                    ]},
+                    {"src": None, "w": 300, "h": 400, "objects": []},
+                ],
+                "watermark": {"enabled": True, "text": "DRAFT", "size": 50, "color": "#ff0000", "opacity": 0.2, "angle": 45},
+                "pageNumbers": {"enabled": True, "format": "Page {n} of {total}", "position": "bottom-right", "size": 9},
+            }
+            headers = {"X-CSRF-Token": token}
+            self.assertEqual(self.client.post(url + "/state", json={"version": 1, **state}).status_code, 400)
+            self.assertEqual(self.client.post(url + "/state", json={"version": 1, **state}, headers=headers).status_code, 200)
+            self.assertIn(b"DRAFT", self.client.get(url).data)  # Saved edits come back on reload.
+
+            response = self.client.post(url + "/save", json={"state": state}, headers=headers)
+            self.assertEqual(response.status_code, 200, response.data[:200])
+            self.assertIn("-edited.pdf", response.headers["Content-Disposition"])
+            document = pymupdf.open(stream=response.data, filetype="pdf")
+            self.assertEqual(document.page_count, 3)
+            self.assertEqual(document[0].rotation, 90)
+            self.assertIn("Hello page 2", document[0].get_text())
+            text = document[1].get_text()
+            self.assertNotIn("Hello page 1", text)
+            self.assertIn("Changed", text)
+            self.assertIn("Added note", text)
+            self.assertIn("Page 2 of 3", text)
+            self.assertIn("DRAFT", text)
+            self.assertEqual(len(document[1].get_images()), 1)
+            self.assertEqual(sorted(annot.type[1] for annot in document[1].annots()), ["Highlight", "Text"])
+            self.assertEqual(document[2].rect.width, 300)
+            document.close()
+
+            response = self.client.post(url + "/save", json={"state": state, "target": "files"}, headers=headers)
+            self.assertEqual(response.get_json()["saved"], "สัญญา-edited.pdf")
+            self.assertTrue((self.root / "สัญญา-edited.pdf").is_file())
+
+    def test_pdf_editor_redaction_removes_text_and_rejects_bad_input(self):
+        import pymupdf
+        import pdf_editor
+
+        with mock.patch.object(pdf_editor, "WORKSPACE_ROOT", Path(self.temp_dir.name) / "edit"):
+            token = self._csrf()
+            url = self._open_in_editor(token, pages=1)
+            line = self.client.get(url + "/page/0/text").get_json()["lines"][0]
+            state = {"pages": [{"src": 0, "objects": [{"type": "redact", **{k: line[k] for k in "xywh"}}]}]}
+            response = self.client.post(url + "/save", json={"state": state}, headers={"X-CSRF-Token": token})
+            document = pymupdf.open(stream=response.data, filetype="pdf")
+            self.assertNotIn("Hello", document[0].get_text())
+            document.close()
+
+            bad = self.client.post(url + "/save", json={"state": {"pages": []}}, headers={"X-CSRF-Token": token})
+            self.assertEqual(bad.status_code, 400)
+            self.assertIn("at least one page", bad.get_json()["error"])
+            self.assertEqual(self.client.get("/convert/edit/not-a-real-document-id/page/0/text").status_code, 404)
+            self.assertEqual(self.client.get("/convert/edit/not-a-real-document-id").status_code, 302)
+
+            not_pdf = self.client.post(
+                "/convert/edit/open",
+                data={"_csrf_token": token, "files": (io.BytesIO(b"hello"), "notes.txt")},
+                content_type="multipart/form-data",
+                headers={"X-Requested-With": "fetch"},
+            )
+            self.assertEqual(not_pdf.status_code, 400)
 
     def test_pdf_to_image_returns_png_or_zip(self):
         token = self._csrf()
