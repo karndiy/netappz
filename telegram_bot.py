@@ -47,6 +47,37 @@ class Telegram:
             self.call("sendMessage", chat_id=chat_id, text=text[start:start + TELEGRAM_LIMIT])
 
 
+STATUS_KEY = "TELEGRAM_STATUS"
+
+
+class StatusReporter:
+    """Saves the bot's connection state so the Settings page can show it."""
+
+    def __init__(self, settings):
+        self.settings = settings
+        self.last = None
+
+    def __call__(self, state, message):
+        if (state, message) == self.last:
+            return
+        self.last = (state, message)
+        try:
+            self.settings.save({STATUS_KEY: json.dumps({"state": state, "message": message, "at": int(time.time())})})
+        except Exception:
+            log.exception("Could not save the Telegram bot status")
+
+
+def polling_problem(error):
+    if isinstance(error, urllib.error.HTTPError) and error.code == 409:
+        return "conflict", (
+            "Another program is reading this bot's messages with the same token (for example the Claude Code "
+            "Telegram plugin, or a second copy of this app). Stop it, or give this app its own bot from @BotFather."
+        )
+    if isinstance(error, urllib.error.HTTPError) and error.code == 401:
+        return "error", "Telegram no longer accepts this bot token. Get a new one from @BotFather."
+    return "error", f"Can't reach Telegram right now ({error}). Retrying."
+
+
 def allowed_users():
     raw = chat.setting("TELEGRAM_ALLOWED_USERS")
     return {int(part) for part in raw.replace(" ", "").split(",") if part.lstrip("-").isdigit()}
@@ -115,7 +146,9 @@ def handle(telegram, store, message, allowed):
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # Creating the app connects to the database and makes chat.setting() read saved settings.
-    store = create_app().extensions["chat"]
+    app = create_app()
+    store = app.extensions["chat"]
+    report = StatusReporter(app.extensions["settings"])
     telegram = None
     offset = None
     while True:
@@ -123,17 +156,20 @@ def main():
         if telegram is None or telegram.token != token:
             telegram, offset = None, None
             if not token:
+                report("off", "No bot token is set, so the bot is off.")
                 log.info("No Telegram bot token is set; the bot is off. Checking again in 30 s.")
                 time.sleep(30)
                 continue
             try:
                 me = Telegram(token).call("getMe")
             except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as error:
+                report("error", f"Telegram did not accept the bot token ({error}).")
                 log.warning("Telegram did not accept the bot token (%s); retrying in 30 s", error)
                 time.sleep(30)
                 continue
             telegram = Telegram(token)
-            log.info("Telegram bot @%s is running", me.get("username"))
+            username = me.get("username", "")
+            log.info("Telegram bot @%s is running", username)
             if not allowed_users():
                 log.warning("No allowed Telegram users yet: the bot will refuse everyone and show their user ID.")
 
@@ -143,10 +179,15 @@ def main():
                 params["offset"] = offset
             updates = telegram.call("getUpdates", http_timeout=60, **params)
         except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as error:
+            report(*polling_problem(error))
             log.warning("Telegram polling failed (%s); retrying in 5 s", error)
             time.sleep(5)
             continue
         allowed = allowed_users()
+        if allowed:
+            report("running", f"Connected as @{username}. Message the bot in Telegram to chat with the AI.")
+        else:
+            report("running", f"Connected as @{username}, but no allowed user IDs are set yet: message the bot to get your ID.")
         for update in updates:
             offset = update["update_id"] + 1
             message = update.get("message")

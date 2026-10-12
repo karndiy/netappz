@@ -8,6 +8,7 @@ import secrets
 import sqlite3
 import shutil
 import tempfile
+import time
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -96,6 +97,7 @@ SETTING_GROUPS = [
         ],
     },
     {
+        "key": "telegram",
         "title": "Telegram bot",
         "description": "Chat with the AI from your phone. Changes apply within about a minute.",
         "fields": [
@@ -478,6 +480,15 @@ def create_app(test_config=None):
     @app.get("/updates")
     def updates():
         entries = [
+            {
+                "version": "1.21.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "Settings now shows whether the Telegram bot is connected, and as which bot.",
+                    "If another program is using the same bot token (for example the Claude Code Telegram plugin), Settings says so and explains how to fix it.",
+                    "Telegram chats use the AI chosen on the Settings page, including Local AI.",
+                ],
+            },
             {
                 "version": "1.20.0",
                 "date": "2026-10-12",
@@ -1011,6 +1022,20 @@ def create_app(test_config=None):
         flash("Chat deleted.", "success")
         return redirect(url_for("chat_page"))
 
+    def telegram_status(saved):
+        """The connection state the Telegram bot last reported, for the Settings page."""
+        if not chat.setting("TELEGRAM_BOT_TOKEN"):
+            return {"state": "off", "message": "No bot token is set, so the bot is off."}
+        try:
+            status = json.loads(saved.get("TELEGRAM_STATUS") or "{}")
+        except ValueError:
+            status = {}
+        if not status.get("state") or status["state"] == "off":
+            return {"state": "pending", "message": "Waiting for the bot to connect (up to a minute after saving)."}
+        if time.time() - status.get("at", 0) > 24 * 3600 and status["state"] != "running":
+            status["message"] += " (last checked over a day ago)"
+        return status
+
     def settings_view(values=None, errors=None):
         saved = settings_store.all()
         groups = []
@@ -1044,7 +1069,8 @@ def create_app(test_config=None):
                 else:
                     item["value"] = (values or {}).get(name, current)
                 fields.append(item)
-            groups.append({**group, "fields": fields})
+            extra = {"status": telegram_status(saved)} if group.get("key") == "telegram" else {}
+            groups.append({**group, **extra, "fields": fields})
         return groups
 
     def read_settings_form():

@@ -889,6 +889,22 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Choose a model from the Models list.", response.get_data(as_text=True))
 
+    def test_settings_show_telegram_bot_status(self):
+        settings = self.app.extensions["settings"]
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertIn("No bot token is set", self.client.get("/settings").get_data(as_text=True))
+            settings.save({"TELEGRAM_BOT_TOKEN": "123456:" + "a" * 35})
+            self.assertIn("Waiting for the bot to connect", self.client.get("/settings").get_data(as_text=True))
+
+            error = telegram_bot.urllib.error.HTTPError("url", 409, "Conflict", {}, None)
+            telegram_bot.StatusReporter(settings)(*telegram_bot.polling_problem(error))
+            page = self.client.get("/settings").get_data(as_text=True)
+            self.assertIn("settings-status is-conflict", page)
+            self.assertIn("Claude Code Telegram plugin", page)
+
+            telegram_bot.StatusReporter(settings)("running", "Connected as @netappz_bot.")
+            self.assertIn("Connected as @netappz_bot.", self.client.get("/settings").get_data(as_text=True))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -496,6 +496,11 @@ select {
 .settings-label-row label { margin: 0; }
 .settings-source { flex: none; padding: 2px 8px; border-radius: 999px; background: #f2f4f7; color: #475467; font-size: 12px; }
 .settings-source.is-saved { background: #ecfdf3; color: #027a48; }
+.settings-status { margin: 0 0 16px; padding: 10px 12px; border-radius: 6px; background: #f2f4f7; color: #344054; font-size: 14px; line-height: 1.5; }
+.settings-status strong { margin-right: 6px; }
+.settings-status.is-running { background: #ecfdf3; color: #05603a; }
+.settings-status.is-conflict, .settings-status.is-error { background: #fef3f2; color: #b42318; }
+.settings-status.is-pending { background: #fffaeb; color: #93370d; }
 .settings-field input[type="text"], .settings-field input[type="password"], .settings-field select, .settings-field textarea {
   width: 100%; min-height: 42px; padding: 8px 11px; border: 1px solid #d0d5dd; border-radius: 6px;
   background: #fff; color: #182230; font-size: 15px;

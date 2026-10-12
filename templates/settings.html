@@ -40,6 +40,12 @@
             <h2 id="group-{{ loop.index }}">{{ group.title }}</h2>
             <p>{{ group.description }}</p>
           </div>
+          {% if group.status %}
+            <p class="settings-status is-{{ group.status.state }}" role="status">
+              <strong>{{ {"running": "Connected", "conflict": "Not connected", "error": "Not connected", "pending": "Connecting", "off": "Off"}[group.status.state] }}</strong>
+              {{ group.status.message }}
+            </p>
+          {% endif %}
 
           {% for field in group.fields %}
             {% set field_id = "setting-" ~ field.name|lower %}
