@@ -1,6 +1,13 @@
 # Version 2.4 supports "depends_on: condition: service_healthy" on docker-compose 1.x.
 version: "2.4"
 
+# Cap each container's log at 3 files of 10 MB, so logs can't fill the disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   web:
     build: .
@@ -24,9 +31,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging: *logging
     restart: unless-stopped
 
-  # Telegram bot for chatting with Claude from anywhere. It only connects out
+  # Telegram bot for chatting with the AI from anywhere. It only connects out
   # to Telegram (long polling), so no ports are opened. Idle until a token is set.
   telegram:
     image: network-files
@@ -40,6 +54,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    mem_limit: 256m
+    logging: *logging
     restart: unless-stopped
 
   # Alpine (musl) images avoid the clone3 seccomp issue on Docker 19.03.
@@ -54,22 +70,39 @@ services:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
+      interval: 10s
       timeout: 3s
       retries: 10
+    logging: *logging
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: network-files-redis
-    command: ["redis-server", "--appendonly", "yes"]
+    # Sessions and the notes cache: every key expires, so when the 64 MB limit is reached
+    # Redis drops the least recently used expiring keys. The append-only file alone keeps
+    # sessions across restarts (RDB snapshots are off, so data is written once).
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - ""
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - volatile-lru
     volumes:
       - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 3s
       retries: 10
+    mem_limit: 128m
+    logging: *logging
     restart: unless-stopped
 
 volumes:

@@ -210,26 +210,45 @@ def create_app(test_config=None):
     if app.config["REDIS_URL"]:
         import redis
 
-        cache = redis.Redis.from_url(app.config["REDIS_URL"])
-        app.config.update(SESSION_TYPE="redis", SESSION_REDIS=cache)
+        # Short timeouts so a stuck Redis fails fast instead of hanging every request.
+        cache = redis.Redis.from_url(
+            app.config["REDIS_URL"],
+            socket_connect_timeout=3,
+            socket_timeout=3,
+            socket_keepalive=True,
+            health_check_interval=30,
+            retry_on_timeout=True,
+        )
+        app.config.update(SESSION_TYPE="redis", SESSION_REDIS=cache, SESSION_KEY_PREFIX="session:")
         Session(app)
+    cache_errors = (redis.RedisError,) if cache is not None else ()
 
     notes_cache_key = "notes:list"
 
     def load_notes():
+        # The notes cache is optional: on any Redis error, read the database directly.
         if cache is not None:
-            cached = cache.get(notes_cache_key)
-            if cached is not None:
-                return json.loads(cached)
+            try:
+                cached = cache.get(notes_cache_key)
+                if cached is not None:
+                    return json.loads(cached)
+            except cache_errors as error:
+                app.logger.warning("Notes cache unavailable: %s", error)
         with notes_connection() as connection:
             rows = [dict(row) for row in connection.execute(notes_query).fetchall()]
         if cache is not None:
-            cache.set(notes_cache_key, json.dumps(rows), ex=300)
+            try:
+                cache.set(notes_cache_key, json.dumps(rows), ex=300)
+            except cache_errors:
+                pass
         return rows
 
     def invalidate_notes():
         if cache is not None:
-            cache.delete(notes_cache_key)
+            try:
+                cache.delete(notes_cache_key)
+            except cache_errors as error:
+                app.logger.warning("Could not clear the notes cache: %s", error)
 
     with notes_connection() as connection:
         connection.execute(
@@ -453,6 +472,24 @@ def create_app(test_config=None):
             if not hmac.compare_digest(supplied, session.get("_csrf_token", "")):
                 abort(400, "Invalid form token. Reload the page and try again.")
 
+    @app.get("/healthz")
+    def healthz():
+        """For Docker's health check: the database and Redis must both answer."""
+        problems = []
+        try:
+            with notes_connection() as connection:
+                connection.execute("SELECT 1").fetchone()
+        except Exception as error:
+            problems.append(f"database: {error}")
+        if cache is not None:
+            try:
+                cache.ping()
+            except cache_errors as error:
+                problems.append(f"redis: {error}")
+        if problems:
+            return jsonify(status="error", problems=problems), 503
+        return jsonify(status="ok")
+
     @app.get("/")
     def index():
         relative = relative_path(request.args.get("path", ""))
@@ -487,6 +524,16 @@ def create_app(test_config=None):
     @app.get("/updates")
     def updates():
         entries = [
+            {
+                "version": "1.24.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "Faster and steadier server: if Redis is slow or down, pages no longer hang, and Notes read straight from the database instead.",
+                    "Redis now has a 64 MB memory limit, writes to disk once instead of twice, and makes room by dropping the oldest expiring data first.",
+                    "Docker checks the app's health every 30 seconds (database and Redis) and restarts anything that stops answering.",
+                    "Container logs are capped at 30 MB each, so they can't fill the disk.",
+                ],
+            },
             {
                 "version": "1.23.0",
                 "date": "2026-10-12",

@@ -955,6 +955,11 @@ class FileManagerTests(unittest.TestCase):
         self.assertIn('id="notes-body-links"', page)
         self.assertIn('id="notes-link-open"', page)
 
+    def test_healthz_reports_ok(self):
+        response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"status": "ok"})
+
 
 if __name__ == "__main__":
     unittest.main()
