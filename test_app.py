@@ -646,6 +646,60 @@ class FileManagerTests(unittest.TestCase):
         self.assertIn("\u2610", text)
         self.assertIn("\u25cb", text)
 
+    def test_polish_fixes_pdf2docx_links_and_table_widths(self):
+        import pdf_word
+
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        xml = f"""<w:document {w}><w:body>
+          <w:p><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:hyperlink><w:r><w:t>Linked text</w:t></w:r></w:hyperlink></w:r></w:p>
+          <w:tbl><w:tblPr><w:tblInd w:w="1.9999999999998863" w:type="dxa"/></w:tblPr>
+            <w:tblGrid><w:gridCol w:w="2418"/><w:gridCol w:w="2418"/></w:tblGrid>
+            <w:tr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="720"/></w:tcPr></w:tc>
+                  <w:tc><w:tcPr><w:tcW w:type="dxa" w:w="5668"/></w:tcPr></w:tc></w:tr></w:tbl>
+        </w:body></w:document>""".encode()
+        polished = pdf_word._polish_part(xml)[0].decode()
+        # The link sits in the paragraph (not inside a run) and keeps the underline.
+        self.assertRegex(polished, r"<w:p><w:hyperlink><w:r><w:rPr><w:u w:val=\"single\"/></w:rPr><w:t>Linked text")
+        self.assertIn('<w:gridCol w:w="720"/><w:gridCol w:w="5668"/>', polished)
+        self.assertIn('<w:tblInd w:w="2"', polished)
+
+    def test_pdf_to_word_keeps_vector_charts_as_pictures(self):
+        import docx
+        import pymupdf
+
+        document = pymupdf.open()
+        page = document.new_page()
+        page.insert_text((72, 80), "Sales by quarter", fontsize=14)
+        colours = [(0, 0.27, 0.53), (1, 0.26, 0.05), (1, 0.83, 0.13)]
+        # Axes and grid lines, like a chart exported from a spreadsheet.
+        for y in range(160, 301, 35):
+            page.draw_line((110, y), (440, y), color=(0.7, 0.7, 0.7), width=0.5)
+        page.draw_line((110, 160), (110, 300), color=(0.7, 0.7, 0.7), width=0.5)
+        for quarter in range(4):
+            for series, colour in enumerate(colours):
+                x = 120 + quarter * 80 + series * 18
+                height = 40 + (quarter * 3 + series * 7) % 9 * 10
+                page.draw_rect(pymupdf.Rect(x, 300 - height, x + 16, 300), color=None, fill=colour)
+            page.insert_text((120 + quarter * 80, 316), f"Q{quarter + 1}", fontsize=9)
+        for series in range(3):
+            page.insert_text((470, 200 + series * 14), f"Series {series + 1}", fontsize=9)
+        page.insert_text((72, 360), "The chart above shows each quarter.", fontsize=11)
+        data = document.tobytes()
+
+        response = self.client.post(
+            "/convert/pdf2word",
+            data={"_csrf_token": self._csrf(), "files": (io.BytesIO(data), "chart.pdf")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        result = docx.Document(io.BytesIO(response.data))
+        response.close()
+        text = "\n".join(p.text for p in result.paragraphs)
+        self.assertEqual(len(result.inline_shapes), 1)  # The chart, labels and all, as one picture.
+        self.assertIn("Sales by quarter", text)
+        self.assertIn("The chart above shows each quarter.", text)
+        self.assertNotIn("Series 1", text)  # Its labels are in the picture, not scattered as text.
+
     @unittest.skipUnless(shutil.which("soffice") or shutil.which("libreoffice"), "LibreOffice not installed")
     def test_word_to_pdf_uses_libreoffice(self):
         import docx

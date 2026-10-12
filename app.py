@@ -525,6 +525,17 @@ def create_app(test_config=None):
     def updates():
         entries = [
             {
+                "version": "1.26.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "PDF to Word keeps charts: bar, line and pie charts drawn in the PDF come out as pictures with their labels, instead of scattered numbers.",
+                    "Bullet lists stay bullet lists, instead of being squeezed into narrow table columns.",
+                    "Linked text (such as underlined links) no longer disappears from the Word file.",
+                    "Tables keep their real column widths.",
+                    "Scanned Thai: fewer stray spaces inside words (ขั บ → ขับ), tick boxes with broken outlines come back as ☐, and nearby lines are no longer joined by mistake. The sample form now reads 96.6% right.",
+                ],
+            },
+            {
                 "version": "1.25.0",
                 "date": "2026-10-12",
                 "changes": [

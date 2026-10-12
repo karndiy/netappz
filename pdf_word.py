@@ -13,6 +13,7 @@ Thai fonts use for shifted vowels and tone marks, a split sara am, and marks
 stored in the wrong order.
 """
 
+import copy
 import re
 import shutil
 import statistics
@@ -142,10 +143,61 @@ def _on(element):
     return element is not None and element.get(_w("val"), "1") not in ("0", "false", "off")
 
 
+def _unnest_hyperlinks(root):
+    """pdf2docx puts links inside runs (<w:r><w:hyperlink>), which Word and LibreOffice
+    reject, so the linked text disappears. Move each link up to the paragraph, keeping
+    the outer run's look (font, size, underline) on the runs inside it."""
+    for link in list(root.iter(_w("hyperlink"))):
+        outer = link.getparent()
+        if outer is None or outer.tag != _w("r"):
+            continue
+        style = outer.find(_w("rPr"))
+        for run in link.iter(_w("r")):
+            props = run.find(_w("rPr"))
+            if props is None:
+                props = run.makeelement(_w("rPr"), {})
+                run.insert(0, props)
+            if style is not None:
+                have = {child.tag for child in props}
+                for child in style:
+                    if child.tag not in have:
+                        props.append(copy.deepcopy(child))
+        outer.addprevious(link)
+        if not any(child.tag != _w("rPr") for child in outer):
+            outer.getparent().remove(outer)
+
+
+def _fix_tables(root):
+    """pdf2docx writes the real column widths on the cells but an even grid on the table;
+    with a fixed layout Word follows the grid, so every column comes out the same width."""
+    for table in root.iter(_w("tbl")):
+        grid = table.find(_w("tblGrid"))
+        if grid is None:
+            continue
+        columns = grid.findall(_w("gridCol"))
+        for row in table.findall(_w("tr")):
+            cells = row.findall(_w("tc"))
+            spans = [cell.find(f"{_w('tcPr')}/{_w('gridSpan')}") for cell in cells]
+            widths = [cell.find(f"{_w('tcPr')}/{_w('tcW')}") for cell in cells]
+            if len(cells) == len(columns) and not any(s is not None for s in spans) and all(
+                    w is not None and w.get(_w("type")) == "dxa" for w in widths):
+                for column, width in zip(columns, widths):
+                    column.set(_w("w"), str(round(float(width.get(_w("w"))))))
+                break
+    # Word wants whole twentieths of a point; pdf2docx sometimes writes 1.9999999999998863.
+    for tag in ("tblInd", "tcW", "tblW", "gridCol", "ind", "spacing"):
+        for node in root.iter(_w(tag)):
+            for key, value in node.attrib.items():
+                if re.fullmatch(r"-?\d+\.\d+", value):
+                    node.set(key, str(round(float(value))))
+
+
 def _polish_part(xml):
     from lxml import etree
 
     root = etree.fromstring(xml)
+    _unnest_hyperlinks(root)
+    _fix_tables(root)
     thai_fonts = {}
     for run in root.iter(_w("r")):
         texts = run.findall(_w("t"))
@@ -433,7 +485,7 @@ def _merge_english(line, english):
 
 
 MARKS = re.compile("[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]")
-SPACE_GAP = 0.5  # Gap between Thai glyphs, in consonant heights, that counts as a space.
+SPACE_GAP = 0.65  # Gap between Thai glyphs, in consonant heights, that counts as a space (measured on scans).
 
 
 def _unit(words):
@@ -582,7 +634,7 @@ def _reread_lines(image_path, words):
     for line in kept:
         same = next((m for m in merged if min(m["right"], line["right"]) > max(m["left"], line["left"])
                      and min(m["bottom"], line["bottom"]) - max(m["top"], line["top"])
-                     > min(m["bottom"] - m["top"], line["bottom"] - line["top"]) * 0.5), None)
+                     > max(m["bottom"] - m["top"], line["bottom"] - line["top"]) * 0.5), None)
         if same:
             for side, pick in (("left", min), ("top", min), ("right", max), ("bottom", max)):
                 same[side] = pick(same[side], line[side])
@@ -719,6 +771,12 @@ def _ocr_page(image_path):
         # Keep Tesseract's order for the letters: Thai vowel and tone mark boxes overlap
         # their neighbours, so sorting by position would scramble them.
         tokens = _merge_english(letters, english)
+        boxes = [w["text"] for w in words if w.get("kind") == "box"]
+        if boxes:
+            # A tick box with a broken outline reads as the letter O; on a line of boxes it's a box too.
+            symbol = max(set(boxes), key=boxes.count)
+            tokens = [{**t, "text": symbol} if t["text"] in ("O", "o", "0", "Q") and t["height"] >= unit * 0.8 else t
+                      for t in tokens]
         for extra in sorted((w for w in words if "kind" in w), key=lambda w: w["left"]):
             at = next((i for i, t in enumerate(tokens) if t["left"] >= extra["left"]), len(tokens))
             tokens.insert(at, extra)
@@ -867,6 +925,87 @@ def ocr_to_docx(source, workdir, result):
     return result
 
 
+# ------------------------------------------------------------------ charts
+
+def _is_plain(color):
+    """White, black, or grey: the colours of rules, boxes, and table borders."""
+    return color is None or max(color) - min(color) < 0.08
+
+
+def _chart_areas(page):
+    """Areas drawn as many coloured vector shapes, such as bar, line, and pie charts."""
+    drawings = page.get_drawings()
+    area = abs(page.rect)
+    groups = []
+    for drawing in drawings:
+        # Lines have no area (a zero-height rect never "intersects"), so give every shape a little.
+        rect = pymupdf_rect(drawing["rect"]) + (-1, -1, 1, 1)
+        if abs(rect) > area * 0.3 and drawing.get("fill") and min(drawing["fill"]) > 0.95 and not drawing.get("color"):
+            continue  # A white page background would join everything into one group.
+        grown = rect + (-6, -6, 6, 6)
+        hit = [g for g in groups if g["rect"].intersects(grown)]
+        group = {"rect": rect, "items": [drawing]}
+        for other in hit:
+            group["rect"] |= other["rect"]
+            group["items"] += other["items"]
+            groups.remove(other)
+        groups.append(group)
+    charts = []
+    for group in groups:
+        items = group["items"]
+        colours = {tuple(round(c, 2) for c in d["fill"]) for d in items if d.get("fill") and not _is_plain(d["fill"])}
+        colours |= {tuple(round(c, 2) for c in d["color"]) for d in items if d.get("color") and not _is_plain(d["color"])}
+        curves = sum(1 for d in items for item in d["items"] if item[0] == "c")
+        if len(items) >= 6 and area * 0.02 < abs(group["rect"]) < area * 0.8 and (len(colours) >= 2 or curves >= 8):
+            charts.append(group["rect"])
+    # Take in the chart's labels: short text just outside the shapes (axis numbers, legend).
+    spans = [(pymupdf_rect(span["bbox"]), span["text"].strip()) for block in page.get_text("dict")["blocks"]
+             for line in block.get("lines", []) for span in line["spans"] if span["text"].strip()]
+    for index, rect in enumerate(charts):
+        for _ in range(3):
+            near = rect + (-40, -16, 40, 16)  # Legends often sit a little to the side.
+            for box, text in spans:
+                if len(text) <= 24 and near.intersects(box):
+                    rect |= box
+        charts[index] = rect + (-4, -4, 4, 4)
+    return charts
+
+
+def pymupdf_rect(value):
+    import pymupdf
+
+    return pymupdf.Rect(value)
+
+
+def _flatten_charts(source, workdir):
+    """Turn vector charts into pictures before pdf2docx, which can only scatter their
+    labels and drop their bars. Returns the PDF to convert (a copy when anything changed)."""
+    import pymupdf
+
+    document = open_pdf(source)
+    changed = False
+    try:
+        for page in document:
+            charts = _chart_areas(page)
+            if not charts:
+                continue
+            pictures = [page.get_pixmap(dpi=200, clip=rect).tobytes("png") for rect in charts]
+            for rect in charts:
+                page.add_redact_annot(rect)
+            page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
+                                  graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED)
+            for rect, picture in zip(charts, pictures):
+                page.insert_image(rect, stream=picture)
+            changed = True
+        if not changed:
+            return source
+        flattened = workdir / f"{source.stem}-charts.pdf"
+        document.save(flattened)
+        return flattened
+    finally:
+        document.close()
+
+
 # ------------------------------------------------------------------ entry point
 
 def pdf_to_word(source, workdir, ocr="auto"):
@@ -896,9 +1035,11 @@ def pdf_to_word(source, workdir, ocr="auto"):
             return result, f"Text recognized with OCR (Thai + English) on {total} page{'s' * (total != 1)}. Check names and numbers."
 
     try:
-        converter = Converter(str(source))
+        converter = Converter(str(_flatten_charts(source, workdir)))
         try:
-            converter.convert(str(result))
+            # Borderless "stream" tables mostly catch bullet lists and indented text, and
+            # squeeze them into narrow cells; tables with borders are still found.
+            converter.convert(str(result), parse_stream_table=False)
         finally:
             converter.close()
     except Exception:
