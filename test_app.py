@@ -249,8 +249,25 @@ class FileManagerTests(unittest.TestCase):
             response = self.client.post(
                 "/delete", data={"_csrf_token": token, "path": path}
             )
-            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.status_code, 303)
             self.assertFalse((self.root / path).exists())
+
+    def test_deleting_an_item_that_is_already_gone_returns_to_its_folder(self):
+        (self.root / "docs").mkdir()
+        (self.root / "docs" / "ไฟล์.txt").write_text("contents")
+        token = self._csrf()
+        first = self.client.post("/delete", data={"_csrf_token": token, "path": "docs/ไฟล์.txt"})
+        self.assertEqual(first.status_code, 303)
+        # A double click or Reload sends the same delete again.
+        again = self.client.post("/delete", data={"_csrf_token": token, "path": "docs/ไฟล์.txt"})
+        self.assertEqual(again.status_code, 303)
+        self.assertIn("path=docs", again.headers["Location"])
+        page = self.client.get(again.headers["Location"]).get_data(as_text=True)
+        self.assertIn("That item no longer exists", page)
+
+        renamed = self.client.post("/rename", data={"_csrf_token": token, "path": "gone/old.txt", "name": "new.txt"})
+        self.assertEqual(renamed.status_code, 303)
+        self.assertNotIn("path=", renamed.headers["Location"])  # Its folder is gone too: back to the top.
 
     def test_rename_rejects_existing_destination_and_traversal(self):
         (self.root / "source.txt").write_text("source")

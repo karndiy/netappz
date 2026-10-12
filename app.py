@@ -525,6 +525,14 @@ def create_app(test_config=None):
     def updates():
         entries = [
             {
+                "version": "1.26.1",
+                "date": "2026-10-12",
+                "changes": [
+                    "Deleting or renaming a file that is already gone (a double click, Reload, or a change from another device) no longer shows a Not Found page: you go back to the folder with a short note.",
+                    "The Delete button turns off after the first click, and Back or Reload after a delete no longer sends it again.",
+                ],
+            },
+            {
                 "version": "1.26.0",
                 "date": "2026-10-12",
                 "changes": [
@@ -904,12 +912,22 @@ def create_app(test_config=None):
             flash("Folder created.", "success")
         return redirect(url_for("index", path=current))
 
+    def item_gone(relative):
+        """The item was already deleted or renamed (a double click, Reload, or another
+        device): go back to its folder and say so, instead of a bare Not Found page."""
+        parent = PurePosixPath(relative).parent.as_posix() if relative else ""
+        parent = "" if parent == "." else parent
+        if parent and not resolve_path(parent).is_dir():
+            parent = ""
+        flash("That item no longer exists. It may have been deleted or renamed already.", "error")
+        return redirect(url_for("index", path=parent or None), code=303)
+
     @app.post("/rename")
     def rename_item():
         source_relative = normalized_relative(request.form.get("path", ""))
         source = resolve_path(source_relative)
         if not source_relative or not source.exists():
-            abort(404)
+            return item_gone(source_relative)
         parent_relative = (
             source.parent.relative_to(root).as_posix()
             if source.parent != root
@@ -947,7 +965,7 @@ def create_app(test_config=None):
         relative = normalized_relative(request.form.get("path", ""))
         target = resolve_path(relative)
         if not relative or not target.exists():
-            abort(404)
+            return item_gone(relative)
 
         parent = target.parent.relative_to(root).as_posix()
         try:
@@ -959,7 +977,8 @@ def create_app(test_config=None):
             flash(f"Could not delete item: {error}", "error")
         else:
             flash("Item deleted.", "success")
-        return redirect(url_for("index", path=parent))
+        # 303 so Back or Reload shows the folder instead of sending the delete again.
+        return redirect(url_for("index", path=parent if parent != "." else None), code=303)
 
     @app.post("/upload")
     def upload():

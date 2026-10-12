@@ -91,7 +91,7 @@
               <button class="secondary" type="submit">Rename</button>
             </form>
             <form action="{{ url_for('delete_item') }}" method="post"
-                  onsubmit="return confirm('Permanently delete this item{% if entry.is_dir %} and all its contents{% endif %}?');">
+                  onsubmit="if (!confirm('Permanently delete this item{% if entry.is_dir %} and all its contents{% endif %}?')) return false; this.querySelector('button').disabled = true; return true;">
               <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="path" value="{{ entry.path }}">
               <button class="danger" type="submit">Delete</button>
