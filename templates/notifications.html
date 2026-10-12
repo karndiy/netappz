@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notifications · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('feed') }}">Feed</a>
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      {% if current_user.is_admin %}<a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>{% endif %}
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+      {% include "_account_nav.html" %}
+    </nav>
+  </header>
+  <main class="container">
+    <section class="heading">
+      <div>
+        <h1>Notifications</h1>
+        <p class="page-description">Comments, likes, mentions, new posts and updates on your requests. Unread ones are highlighted.</p>
+      </div>
+      <div class="alert-tools">
+        {% if unread_alerts %}
+          <form action="{{ url_for('notifications_read_all') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">Mark all as read</button>
+          </form>
+        {% endif %}
+        {% if items and not unread_only %}
+          <form action="{{ url_for('notifications_clear') }}" method="post"
+                onsubmit="return confirm('Remove all notifications you have already read?');">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button class="secondary" type="submit">Remove read</button>
+          </form>
+        {% endif %}
+      </div>
+    </section>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <nav class="request-filters" aria-label="Filter notifications">
+      <a href="{{ url_for('notifications') }}" {% if not unread_only %}aria-current="true"{% endif %}>All</a>
+      <a href="{{ url_for('notifications', show='unread') }}" {% if unread_only %}aria-current="true"{% endif %}>Unread {{ unread_alerts or 0 }}</a>
+    </nav>
+
+    <ul class="alert-list">
+      {% for item in items %}
+        <li class="alert-item{% if not item.is_read %} is-unread{% endif %}">
+          <span class="alert-icon kind-{{ item.kind }}" aria-hidden="true">{{ {"comment": "💬", "like": "👍", "mention": "@", "post": "📝", "signup": "👤", "approved": "✅", "request": "📋"}.get(item.kind, "🔔") }}</span>
+          <a class="alert-main" href="{{ url_for('notification_open', notification_id=item.id) }}">
+            <span class="alert-message">{{ item.message }}</span>
+            <time datetime="{{ item.created_at | note_iso }}" data-relative>{{ item.created_at | note_short_date }}</time>
+          </a>
+          <form action="{{ url_for('notification_read', notification_id=item.id) }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="read" value="{{ '0' if item.is_read else '1' }}">
+            <input type="hidden" name="show" value="{{ 'unread' if unread_only else '' }}">
+            <button class="alert-toggle" type="submit"
+                    title="{{ 'Mark as unread' if item.is_read else 'Mark as read' }}"
+                    aria-label="{{ 'Mark as unread' if item.is_read else 'Mark as read' }}">
+              <span class="alert-dot"></span>
+            </button>
+          </form>
+        </li>
+      {% else %}
+        <li class="empty">{% if unread_only %}You're all caught up. 🎉{% else %}No notifications yet. They appear here when someone comments, likes or mentions you.{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </main>
+</body>
+</html>

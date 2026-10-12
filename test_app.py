@@ -26,6 +26,7 @@ class FileManagerTests(unittest.TestCase):
                 "TESTING": True,
                 "FILES_ROOT": str(self.root),
                 "NOTES_DATABASE": str(Path(self.temp_dir.name) / "notes.sqlite3"),
+                "FEED_MEDIA": str(Path(self.temp_dir.name) / "feed"),
                 "SECRET_KEY": "test-secret",
             }
         )
@@ -1225,6 +1226,127 @@ class FileManagerTests(unittest.TestCase):
         self.assertIsNone(users.get(somchai["id"]))
         self.assertEqual(client.get("/").status_code, 302)  # A deleted account is signed out.
 
+
+    def _client_for(self, username, password="member-pass"):
+        client, token = self._fresh_client()
+        client.post("/login", data={"_csrf_token": token, "username": username, "password": password})
+        client.get("/feed")  # Signing in starts a new session, with a new form token.
+        with client.session_transaction() as sess:
+            return client, sess["_csrf_token"]
+
+    def test_sign_up_waits_for_approval_then_can_be_opened_or_turned_off(self):
+        users = self.app.extensions["users"]
+        client, token = self._fresh_client()
+        self.assertIn("Create an account", client.get("/login").get_data(as_text=True))
+        response = client.post("/register", data={
+            "_csrf_token": token, "username": "nok", "password": "member-pass", "confirm": "member-pass"})
+        self.assertEqual(response.status_code, 303)
+        self.assertFalse(users.by_name("nok")["is_active"])
+        response = client.post("/login", data={"_csrf_token": token, "username": "nok", "password": "member-pass"})
+        self.assertIn("waiting for an administrator", response.get_data(as_text=True))
+        self.assertEqual(client.get("/feed").status_code, 302)
+
+        # The administrator is told, and approves the account.
+        alerts = self.app.extensions["notifications"].for_user(self.admin_id)
+        self.assertIn("nok signed up", alerts[0]["message"])
+        admin_token = self._csrf()
+        self.assertIn("Waiting for approval", self.client.get("/settings").get_data(as_text=True))
+        self.client.post(f"/settings/users/{users.by_name('nok')['id']}/approve", data={"_csrf_token": admin_token})
+        nok, _ = self._client_for("nok")
+        self.assertEqual(nok.get("/feed").status_code, 200)
+
+        # Open sign-up signs people in straight away; "off" hides the page.
+        self.client.post("/settings/signup", data={"_csrf_token": admin_token, "mode": "open"})
+        client, token = self._fresh_client()
+        response = client.post("/register", data={
+            "_csrf_token": token, "username": "dao", "password": "member-pass", "confirm": "member-pass"})
+        self.assertEqual(response.headers["Location"], "/feed")
+        self.assertTrue(users.by_name("dao")["is_active"])
+        self.assertEqual(client.get("/register").status_code, 302)  # Already signed in.
+        self.client.post("/settings/signup", data={"_csrf_token": admin_token, "mode": "off"})
+        client, token = self._fresh_client()
+        self.assertNotIn("Create an account", client.get("/login").get_data(as_text=True))
+        self.assertEqual(client.get("/register").status_code, 303)
+
+    def test_feed_posts_photos_videos_likes_comments_and_notifications(self):
+        from PIL import Image
+
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        bee_id = users.add("bee", "member-pass")
+        bee, bee_token = self._client_for("bee")
+        token = self._csrf()
+
+        photo = io.BytesIO()
+        Image.new("RGB", (40, 30), "red").save(photo, "PNG")
+        video = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64
+        response = self.client.post("/feed/posts", data={
+            "_csrf_token": token, "body": "Hello @bee, see https://example.com/a?b=1&c=2",
+            "media": [(io.BytesIO(photo.getvalue()), "red.png"), (io.BytesIO(video), "clip.mp4")],
+        }, content_type="multipart/form-data")
+        self.assertEqual(response.status_code, 303)
+        page = bee.get("/feed").get_data(as_text=True)
+        self.assertIn('<span class="feed-mention">@bee</span>', page)
+        self.assertIn('href="https://example.com/a?b=1&amp;c=2"', page)
+        media_ids = [int(m) for m in re.findall(r"/feed/media/(\d+)", page)]
+        image = bee.get(f"/feed/media/{media_ids[0]}")
+        self.assertEqual(image.mimetype, "image/png")
+        image.close()
+        clip = bee.get(f"/feed/media/{media_ids[-1]}", headers={"Range": "bytes=0-9"})
+        self.assertEqual(clip.status_code, 206)  # Videos can seek.
+        clip.close()
+
+        # Bee was mentioned (and not told twice); the admin isn't told about their own post.
+        alerts = notifications.for_user(bee_id)
+        self.assertEqual([a["kind"] for a in alerts], ["mention"])
+        self.assertEqual(notifications.for_user(self.admin_id), [])
+        self.assertIn('class="topbar-badge" >1<', bee.get("/feed").get_data(as_text=True).replace("\n", ""))
+
+        post_id = alerts[0]["post_id"]
+        response = bee.post(f"/feed/posts/{post_id}/like", data={"_csrf_token": bee_token},
+                            headers={"X-Requested-With": "fetch"})
+        self.assertEqual(response.get_json(), {"liked": True, "count": 1})
+        bee.post(f"/feed/posts/{post_id}/comments", data={"_csrf_token": bee_token, "body": "Nice <b>photo</b>"})
+        page = self.client.get(f"/feed/posts/{post_id}").get_data(as_text=True)
+        self.assertIn("Nice &lt;b&gt;photo&lt;/b&gt;", page)
+        self.assertEqual(notifications.unread_count(self.admin_id), 0)  # Opening the post read its alerts.
+        kinds = [a["kind"] for a in notifications.for_user(self.admin_id)]
+        self.assertEqual(sorted(kinds), ["comment", "like"])
+
+        # Reading: open one, mark unread, then read all; the bell polls the count.
+        alert = notifications.for_user(bee_id)[0]
+        response = bee.get(f"/notifications/{alert['id']}/open")
+        self.assertEqual(response.headers["Location"], f"/feed/posts/{post_id}")
+        self.assertEqual(notifications.unread_count(bee_id), 0)
+        bee.post(f"/notifications/{alert['id']}/read", data={"_csrf_token": bee_token, "read": "0"})
+        self.assertEqual(bee.get("/notifications/poll?after=0").get_json()["unread"], 1)
+        self.client.post(f"/feed/posts/{post_id}/comments", data={"_csrf_token": token, "body": "Thanks!"})
+        poll = bee.get(f"/notifications/poll?after={alert['id']}").get_json()
+        self.assertEqual(poll["unread"], 2)
+        self.assertIn("admin also commented", poll["fresh"][0]["message"])
+        self.assertIn("is-unread", bee.get("/notifications").get_data(as_text=True))
+        bee.post("/notifications/read-all", data={"_csrf_token": bee_token})
+        self.assertEqual(notifications.unread_count(bee_id), 0)
+
+        # Only the author (or an administrator) deletes a post; its files go with it.
+        self.assertEqual(bee.post(f"/feed/posts/{post_id}/delete", data={"_csrf_token": bee_token}).status_code, 403)
+        media_dir = Path(self.temp_dir.name) / "feed"
+        self.assertEqual(len(list(media_dir.iterdir())), 2)
+        self.client.post(f"/feed/posts/{post_id}/delete", data={"_csrf_token": token})
+        self.assertEqual(list(media_dir.iterdir()), [])
+        self.assertEqual(notifications.for_user(bee_id), [])
+
+    def test_feed_rejects_fake_and_unsupported_files(self):
+        token = self._csrf()
+        for name, data in (("fake.jpg", b"not an image"), ("fake.mp4", b"not a video at all"), ("page.svg", b"<svg/>")):
+            response = self.client.post("/feed/posts", data={
+                "_csrf_token": token, "body": "x", "media": [(io.BytesIO(data), name)],
+            }, content_type="multipart/form-data", headers={"X-Requested-With": "fetch"})
+            self.assertEqual(response.status_code, 400, name)
+        self.assertEqual(list((Path(self.temp_dir.name) / "feed").iterdir()), [])
+        response = self.client.post("/feed/posts", data={"_csrf_token": token, "body": "  "})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.app.extensions["feed"].posts(self.admin_id), [])
 
 if __name__ == "__main__":
     unittest.main()

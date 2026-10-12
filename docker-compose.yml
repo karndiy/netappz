@@ -26,6 +26,8 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     volumes:
       - ./shared:/data/shared
+      # Photos and videos posted on the Feed.
+      - feedmedia:/data/feed
     depends_on:
       db:
         condition: service_healthy
@@ -108,3 +110,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  feedmedia:

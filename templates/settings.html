@@ -10,6 +10,7 @@
   <header class="topbar">
     <a class="brand" href="{{ url_for('index') }}">Network Files</a>
     <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('feed') }}">Feed</a>
       <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
       <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
       <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
@@ -118,8 +119,15 @@
             <div class="user-name">
               <strong>{{ user.username }}</strong>
               {% if user.is_admin %}<span class="settings-source is-saved">Administrator</span>{% endif %}
+              {% if not user.is_active %}<span class="settings-source is-pending">Waiting for approval</span>{% endif %}
               {% if current_user and user.id == current_user.id %}<span class="settings-source">You</span>{% endif %}
             </div>
+            {% if not user.is_active %}
+              <form action="{{ url_for('approve_user', user_id=user.id) }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button type="submit">Approve</button>
+              </form>
+            {% endif %}
             <form class="user-action" action="{{ url_for('reset_password', user_id=user.id) }}" method="post">
               <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
               <label class="visually-hidden" for="reset-{{ user.id }}">New password for {{ user.username }}</label>
@@ -137,6 +145,20 @@
           </li>
         {% endfor %}
       </ul>
+      <form class="user-add" action="{{ url_for('save_signup_mode') }}" method="post">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <h3>Sign-up page</h3>
+        <div class="user-add-fields">
+          <label class="visually-hidden" for="signup-mode">Who can sign up</label>
+          <select id="signup-mode" name="mode">
+            {% for value, label in signup_modes.items() %}
+              <option value="{{ value }}" {% if signup_mode == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button class="secondary" type="submit">Save</button>
+        </div>
+        <small>People sign up at <a href="{{ url_for('register', _external=True) }}">{{ url_for('register', _external=True) }}</a>, linked from the sign-in page.</small>
+      </form>
       <form class="user-add" action="{{ url_for('add_user') }}" method="post" autocomplete="off">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <h3>Add a person</h3>

@@ -30,6 +30,7 @@ from flask import (
     url_for,
 )
 from flask_session import Session
+from markupsafe import Markup, escape
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
@@ -125,6 +126,18 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.29.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Feed: share posts with text, photos and videos with everyone who uses the app, then like and comment on them (request: a Facebook-style feed).",
+            "Photos (JPG, PNG, GIF, WebP and iPhone HEIC) up to 25 MB and videos (MP4, MOV, WebM) up to 500 MB, up to 10 per post, with a progress bar while uploading. Videos can be played and skipped through.",
+            "Type @name in a post or comment to mention someone. Links in posts open in a new tab. You can delete your own posts and comments, and comments on your posts.",
+            "Notifications: a bell in the top bar shows how many are unread, and new ones pop up while the app is open. You're told about comments, likes, mentions, new posts, new members, and changes to your requests.",
+            "The Notifications page lists them with unread ones highlighted. Opening one marks it as read; you can also mark one as read or unread, mark all as read, or remove the read ones.",
+            "Sign-up: people can create their own account from the sign-in page (request: a sign-up system). By default an administrator approves each new account on Settings, and is notified when someone signs up. Sign-up can also be open to everyone or turned off.",
+        ],
+    },
     {
         "version": "1.28.0",
         "date": "2026-10-12",
@@ -414,6 +427,24 @@ UPDATE_LOG = [
 APP_VERSION = UPDATE_LOG[0]["version"]
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
 REQUEST_STATUSES = {"open": "Waiting", "in_progress": "In progress", "done": "Done"}
+# Photos and videos on the Feed. HEIC photos from iPhones are turned into JPEG.
+FEED_IMAGES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
+               ".webp": "image/webp", ".heic": "image/jpeg", ".heif": "image/jpeg"}
+# QuickTime (.mov) from phones is H.264 in an MP4-style box, which browsers play as video/mp4.
+FEED_VIDEOS = {".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/mp4", ".webm": "video/webm"}
+FEED_MAX_FILES = 10
+FEED_MAX_IMAGE = 25 * 1024 * 1024
+FEED_MAX_VIDEO = 500 * 1024 * 1024
+FEED_POST_LIMIT = 5000
+FEED_COMMENT_LIMIT = 2000
+MENTION = re.compile(r"(?<![\w@.])@([A-Za-z0-9._-]{1,39}[A-Za-z0-9_-])")
+# Links and @mentions in one pass, so a mention inside a link is left alone.
+FEED_TOKENS = re.compile(r"(?P<link>https?://[^\s<]+[^\s<.,;:!?)\]'\"])|(?<![\w@.])@(?P<name>[A-Za-z0-9._-]{1,39}[A-Za-z0-9_-])")
+SIGNUP_MODES = {
+    "approval": "Anyone can sign up; an administrator approves each new account",
+    "open": "Anyone can sign up and start right away",
+    "off": "Off: only administrators add people",
+}
 
 
 def verify_telegram_token(token):
@@ -444,6 +475,12 @@ def create_app(test_config=None):
     root = Path(app.config["FILES_ROOT"]).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     app.config["FILES_ROOT"] = root
+    # Photos and videos posted on the Feed, kept apart from the shared files.
+    feed_media_dir = Path(
+        app.config.get("FEED_MEDIA") or os.environ.get("FEED_MEDIA")
+        or Path(app.config["NOTES_DATABASE"]).expanduser().parent / "feed"
+    ).resolve()
+    feed_media_dir.mkdir(parents=True, exist_ok=True)
     database_url = app.config["DATABASE_URL"]
     if database_url:
         import psycopg
@@ -482,6 +519,24 @@ def create_app(test_config=None):
         id_column = "id INTEGER PRIMARY KEY AUTOINCREMENT"
         timestamp_type = "TEXT"
         timestamp_select = "{0}"
+
+    def table_columns(connection, table):
+        if database_url:
+            rows = connection.execute(
+                "SELECT column_name AS name FROM information_schema.columns WHERE table_name = %s", (table,)
+            ).fetchall()
+        else:
+            rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+        return {row["name"] for row in rows}
+
+    def time_as(column, alias="created_at"):
+        """A timestamp column read as "YYYY-MM-DD HH:MM:SS" under a plain name, on either database."""
+        if database_url:
+            return f"to_char({column}, 'YYYY-MM-DD HH24:MI:SS') AS {alias}"
+        return f"{column} AS {alias}"
+
+    def placeholders(values):
+        return ", ".join("?" for _ in values)
 
     with notes_connection() as connection:
         connection.execute(
@@ -695,6 +750,73 @@ def create_app(test_config=None):
             """
         )
 
+        # Sign-up (1.29.0): accounts made on the sign-up page can wait for an administrator.
+        if "is_active" not in table_columns(connection, "users"):
+            connection.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS feed_posts (
+                {id_column},
+                user_id INTEGER NOT NULL,
+                body TEXT NOT NULL DEFAULT '',
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS feed_media (
+                {id_column},
+                post_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                stored TEXT NOT NULL,
+                mime TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS feed_comments (
+                {id_column},
+                post_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS feed_likes (
+                post_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                PRIMARY KEY (post_id, user_id)
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS notifications (
+                {id_column},
+                user_id INTEGER NOT NULL,
+                actor_id INTEGER,
+                kind TEXT NOT NULL,
+                message TEXT NOT NULL,
+                link TEXT NOT NULL DEFAULT '',
+                post_id INTEGER,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for statement in (
+            "CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, is_read, id)",
+            "CREATE INDEX IF NOT EXISTS feed_comments_post ON feed_comments (post_id, id)",
+            "CREATE INDEX IF NOT EXISTS feed_media_post ON feed_media (post_id, position)",
+        ):
+            connection.execute(statement)
+
     class SettingsStore:
         """Values saved on the Settings page, shared with the Telegram bot through the database."""
 
@@ -774,7 +896,7 @@ def create_app(test_config=None):
     class UserStore:
         """Accounts for signing in. Passwords are stored only as salted hashes."""
 
-        columns = f"id, username, password_hash, is_admin, {timestamp_select.format('created_at')}"
+        columns = f"id, username, password_hash, is_admin, is_active, {timestamp_select.format('created_at')}"
 
         def count(self):
             with notes_connection() as connection:
@@ -797,13 +919,21 @@ def create_app(test_config=None):
                 ).fetchone()
             return dict(row) if row else None
 
-        def add(self, username, password, is_admin=False):
+        def add(self, username, password, is_admin=False, is_active=True):
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)") + returning_id,
-                    (username, generate_password_hash(password), 1 if is_admin else 0),
+                    sql("INSERT INTO users (username, password_hash, is_admin, is_active) VALUES (?, ?, ?, ?)")
+                    + returning_id,
+                    (username, generate_password_hash(password), 1 if is_admin else 0, 1 if is_active else 0),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def activate(self, user_id):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE users SET is_active = 1 WHERE id = ?"), (user_id,))
+
+        def admin_ids(self):
+            return [user["id"] for user in self.all() if user["is_admin"] and user["is_active"]]
 
         def set_password(self, user_id, password):
             with notes_connection() as connection:
@@ -815,8 +945,255 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 connection.execute(sql("DELETE FROM users WHERE id = ?"), (user_id,))
 
+    class NotificationStore:
+        """Alerts for each person (comments, likes, mentions, new members...), read or not yet read."""
+
+        columns = (
+            "notifications.id, notifications.kind, notifications.message, notifications.link, "
+            "notifications.post_id, notifications.is_read, users.username AS actor, "
+            f"{time_as('notifications.created_at')}"
+        )
+
+        def add(self, user_ids, actor_id, kind, message, link="", post_id=None):
+            targets = sorted({uid for uid in user_ids if uid and uid != actor_id})
+            if not targets:
+                return
+            with notes_connection() as connection:
+                for user_id in targets:
+                    connection.execute(
+                        sql(
+                            "INSERT INTO notifications (user_id, actor_id, kind, message, link, post_id) "
+                            "VALUES (?, ?, ?, ?, ?, ?)"
+                        ),
+                        (user_id, actor_id, kind, message[:300], link, post_id),
+                    )
+
+        def for_user(self, user_id, unread_only=False, after_id=0, limit=100):
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(
+                        f"SELECT {self.columns} FROM notifications "
+                        "LEFT JOIN users ON users.id = notifications.actor_id "
+                        "WHERE notifications.user_id = ? AND notifications.id > ?"
+                        + (" AND notifications.is_read = 0" if unread_only else "")
+                        + f" ORDER BY notifications.id DESC LIMIT {int(limit)}"
+                    ),
+                    (user_id, after_id),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def get(self, user_id, notification_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(
+                        f"SELECT {self.columns} FROM notifications "
+                        "LEFT JOIN users ON users.id = notifications.actor_id "
+                        "WHERE notifications.user_id = ? AND notifications.id = ?"
+                    ),
+                    (user_id, notification_id),
+                ).fetchone()
+            return dict(row) if row else None
+
+        def unread_count(self, user_id):
+            with notes_connection() as connection:
+                return connection.execute(
+                    sql("SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND is_read = 0"), (user_id,)
+                ).fetchone()["n"]
+
+        def latest_id(self, user_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT MAX(id) AS n FROM notifications WHERE user_id = ?"), (user_id,)
+                ).fetchone()
+            return row["n"] or 0
+
+        def set_read(self, user_id, notification_id, read=True):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("UPDATE notifications SET is_read = ? WHERE user_id = ? AND id = ?"),
+                    (1 if read else 0, user_id, notification_id),
+                )
+
+        def read_all(self, user_id):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0"), (user_id,)
+                )
+
+        def read_for_post(self, user_id, post_id):
+            """Opening a post counts as reading the alerts about it."""
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND post_id = ? AND is_read = 0"),
+                    (user_id, post_id),
+                )
+
+        def clear_read(self, user_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM notifications WHERE user_id = ? AND is_read = 1"), (user_id,))
+
+    class FeedStore:
+        """Posts with text, photos and videos that members share, with likes and comments."""
+
+        post_columns = (
+            "feed_posts.id, feed_posts.user_id, feed_posts.body, users.username AS author, "
+            f"{time_as('feed_posts.created_at')}"
+        )
+
+        def posts(self, viewer_id, before_id=None, post_id=None, limit=15):
+            where, params = [], []
+            if post_id is not None:
+                where.append("feed_posts.id = ?")
+                params.append(post_id)
+            elif before_id:
+                where.append("feed_posts.id < ?")
+                params.append(before_id)
+            with notes_connection() as connection:
+                posts = [
+                    dict(row)
+                    for row in connection.execute(
+                        sql(
+                            f"SELECT {self.post_columns} FROM feed_posts "
+                            "JOIN users ON users.id = feed_posts.user_id"
+                            + (" WHERE " + " AND ".join(where) if where else "")
+                            + f" ORDER BY feed_posts.id DESC LIMIT {int(limit)}"
+                        ),
+                        params,
+                    ).fetchall()
+                ]
+                if not posts:
+                    return []
+                ids = [post["id"] for post in posts]
+                marks = placeholders(ids)
+                media = connection.execute(
+                    sql(f"SELECT id, post_id, kind, mime FROM feed_media WHERE post_id IN ({marks}) "
+                        "ORDER BY position, id"), ids
+                ).fetchall()
+                likes = connection.execute(
+                    sql(f"SELECT feed_likes.post_id, feed_likes.user_id, users.username FROM feed_likes "
+                        f"JOIN users ON users.id = feed_likes.user_id WHERE feed_likes.post_id IN ({marks}) "
+                        "ORDER BY LOWER(users.username)"), ids
+                ).fetchall()
+                comment_time = time_as("feed_comments.created_at")
+                comments = connection.execute(
+                    sql(f"SELECT feed_comments.id, feed_comments.post_id, feed_comments.user_id, feed_comments.body, "
+                        f"users.username AS author, {comment_time} FROM feed_comments "
+                        f"JOIN users ON users.id = feed_comments.user_id WHERE feed_comments.post_id IN ({marks}) "
+                        "ORDER BY feed_comments.id"), ids
+                ).fetchall()
+            by_id = {post["id"]: {**post, "media": [], "likers": [], "liked": False, "comments": []} for post in posts}
+            for row in media:
+                by_id[row["post_id"]]["media"].append(dict(row))
+            for row in likes:
+                post = by_id[row["post_id"]]
+                post["likers"].append(row["username"])
+                post["liked"] = post["liked"] or row["user_id"] == viewer_id
+            for row in comments:
+                by_id[row["post_id"]]["comments"].append(dict(row))
+            return [by_id[post_id] for post_id in ids]
+
+        def post(self, post_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(f"SELECT {self.post_columns} FROM feed_posts JOIN users ON users.id = feed_posts.user_id "
+                        "WHERE feed_posts.id = ?"), (post_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def add_post(self, user_id, body, media):
+            """media: [(kind, stored name, mime)] already saved in the media folder."""
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("INSERT INTO feed_posts (user_id, body) VALUES (?, ?)") + returning_id, (user_id, body)
+                )
+                post_id = cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+                for position, (kind, stored, mime) in enumerate(media):
+                    connection.execute(
+                        sql("INSERT INTO feed_media (post_id, kind, stored, mime, position) VALUES (?, ?, ?, ?, ?)"),
+                        (post_id, kind, stored, mime, position),
+                    )
+            return post_id
+
+        def media(self, media_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT id, post_id, kind, stored, mime FROM feed_media WHERE id = ?"), (media_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def delete_post(self, post_id):
+            with notes_connection() as connection:
+                stored = [row["stored"] for row in connection.execute(
+                    sql("SELECT stored FROM feed_media WHERE post_id = ?"), (post_id,)).fetchall()]
+                for table in ("feed_media", "feed_comments", "feed_likes", "notifications"):
+                    connection.execute(sql(f"DELETE FROM {table} WHERE post_id = ?"), (post_id,))
+                connection.execute(sql("DELETE FROM feed_posts WHERE id = ?"), (post_id,))
+            for name in stored:
+                (feed_media_dir / name).unlink(missing_ok=True)
+
+        def toggle_like(self, post_id, user_id):
+            """Return True when the post is now liked by this person."""
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("DELETE FROM feed_likes WHERE post_id = ? AND user_id = ?"), (post_id, user_id)
+                )
+                if cursor.rowcount:
+                    return False
+                connection.execute(sql("INSERT INTO feed_likes (post_id, user_id) VALUES (?, ?)"), (post_id, user_id))
+                return True
+
+        def like_count(self, post_id):
+            with notes_connection() as connection:
+                return connection.execute(
+                    sql("SELECT COUNT(*) AS n FROM feed_likes WHERE post_id = ?"), (post_id,)
+                ).fetchone()["n"]
+
+        def add_comment(self, post_id, user_id, body):
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("INSERT INTO feed_comments (post_id, user_id, body) VALUES (?, ?, ?)") + returning_id,
+                    (post_id, user_id, body),
+                )
+                return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def comment(self, comment_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT id, post_id, user_id, body FROM feed_comments WHERE id = ?"), (comment_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def commenter_ids(self, post_id):
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql("SELECT DISTINCT user_id FROM feed_comments WHERE post_id = ?"), (post_id,)
+                ).fetchall()
+            return [row["user_id"] for row in rows]
+
+        def delete_comment(self, comment_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM feed_comments WHERE id = ?"), (comment_id,))
+
+        def delete_user_content(self, user_id):
+            """When an account is deleted, its posts, comments, likes and alerts go too."""
+            with notes_connection() as connection:
+                post_ids = [row["id"] for row in connection.execute(
+                    sql("SELECT id FROM feed_posts WHERE user_id = ?"), (user_id,)).fetchall()]
+            for post_id in post_ids:
+                self.delete_post(post_id)
+            with notes_connection() as connection:
+                for table in ("feed_comments", "feed_likes", "notifications"):
+                    connection.execute(sql(f"DELETE FROM {table} WHERE user_id = ?"), (user_id,))
+                connection.execute(sql("UPDATE notifications SET actor_id = NULL WHERE actor_id = ?"), (user_id,))
+
     user_store = UserStore()
     app.extensions["users"] = user_store
+
+    notification_store = NotificationStore()
+    app.extensions["notifications"] = notification_store
+
+    feed_store = FeedStore()
+    app.extensions["feed"] = feed_store
 
     request_store = RequestStore()
     app.extensions["requests"] = request_store
@@ -885,8 +1262,13 @@ def create_app(test_config=None):
 
     # ---------------------------------------------------------------- sign-in
 
-    PUBLIC_ENDPOINTS = {"static", "healthz", "login", "setup"}
+    PUBLIC_ENDPOINTS = {"static", "healthz", "login", "setup", "register"}
     failed_logins = {}  # address -> times of recent failed sign-ins
+    signups = {}  # address -> times of recent sign-ups
+
+    def signup_mode():
+        mode = settings_store.get("SIGNUP_MODE")
+        return mode if mode in SIGNUP_MODES else "approval"
 
     def too_many_failures(address):
         recent = [t for t in failed_logins.get(address, []) if time.time() - t < 600]
@@ -910,7 +1292,15 @@ def create_app(test_config=None):
 
     @app.context_processor
     def account_context():
-        return {"current_user": g.get("user")}
+        user = g.get("user")
+        alerts = {}
+        if user:
+            try:
+                alerts = {"unread_alerts": notification_store.unread_count(user["id"]),
+                          "latest_alert": notification_store.latest_id(user["id"])}
+            except Exception:  # The top bar must never break a page.
+                app.logger.exception("Could not count notifications")
+        return {"current_user": user, **alerts}
 
     @app.before_request
     def require_login():
@@ -918,8 +1308,9 @@ def create_app(test_config=None):
         user_id = session.get("user_id")
         if user_id is not None:
             g.user = user_store.get(user_id)
-            if g.user is None:
-                session.pop("user_id", None)  # The account was deleted.
+            if g.user is None or not g.user["is_active"]:
+                g.user = None
+                session.pop("user_id", None)  # The account was deleted or is waiting for approval.
         if g.user or request.endpoint in PUBLIC_ENDPOINTS:
             return None
         if user_store.count() == 0:
@@ -981,13 +1372,56 @@ def create_app(test_config=None):
                 error = "Too many wrong passwords. Wait 10 minutes and try again."
             elif user and check_password_hash(user["password_hash"], request.form.get("password", "")):
                 failed_logins.pop(address, None)
-                sign_in(user)
-                return redirect(next_page, code=303)
+                if not user["is_active"]:
+                    error = "Your account is waiting for an administrator to approve it. Try again later."
+                else:
+                    sign_in(user)
+                    return redirect(next_page, code=303)
             else:
                 failed_logins.setdefault(address, []).append(time.time())
                 error = "Wrong username or password."
-        return render_template("auth.html", mode="login", error=error, username=username, next=next_page), (
-            401 if error else 200)
+        return render_template("auth.html", mode="login", error=error, username=username, next=next_page,
+                               signup=signup_mode()), (401 if error else 200)
+
+    @app.route("/register", methods=["GET", "POST"])
+    def register():
+        """The sign-up page: anyone can make an account unless an administrator turned it off."""
+        if user_store.count() == 0:
+            return redirect(url_for("setup"))
+        if g.user:
+            return redirect(url_for("index"))
+        mode = signup_mode()
+        if mode == "off":
+            flash("Sign-up is turned off. Ask an administrator to add you.", "error")
+            return redirect(url_for("login"), code=303)
+        error = None
+        username = ""
+        if request.method == "POST":
+            address = request.remote_addr or "?"
+            recent = [t for t in signups.get(address, []) if time.time() - t < 3600]
+            signups[address] = recent
+            username = request.form.get("username", "").strip()
+            if len(recent) >= 5:
+                error = "Too many new accounts from this device. Try again in an hour."
+            else:
+                error = check_new_account(username, request.form.get("password", ""), request.form.get("confirm", ""))
+            if not error:
+                recent.append(time.time())
+                active = mode == "open"
+                user_id = user_store.add(username, request.form["password"], is_active=active)
+                notification_store.add(
+                    user_store.admin_ids(), user_id, "signup",
+                    f"{username} signed up." + ("" if active else " Approve or remove the account on Settings."),
+                    url_for("settings_page", _anchor="users"),
+                )
+                if active:
+                    sign_in(user_store.get(user_id))
+                    flash(f"Welcome, {username}! Your account is ready.", "success")
+                    return redirect(url_for("feed"), code=303)
+                flash("Thanks! Your account was created. You can sign in once an administrator approves it.", "success")
+                return redirect(url_for("login"), code=303)
+        return render_template("auth.html", mode="register", error=error, username=username,
+                               approval=mode == "approval"), (400 if error else 200)
 
     @app.post("/logout")
     def logout():
@@ -1038,6 +1472,30 @@ def create_app(test_config=None):
             flash(f"New password set for {user['username']}.", "success")
         return redirect(url_for("settings_page", _anchor="users"), code=303)
 
+    @app.post("/settings/users/<int:user_id>/approve")
+    def approve_user(user_id):
+        admin_required()
+        user = user_store.get(user_id)
+        if user is None:
+            flash("That account no longer exists.", "error")
+        else:
+            user_store.activate(user_id)
+            notification_store.add([user_id], g.user["id"], "approved",
+                                   "Your account was approved. Welcome!", url_for("feed"))
+            flash(f"Approved {user['username']}. They can sign in now.", "success")
+        return redirect(url_for("settings_page", _anchor="users"), code=303)
+
+    @app.post("/settings/signup")
+    def save_signup_mode():
+        admin_required()
+        mode = request.form.get("mode", "")
+        if mode not in SIGNUP_MODES:
+            flash("Choose who can sign up.", "error")
+        else:
+            settings_store.save({"SIGNUP_MODE": mode})
+            flash("Sign-up setting saved.", "success")
+        return redirect(url_for("settings_page", _anchor="users"), code=303)
+
     @app.post("/settings/users/<int:user_id>/delete")
     def delete_user(user_id):
         admin_required()
@@ -1050,6 +1508,7 @@ def create_app(test_config=None):
         elif user["is_admin"] and len(admins) <= 1:
             flash("Keep at least one administrator.", "error")
         else:
+            feed_store.delete_user_content(user_id)
             user_store.delete(user_id)
             flash(f"Deleted {user['username']}.", "success")
         return redirect(url_for("settings_page", _anchor="users"), code=303)
@@ -1159,6 +1618,8 @@ def create_app(test_config=None):
             session["request_form"] = {"kind": kind, "title": title, "details": details, "requested_by": requested_by}
             return redirect(url_for("updates", _anchor="requests"), code=303)
         request_store.add(kind, title, details, requested_by)
+        notification_store.add(user_store.admin_ids(), g.user["id"], "request",
+                               f"{g.user['username']} sent a request: “{title}”", url_for("updates", _anchor="requests"))
         flash("Thanks! Your request was added. Its status shows here as it's worked on.", "success")
         return redirect(url_for("updates", _anchor="requests"), code=303)
 
@@ -1171,6 +1632,11 @@ def create_app(test_config=None):
             return redirect(url_for("updates", _anchor="requests"), code=303)
         # Done requests remember the app version that has the change, to find it in the log below.
         request_store.set_status(request_id, status, APP_VERSION if status == "done" else "")
+        requester = user_store.by_name(item["requested_by"]) if item["requested_by"] else None
+        if requester and status != item["status"]:
+            notification_store.add([requester["id"]], g.user["id"], "request",
+                                   f"Your request “{item['title']}” is now {REQUEST_STATUSES[status].lower()}.",
+                                   url_for("updates", _anchor="requests"))
         flash(f"“{item['title']}” is now {REQUEST_STATUSES[status].lower()}.", "success")
         return redirect(url_for("updates", status=request.form.get("shown_status") or None, _anchor="requests"), code=303)
 
@@ -1180,6 +1646,286 @@ def create_app(test_config=None):
             request_store.delete(request_id)
             flash("Request deleted.", "success")
         return redirect(url_for("updates", status=request.form.get("shown_status") or None, _anchor="requests"), code=303)
+
+    # ------------------------------------------------------------------- feed
+
+    @app.template_filter("feed_text")
+    def feed_text(value):
+        """Post and comment text: escaped, with links and @mentions made clickable."""
+        def linked(match):
+            if match.group("link"):
+                return f'<a href="{match.group("link")}" target="_blank" rel="noopener noreferrer">{match.group("link")}</a>'
+            return f'<span class="feed-mention">@{match.group("name")}</span>'
+
+        return Markup(FEED_TOKENS.sub(linked, str(escape(value))))
+
+    def mentioned_ids(text):
+        names = {name.lower() for name in MENTION.findall(text)}
+        users = (user_store.by_name(name) for name in names)
+        return [user["id"] for user in users if user and user["is_active"]]
+
+    def snippet(text, size=60):
+        text = " ".join(text.split())
+        return text if len(text) <= size else text[: size - 1] + "…"
+
+    def save_feed_upload(upload):
+        """Check one photo or video and save it; return (kind, stored name, mime) or raise ValueError."""
+        name = download_stem(upload.filename) + Path(upload.filename).suffix.lower()
+        extension = Path(upload.filename).suffix.lower()
+        if extension in FEED_IMAGES:
+            kind, limit = "image", FEED_MAX_IMAGE
+        elif extension in FEED_VIDEOS:
+            kind, limit = "video", FEED_MAX_VIDEO
+        else:
+            raise ValueError(f"“{name}” is not a photo or video this page can show (JPG, PNG, GIF, WebP, HEIC, "
+                             "MP4, MOV or WebM).")
+        temp = tempfile.NamedTemporaryFile(dir=feed_media_dir, prefix=".upload-", delete=False)
+        try:
+            with temp:
+                upload.save(temp)
+            path = Path(temp.name)
+            size = path.stat().st_size
+            if size > limit:
+                raise ValueError(f"“{name}” is too big: photos can be up to 25 MB and videos up to 500 MB.")
+            with path.open("rb") as handle:
+                head = handle.read(16)
+            if kind == "image":
+                from PIL import Image, UnidentifiedImageError
+                if extension in (".heic", ".heif"):
+                    from pillow_heif import register_heif_opener
+                    register_heif_opener()
+                try:
+                    with Image.open(path) as image:
+                        image.verify()
+                    if extension in (".heic", ".heif"):
+                        with Image.open(path) as image:
+                            converted = path.with_suffix(".jpg")
+                            image.convert("RGB").save(converted, "JPEG", quality=88)
+                        path.unlink()
+                        path = converted
+                        extension = ".jpg"
+                except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError):
+                    raise ValueError(f"“{name}” is not a photo the server can read.")
+            else:
+                box = head[4:8]
+                is_webm = head[:4] == b"\x1aE\xdf\xa3"
+                is_mp4 = box == b"ftyp" or (extension == ".mov" and box in (b"moov", b"wide", b"mdat", b"free", b"skip"))
+                if not (is_webm if extension == ".webm" else is_mp4):
+                    raise ValueError(f"“{name}” is not a video the browser can play.")
+            stored = f"{secrets.token_hex(16)}{extension}"
+            path.rename(feed_media_dir / stored)
+            return kind, stored, (FEED_IMAGES | FEED_VIDEOS)[extension]
+        except BaseException:
+            Path(temp.name).unlink(missing_ok=True)
+            Path(temp.name).with_suffix(".jpg").unlink(missing_ok=True)
+            raise
+
+    def feed_back(post_id=None, single=False):
+        if single and post_id:
+            return redirect(url_for("feed_post", post_id=post_id), code=303)
+        return redirect(url_for("feed", _anchor=f"post-{post_id}" if post_id else None), code=303)
+
+    def can_change(owner_id):
+        return g.user["id"] == owner_id or g.user["is_admin"]
+
+    @app.get("/feed")
+    def feed():
+        before = request.args.get("before", type=int)
+        posts = feed_store.posts(g.user["id"], before_id=before)
+        return render_template("feed.html", posts=posts, single=False, before=before,
+                               older=posts[-1]["id"] if len(posts) == 15 else None,
+                               max_files=FEED_MAX_FILES, accept=",".join([*FEED_IMAGES, *FEED_VIDEOS]),
+                               form=session.pop("feed_form", None))
+
+    @app.get("/feed/posts/<int:post_id>")
+    def feed_post(post_id):
+        posts = feed_store.posts(g.user["id"], post_id=post_id)
+        if not posts:
+            flash("That post was deleted.", "error")
+            return redirect(url_for("feed"), code=303)
+        notification_store.read_for_post(g.user["id"], post_id)
+        return render_template("feed.html", posts=posts, single=True, before=None, older=None,
+                               max_files=FEED_MAX_FILES, accept="", form=None)
+
+    @app.post("/feed/posts")
+    def feed_create():
+        wants_json = request.headers.get("X-Requested-With") == "fetch"
+        body = request.form.get("body", "").strip().replace("\r\n", "\n")
+        uploads = [upload for upload in request.files.getlist("media") if upload.filename]
+
+        def fail(message):
+            if wants_json:
+                return jsonify(error=message), 400
+            flash(message, "error")
+            session["feed_form"] = {"body": body}
+            return redirect(url_for("feed"), code=303)
+
+        if not body and not uploads:
+            return fail("Write something or add a photo or video.")
+        if len(body) > FEED_POST_LIMIT:
+            return fail(f"Posts can be at most {FEED_POST_LIMIT:,} characters.")
+        if len(uploads) > FEED_MAX_FILES:
+            return fail(f"Add at most {FEED_MAX_FILES} photos and videos to one post.")
+        saved = []
+        try:
+            for upload in uploads:
+                saved.append(save_feed_upload(upload))
+        except ValueError as error:
+            for _kind, stored, _mime in saved:
+                (feed_media_dir / stored).unlink(missing_ok=True)
+            return fail(str(error))
+        post_id = feed_store.add_post(g.user["id"], body, saved)
+        link = url_for("feed_post", post_id=post_id)
+        name = g.user["username"]
+        mentioned = mentioned_ids(body)
+        what = snippet(body) if body else ("shared a video" if any(k == "video" for k, _s, _m in saved)
+                                          else "shared a photo")
+        notification_store.add(mentioned, g.user["id"], "mention", f"{name} mentioned you in a post: “{what}”",
+                               link, post_id)
+        everyone = [user["id"] for user in user_store.all() if user["is_active"] and user["id"] not in mentioned]
+        notification_store.add(everyone, g.user["id"], "post",
+                               f"{name} posted: “{what}”" if body else f"{name} {what}.", link, post_id)
+        if wants_json:
+            return jsonify(url=url_for("feed", _anchor=f"post-{post_id}"))
+        flash("Posted.", "success")
+        return feed_back(post_id)
+
+    @app.post("/feed/posts/<int:post_id>/delete")
+    def feed_delete(post_id):
+        post = feed_store.post(post_id)
+        if post is None:
+            flash("That post was already deleted.", "error")
+        elif not can_change(post["user_id"]):
+            abort(403, "You can only delete your own posts.")
+        else:
+            feed_store.delete_post(post_id)
+            flash("Post deleted.", "success")
+        return redirect(url_for("feed"), code=303)
+
+    @app.post("/feed/posts/<int:post_id>/like")
+    def feed_like(post_id):
+        post = feed_store.post(post_id)
+        wants_json = request.headers.get("X-Requested-With") == "fetch"
+        if post is None:
+            if wants_json:
+                return jsonify(error="That post was deleted."), 404
+            flash("That post was deleted.", "error")
+            return redirect(url_for("feed"), code=303)
+        liked = feed_store.toggle_like(post_id, g.user["id"])
+        if liked:
+            notification_store.add([post["user_id"]], g.user["id"], "like",
+                                   f"{g.user['username']} liked your post" + (f": “{snippet(post['body'])}”"
+                                                                             if post["body"] else "."),
+                                   url_for("feed_post", post_id=post_id), post_id)
+        if wants_json:
+            return jsonify(liked=liked, count=feed_store.like_count(post_id))
+        return feed_back(post_id, request.form.get("single") == "1")
+
+    @app.post("/feed/posts/<int:post_id>/comments")
+    def feed_comment(post_id):
+        post = feed_store.post(post_id)
+        body = request.form.get("body", "").strip().replace("\r\n", "\n")
+        single = request.form.get("single") == "1"
+        if post is None:
+            flash("That post was deleted.", "error")
+            return redirect(url_for("feed"), code=303)
+        if not body:
+            flash("Write a comment first.", "error")
+        elif len(body) > FEED_COMMENT_LIMIT:
+            flash(f"Comments can be at most {FEED_COMMENT_LIMIT:,} characters.", "error")
+        else:
+            feed_store.add_comment(post_id, g.user["id"], body)
+            name, link = g.user["username"], url_for("feed_post", post_id=post_id)
+            mentioned = mentioned_ids(body)
+            notification_store.add(mentioned, g.user["id"], "mention",
+                                   f"{name} mentioned you in a comment: “{snippet(body)}”", link, post_id)
+            notification_store.add([post["user_id"]] if post["user_id"] not in mentioned else [], g.user["id"],
+                                   "comment", f"{name} commented on your post: “{snippet(body)}”", link, post_id)
+            others = [uid for uid in feed_store.commenter_ids(post_id)
+                      if uid != post["user_id"] and uid not in mentioned]
+            notification_store.add(others, g.user["id"], "comment",
+                                   f"{name} also commented on "
+                                   f"{'their' if post['user_id'] == g.user['id'] else post['author'] + chr(39) + 's'}"
+                                   f" post: “{snippet(body)}”", link, post_id)
+        return feed_back(post_id, single)
+
+    @app.post("/feed/comments/<int:comment_id>/delete")
+    def feed_comment_delete(comment_id):
+        comment = feed_store.comment(comment_id)
+        if comment is None:
+            flash("That comment was already deleted.", "error")
+            return redirect(url_for("feed"), code=303)
+        post = feed_store.post(comment["post_id"])
+        # People delete their own comments; the post's author and administrators can delete any on it.
+        if not (can_change(comment["user_id"]) or (post and post["user_id"] == g.user["id"])):
+            abort(403, "You can only delete your own comments.")
+        feed_store.delete_comment(comment_id)
+        flash("Comment deleted.", "success")
+        return feed_back(comment["post_id"], request.form.get("single") == "1")
+
+    @app.get("/feed/media/<int:media_id>")
+    def feed_media(media_id):
+        item = feed_store.media(media_id)
+        path = feed_media_dir / item["stored"] if item else None
+        if not path or not path.is_file():
+            abort(404)
+        # conditional=True answers Range requests, so videos can seek and stream.
+        response = send_file(path, mimetype=item["mime"], conditional=True, max_age=7 * 24 * 3600)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Cache-Control"] = "private, max-age=604800"
+        return response
+
+    # ---------------------------------------------------------- notifications
+
+    @app.get("/notifications")
+    def notifications():
+        unread_only = request.args.get("show") == "unread"
+        items = notification_store.for_user(g.user["id"], unread_only=unread_only)
+        return render_template("notifications.html", items=items, unread_only=unread_only)
+
+    @app.get("/notifications/<int:notification_id>/open")
+    def notification_open(notification_id):
+        item = notification_store.get(g.user["id"], notification_id)
+        if item is None:
+            flash("That notification is gone.", "error")
+            return redirect(url_for("notifications"), code=303)
+        notification_store.set_read(g.user["id"], notification_id)
+        return redirect(safe_next(item["link"]) if item["link"] else url_for("notifications"))
+
+    @app.post("/notifications/<int:notification_id>/read")
+    def notification_read(notification_id):
+        read = request.form.get("read", "1") == "1"
+        notification_store.set_read(g.user["id"], notification_id, read)
+        if request.headers.get("X-Requested-With") == "fetch":
+            return jsonify(unread=notification_store.unread_count(g.user["id"]))
+        return redirect(url_for("notifications", show=request.form.get("show") or None), code=303)
+
+    @app.post("/notifications/read-all")
+    def notifications_read_all():
+        notification_store.read_all(g.user["id"])
+        if request.headers.get("X-Requested-With") == "fetch":
+            return jsonify(unread=0)
+        flash("All notifications are marked as read.", "success")
+        return redirect(safe_next(request.form.get("next", "")) if request.form.get("next")
+                        else url_for("notifications"), code=303)
+
+    @app.post("/notifications/clear")
+    def notifications_clear():
+        notification_store.clear_read(g.user["id"])
+        flash("Read notifications were removed.", "success")
+        return redirect(url_for("notifications"), code=303)
+
+    @app.get("/notifications/poll")
+    def notifications_poll():
+        """For the bell in the top bar: the unread count and anything new since the last check."""
+        after = request.args.get("after", default=0, type=int)
+        fresh = notification_store.for_user(g.user["id"], unread_only=True, after_id=after, limit=5) if after else []
+        return jsonify(
+            unread=notification_store.unread_count(g.user["id"]),
+            latest=notification_store.latest_id(g.user["id"]),
+            fresh=[{"id": item["id"], "message": item["message"],
+                    "url": url_for("notification_open", notification_id=item["id"])} for item in fresh],
+        )
 
     @app.get("/notes")
     def notes():
@@ -1644,6 +2390,7 @@ def create_app(test_config=None):
         # Changing these needs a restart, so they are shown but not editable.
         return [
             ("Shared files folder", str(root)),
+            ("Feed photos and videos folder", str(feed_media_dir)),
             ("Notes and chat database", "PostgreSQL" if database_url else "SQLite"),
             ("Session and cache store", "Redis" if cache is not None else "Signed cookies, no cache"),
             ("Fixed session key (FILES_SECRET_KEY)", "Set" if os.environ.get("FILES_SECRET_KEY") else "Not set"),
@@ -1653,7 +2400,8 @@ def create_app(test_config=None):
     @app.get("/settings")
     def settings_page():
         admin_required()
-        return render_template("settings.html", groups=settings_view(), server=server_info(), users=user_store.all())
+        return render_template("settings.html", groups=settings_view(), server=server_info(), users=user_store.all(),
+                               signup_mode=signup_mode(), signup_modes=SIGNUP_MODES)
 
     @app.post("/settings")
     def save_settings():
@@ -1663,7 +2411,7 @@ def create_app(test_config=None):
             flash("Nothing was saved. Fix the highlighted settings and try again.", "error")
             values = {name: request.form.get(name, "") for name, field in SETTING_FIELDS.items() if not field.get("secret")}
             return render_template("settings.html", groups=settings_view(values, errors), server=server_info(),
-                                   users=user_store.all()), 400
+                                   users=user_store.all(), signup_mode=signup_mode(), signup_modes=SIGNUP_MODES), 400
         settings_store.save(changes)
         flash("Settings saved.", "success")
         return redirect(url_for("settings_page"))

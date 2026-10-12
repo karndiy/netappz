@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ {"setup": "Set up", "login": "Sign in", "account": "Your account"}[mode] }} · Network Files</title>
+  <title>{{ {"setup": "Set up", "login": "Sign in", "register": "Sign up", "account": "Your account"}[mode] }} · Network Files</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -29,6 +29,9 @@
       {% elif mode == "login" %}
         <h1 id="auth-heading">Sign in</h1>
         <p class="auth-lead">Sign in to use Network Files.</p>
+      {% elif mode == "register" %}
+        <h1 id="auth-heading">Create an account</h1>
+        <p class="auth-lead">Pick a username and password.{% if approval %} An administrator approves new accounts before you can sign in.{% endif %}</p>
       {% else %}
         <h1 id="auth-heading">Your account</h1>
         <p class="auth-lead">Signed in as <strong>{{ current_user.username }}</strong>{% if current_user.is_admin %} (administrator){% endif %}. Change your password here.</p>
@@ -39,7 +42,7 @@
       <form class="auth-form" method="post">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         {% if mode == "login" %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
-        {% if mode in ("setup", "login") %}
+        {% if mode in ("setup", "login", "register") %}
           <label for="auth-username">Username</label>
           <input id="auth-username" name="username" type="text" value="{{ username }}" required maxlength="40"
                  autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>
@@ -55,8 +58,13 @@
           <input id="auth-confirm" name="confirm" type="password" required minlength="8" autocomplete="new-password">
           <small>At least 8 characters.</small>
         {% endif %}
-        <button type="submit">{{ {"setup": "Create account and sign in", "login": "Sign in", "account": "Change password"}[mode] }}</button>
+        <button type="submit">{{ {"setup": "Create account and sign in", "login": "Sign in", "register": "Create account", "account": "Change password"}[mode] }}</button>
       </form>
+      {% if mode == "login" and signup != "off" %}
+        <p class="auth-switch">New here? <a href="{{ url_for('register') }}">Create an account</a></p>
+      {% elif mode == "register" %}
+        <p class="auth-switch">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></p>
+      {% endif %}
     </section>
   </main>
 </body>

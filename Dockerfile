@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     FILES_ROOT=/data/shared \
     NOTES_DATABASE=/data/instance/notes.sqlite3 \
+    FEED_MEDIA=/data/feed \
     PORT=5000
 
 WORKDIR /app
@@ -50,7 +51,7 @@ COPY templates ./templates
 COPY static ./static
 
 RUN useradd --create-home appuser \
-    && mkdir -p /data/shared /data/instance \
+    && mkdir -p /data/shared /data/instance /data/feed \
     && chown -R appuser:appuser /data
 USER appuser
 
