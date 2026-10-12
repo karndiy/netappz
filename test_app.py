@@ -844,6 +844,7 @@ class FileManagerTests(unittest.TestCase):
         request = urlopen.call_args[0][0]
         self.assertEqual(request.full_url, "https://ai.example.test/api/v1/chat/completions")
         self.assertEqual(request.get_header("Authorization"), "Bearer sk-local-123")
+        self.assertNotIn("Python-urllib", request.get_header("User-agent"))
         sent = json.loads(request.data)
         self.assertEqual(sent["model"], chat.DEFAULT_LOCAL_MODEL)
         self.assertEqual(sent["messages"][0]["role"], "system")

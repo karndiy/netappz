@@ -16,6 +16,8 @@ DEFAULT_LOCAL_URL = "https://ai.esm-solution.com/api/v1"
 DEFAULT_LOCAL_MODELS = ["qwen3/qwen3.6-35b", "qwen3/qwen3.8-27b"]
 DEFAULT_LOCAL_MODEL = DEFAULT_LOCAL_MODELS[0]
 LOCAL_TIMEOUT = 300
+# Cloudflare blocks Python's default "Python-urllib" user agent (error 1010).
+USER_AGENT = "NetworkFiles/1.20 (+https://github.com/karndiy/netappz)"
 DEFAULT_MODEL = "claude-opus-5-5"
 # Claude Opus 5.5 defaults to "medium"; set it explicitly so it is easy to tune.
 DEFAULT_EFFORT = "medium"
@@ -224,7 +226,7 @@ class ThinkFilter:
 def stream_local_reply(history, for_telegram=False):
     """Stream a reply from an OpenAI-compatible /chat/completions endpoint."""
     base_url = setting("LOCAL_AI_URL", DEFAULT_LOCAL_URL).rstrip("/")
-    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream", "User-Agent": USER_AGENT}
     api_key = setting("LOCAL_AI_API_KEY")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -274,10 +276,13 @@ def stream_local_reply(history, for_telegram=False):
                     parts.append(tail)
                     yield {"type": "text", "text": tail}
     except urllib.error.HTTPError as error:
+        raw = error.read() or b"{}"
         try:
-            detail = local_error_text(json.loads(error.read() or b"{}"))
+            detail = local_error_text(json.loads(raw))
         except ValueError:
-            detail = error.reason
+            detail = raw.decode("utf-8", "replace").strip()[:200] or error.reason
+        if error.code == 403 and "error code:" in detail:
+            raise ChatError(f"The local AI server's firewall (Cloudflare) blocked this server ({detail}).")
         if error.code in (401, 403):
             raise ChatError("The local AI server rejected the API key. Check it on the Settings page.")
         if error.code == 404:

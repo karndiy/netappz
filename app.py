@@ -479,6 +479,14 @@ def create_app(test_config=None):
     def updates():
         entries = [
             {
+                "version": "1.20.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "Fixed Chat and the Telegram bot with Local AI: the ai.esm-solution.com firewall (Cloudflare) was blocking the app's requests, which showed up as a rejected API key.",
+                    "If a firewall blocks the app again, the chat now says so instead of blaming the API key.",
+                ],
+            },
+            {
                 "version": "1.19.0",
                 "date": "2026-10-12",
                 "changes": [
