@@ -1,0 +1,116 @@
+{% from "_avatar.html" import avatar %}
+{% for post in posts %}
+  {% set mine = post.user_id == current_user.id %}
+  <article class="feed-post" id="post-{{ post.id }}" data-post="{{ post.id }}">
+    <header class="feed-post-head">
+      <a href="{{ url_for('feed_profile', username=post.author) }}" tabindex="-1">{{ avatar(post.author, post.author_avatar) }}</a>
+      <div class="feed-post-who">
+        <a class="feed-name" href="{{ url_for('feed_profile', username=post.author) }}">{{ post.author }}</a>
+        <a class="feed-time" href="{{ url_for('feed_post', post_id=post.id) }}">
+          <time datetime="{{ post.created_at | note_iso }}" data-relative>{{ post.created_at | note_short_date }}</time>
+        </a>
+      </div>
+      <details class="feed-menu">
+        <summary class="feed-icon-button" aria-label="Post options" title="Options">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+        </summary>
+        <div class="feed-menu-list" role="menu">
+          <button type="button" role="menuitem" data-share="{{ url_for('feed_post', post_id=post.id, _external=True) }}">🔗 Copy link</button>
+          {% if mine %}<button type="button" role="menuitem" data-edit>✏️ Edit post</button>{% endif %}
+          {% if mine or current_user.is_admin %}
+            <form action="{{ url_for('feed_delete', post_id=post.id) }}" method="post"
+                  data-confirm="Delete this post and its photos, videos and comments?">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button class="is-danger" type="submit" role="menuitem">🗑️ Delete post</button>
+            </form>
+          {% endif %}
+        </div>
+      </details>
+    </header>
+
+    <div class="feed-body{% if not post.body %} is-empty{% endif %}" data-body>{% if post.body %}{{ post.body | feed_text }}{% endif %}</div>
+    {% if post.body | length > 280 or post.body.count('\n') > 5 %}<button class="feed-link-button feed-more-text" type="button" hidden>See more</button>{% endif %}
+    {% if mine %}
+      <form class="feed-edit" action="{{ url_for('feed_edit', post_id=post.id) }}" method="post" hidden>
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        {% if single %}<input type="hidden" name="single" value="1">{% endif %}
+        <label class="visually-hidden" for="edit-{{ post.id }}">Edit post</label>
+        <textarea id="edit-{{ post.id }}" name="body" rows="3" maxlength="5000">{{ post.body }}</textarea>
+        <div class="feed-edit-actions">
+          <button class="secondary" type="button" data-edit-cancel>Cancel</button>
+          <button type="submit">Save</button>
+        </div>
+      </form>
+    {% endif %}
+
+    {% if post.media %}
+      <div class="feed-carousel" data-count="{{ post.media | length }}">
+        <div class="feed-slides">
+          {% for item in post.media %}
+            <div class="feed-slide">
+              {% if item.kind == "video" %}
+                <video src="{{ url_for('feed_media', media_id=item.id) }}" controls playsinline preload="metadata"></video>
+              {% else %}
+                <img src="{{ url_for('feed_media', media_id=item.id) }}" alt="Photo {{ loop.index }} from {{ post.author }}"
+                     loading="lazy" data-full="{{ url_for('feed_media', media_id=item.id) }}">
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+        {% if post.media | length > 1 %}
+          <button class="feed-slide-nav is-prev" type="button" aria-label="Previous" hidden>‹</button>
+          <button class="feed-slide-nav is-next" type="button" aria-label="Next">›</button>
+          <span class="feed-slide-count">1/{{ post.media | length }}</span>
+          <div class="feed-dots" aria-hidden="true">{% for item in post.media %}<span{% if loop.first %} class="is-on"{% endif %}></span>{% endfor %}</div>
+        {% endif %}
+        <span class="feed-heart" aria-hidden="true">❤</span>
+      </div>
+    {% endif %}
+
+    <div class="feed-actions">
+      <form class="feed-like-form" action="{{ url_for('feed_like', post_id=post.id) }}" method="post">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        {% if single %}<input type="hidden" name="single" value="1">{% endif %}
+        <button class="feed-action{% if post.liked %} is-liked{% endif %}" type="submit"
+                aria-pressed="{{ 'true' if post.liked else 'false' }}" aria-label="Like" title="Like">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-9.3-9.1C1.4 8 3.5 4.5 7 4.5c2.1 0 3.6 1.2 5 3 1.4-1.8 2.9-3 5-3 3.5 0 5.6 3.5 4.3 6.9-1.8 4.5-9.3 9.1-9.3 9.1Z"/></svg>
+          <span>Like</span>
+        </button>
+      </form>
+      <button class="feed-action" type="button" data-focus-comment aria-label="Comment" title="Comment">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1.4-4.4A8.5 8.5 0 1 1 20.5 11.5Z"/></svg>
+        <span>Comment</span>
+      </button>
+      <button class="feed-action" type="button" data-share="{{ url_for('feed_post', post_id=post.id, _external=True) }}" aria-label="Share" title="Share">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3 10 14"/><path d="m21 3-7 18-4-7-7-4 18-7Z"/></svg>
+        <span>Share</span>
+      </button>
+    </div>
+
+    <p class="feed-likes" {% if not post.likers %}hidden{% endif %}>
+      {% set others = post.likers | length - 1 %}
+      <span data-likes-text>Liked by <strong>{{ post.likers[0] if post.likers else '' }}</strong>{% if others > 0 %} and <strong>{{ others }} other{{ 's' if others > 1 }}</strong>{% endif %}</span>
+    </p>
+
+    {% set hidden_count = post.comments | length - 2 %}
+    {% if hidden_count > 0 and not single %}
+      <button class="feed-link-button feed-all-comments" type="button">View all {{ post.comments | length }} comments</button>
+    {% endif %}
+    <ul class="feed-comments{% if hidden_count > 0 and not single %} is-collapsed{% endif %}">
+      {% for comment in post.comments %}
+        {% include "_feed_comment.html" %}
+      {% endfor %}
+    </ul>
+    <form class="feed-comment-form" action="{{ url_for('feed_comment', post_id=post.id) }}" method="post">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      {% if single %}<input type="hidden" name="single" value="1">{% endif %}
+      {{ avatar(current_user.username, current_user.avatar, "is-sm") }}
+      <label class="visually-hidden" for="comment-{{ post.id }}">Write a comment</label>
+      <textarea id="comment-{{ post.id }}" name="body" rows="1" maxlength="2000" required placeholder="Write a comment…"></textarea>
+      <button class="feed-send" type="submit" aria-label="Send comment">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12 20 4l-6 16-3-7-7-1Z"/></svg>
+      </button>
+    </form>
+  </article>
+{% endfor %}
+{% if next_url is defined %}<div class="feed-next" data-next="{{ next_url }}"></div>{% endif %}

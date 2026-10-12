@@ -1,9 +1,10 @@
+{% from "_avatar.html" import avatar %}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Settings · Network Files</title>
+  <title>{{ section.title ~ " · " if section else "" }}Settings · Network Files</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -14,178 +15,385 @@
       <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
       <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
       <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
-      {% if current_user and current_user.is_admin %}<a class="topbar-link" href="{{ url_for('settings_page') }}" aria-current="page">Settings</a>{% endif %}
+      <a class="topbar-link" href="{{ url_for('settings_page') }}" aria-current="page">Settings</a>
       <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
       {% include "_account_nav.html" %}
     </nav>
   </header>
-  <main class="container">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for category, message in messages %}
-        <div class="message {{ category }}">{{ message }}</div>
-      {% endfor %}
-    {% endwith %}
 
-    <section class="heading">
-      <div>
-        <h1>Settings</h1>
-        <p class="page-description">Changes are saved on this server and apply right away. Anyone who can open this app can see and change them.</p>
-      </div>
-    </section>
+  {% macro section_links(admin) %}
+    {% for item in sections if item.admin == admin %}
+      <a class="settings-nav-link" href="{{ url_for('settings_section', section=item.key) }}"
+         {% if section and section.key == item.key %}aria-current="page"{% endif %}>
+        <span class="settings-nav-icon" aria-hidden="true">{{ item.icon }}</span>
+        <span>{{ item.title }}</span>
+        {% if item.key == "users" and waiting %}<span class="settings-count" title="Waiting for approval">{{ waiting }}</span>{% endif %}
+      </a>
+    {% endfor %}
+  {% endmacro %}
 
-    <form class="settings-form" action="{{ url_for('save_settings') }}" method="post" autocomplete="off">
-      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+  <div class="settings-layout{% if section %} has-section{% endif %}">
+    <aside class="settings-nav" aria-label="Settings categories">
+      <a class="settings-nav-home" href="{{ url_for('settings_page') }}" {% if not section %}aria-current="page"{% endif %}>Settings</a>
+      <p class="settings-nav-group">Personal</p>
+      {{ section_links(False) }}
+      {% if current_user.is_admin %}
+        <p class="settings-nav-group">Administration</p>
+        {{ section_links(True) }}
+      {% endif %}
+    </aside>
 
-      {% for group in groups %}
-        <section class="settings-card" aria-labelledby="group-{{ loop.index }}">
-          <div class="settings-card-head">
-            <h2 id="group-{{ loop.index }}">{{ group.title }}</h2>
-            <p>{{ group.description }}</p>
-          </div>
-          {% if group.status %}
-            <p class="settings-status is-{{ group.status.state }}" role="status">
-              <strong>{{ {"running": "Connected", "conflict": "Not connected", "error": "Not connected", "pending": "Connecting", "off": "Off"}[group.status.state] }}</strong>
-              {{ group.status.message }}
+    <main class="settings-content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="message {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endwith %}
+
+      {% if not section %}
+        {# ---------------------------------------------------------- overview #}
+        <section class="heading">
+          <div>
+            <h1>Settings</h1>
+            <p class="page-description">
+              {% if current_user.is_admin %}Your own settings come first; the administration settings below affect everyone.
+              {% else %}Your profile, password and notifications.{% endif %}
             </p>
+          </div>
+        </section>
+        {% for admin in ([False, True] if current_user.is_admin else [False]) %}
+          <h2 class="settings-group-title">
+            {{ "Administration" if admin else "Personal" }}
+            {% if admin %}<span class="settings-admin-tag">Administrators only</span>{% endif %}
+          </h2>
+          <div class="settings-tiles">
+            {% for item in sections if item.admin == admin %}
+              <a class="settings-tile" href="{{ url_for('settings_section', section=item.key) }}">
+                <span class="settings-tile-icon" aria-hidden="true">{{ item.icon }}</span>
+                <span class="settings-tile-text">
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ item.description }}</span>
+                  <em{% if item.key == "users" and waiting %} class="is-attention"{% endif %}>{{ summary[item.key] }}</em>
+                </span>
+                <span class="settings-tile-go" aria-hidden="true">›</span>
+              </a>
+            {% endfor %}
+          </div>
+        {% endfor %}
+      {% else %}
+        <a class="settings-back" href="{{ url_for('settings_page') }}">‹ Settings</a>
+        <section class="settings-head">
+          <span class="settings-head-icon" aria-hidden="true">{{ section.icon }}</span>
+          <div>
+            <h1>{{ section.title }}</h1>
+            <p class="page-description">{{ section.description }}{% if section.admin %} <span class="settings-admin-tag">Administrators only</span>{% endif %}</p>
+          </div>
+        </section>
+
+        {% if section.key == "account" %}
+          {# ---------------------------------------------------- profile #}
+          <form class="settings-card" action="{{ url_for('save_profile') }}" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <div class="settings-card-head">
+              <h2>Profile</h2>
+              <p>Shown next to your posts and comments on the Feed.
+                <a href="{{ url_for('feed_profile', username=current_user.username) }}">See your profile</a>
+                · {{ stats.posts }} post{{ "s" if stats.posts != 1 }} · {{ stats.likes }} like{{ "s" if stats.likes != 1 }}</p>
+            </div>
+            <div class="profile-photo">
+              <span id="avatar-preview">{{ avatar(current_user.username, current_user.avatar, "is-xl") }}</span>
+              <div class="profile-photo-actions">
+                <label class="button secondary profile-upload">
+                  <input id="avatar-input" name="avatar" type="file" accept="image/*,.heic,.heif">
+                  {{ "Change photo" if current_user.avatar else "Add a photo" }}
+                </label>
+                {% if current_user.avatar %}
+                  <label class="settings-check"><input type="checkbox" name="remove_avatar" value="1"> Remove photo</label>
+                {% endif %}
+                <small>Cropped to a square. Location data in the photo is not kept.</small>
+              </div>
+            </div>
+            <div class="settings-field">
+              <div class="settings-label-row"><label for="profile-bio">About you</label></div>
+              <textarea id="profile-bio" name="bio" rows="2" maxlength="160" placeholder="A few words, e.g. your team or what you do">{{ current_user.bio }}</textarea>
+              <small>Up to 160 characters.</small>
+            </div>
+            <div class="settings-actions"><button type="submit">Save profile</button></div>
+          </form>
+
+          <form class="settings-card" id="password" action="{{ url_for('account') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <div class="settings-card-head">
+              <h2>Password</h2>
+              <p>Signed in as <strong>{{ current_user.username }}</strong>{% if current_user.is_admin %} (administrator){% endif %}.</p>
+            </div>
+            {% if password_error %}<div class="message error" role="alert">{{ password_error }}</div>{% endif %}
+            <div class="settings-field">
+              <div class="settings-label-row"><label for="pw-current">Current password</label></div>
+              <input id="pw-current" name="current" type="password" required autocomplete="current-password">
+            </div>
+            <div class="settings-field-row">
+              <div class="settings-field">
+                <div class="settings-label-row"><label for="pw-new">New password</label></div>
+                <input id="pw-new" name="password" type="password" required minlength="8" autocomplete="new-password">
+              </div>
+              <div class="settings-field">
+                <div class="settings-label-row"><label for="pw-confirm">Type it again</label></div>
+                <input id="pw-confirm" name="confirm" type="password" required minlength="8" autocomplete="new-password">
+              </div>
+            </div>
+            <small>At least 8 characters.</small>
+            <div class="settings-actions"><button type="submit">Change password</button></div>
+          </form>
+
+        {% elif section.key == "notifications" %}
+          {# ---------------------------------------------- notifications #}
+          <form class="settings-card" action="{{ url_for('save_notification_prefs') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <div class="settings-card-head">
+              <h2>Tell me when</h2>
+              <p>Turned-off kinds don't appear in your <a href="{{ url_for('notifications') }}">notifications</a> at all.</p>
+            </div>
+            <ul class="settings-switches">
+              {% for kind, label in kinds.items() %}
+                <li>
+                  <label class="settings-switch">
+                    <span>{{ label }}</span>
+                    <input type="checkbox" role="switch" name="kind_{{ kind }}" value="1" {% if kind not in prefs.mute %}checked{% endif %}>
+                    <span class="switch" aria-hidden="true"></span>
+                  </label>
+                </li>
+              {% endfor %}
+            </ul>
+            <div class="settings-card-head settings-subhead">
+              <h2>While the app is open</h2>
+            </div>
+            <ul class="settings-switches">
+              <li>
+                <label class="settings-switch">
+                  <span>Pop up new notifications in the corner of the screen<small>The bell always shows how many are unread.</small></span>
+                  <input type="checkbox" role="switch" name="popups" value="1" {% if prefs.popups %}checked{% endif %}>
+                  <span class="switch" aria-hidden="true"></span>
+                </label>
+              </li>
+            </ul>
+            <div class="settings-actions"><button type="submit">Save</button></div>
+          </form>
+
+        {% elif section.key == "users" %}
+          {# ------------------------------------------------------ users #}
+          {% set pending = users | rejectattr("is_active") | list %}
+          {% if pending %}
+            <section class="settings-card is-attention" aria-labelledby="pending-heading">
+              <div class="settings-card-head">
+                <h2 id="pending-heading">Waiting for approval ({{ pending | length }})</h2>
+                <p>These people signed up. Approve them to let them sign in, or remove the account.</p>
+              </div>
+              <ul class="user-list">
+                {% for user in pending %}
+                  <li class="user-row">
+                    <div class="user-name">{{ avatar(user.username, user.avatar, "is-sm") }}<strong>{{ user.username }}</strong>
+                      <span class="user-meta">signed up {{ user.created_at[:10] }}</span></div>
+                    <form action="{{ url_for('approve_user', user_id=user.id) }}" method="post">
+                      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                      <button type="submit">Approve</button>
+                    </form>
+                    <form action="{{ url_for('delete_user', user_id=user.id) }}" method="post"
+                          onsubmit="return confirm('Remove the account {{ user.username }}?');">
+                      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                      <button class="secondary" type="submit">Remove</button>
+                    </form>
+                  </li>
+                {% endfor %}
+              </ul>
+            </section>
           {% endif %}
 
-          {% for field in group.fields %}
-            {% set field_id = "setting-" ~ field.name|lower %}
-            <div class="settings-field{% if field.error %} has-error{% endif %}">
-              <div class="settings-label-row">
-                <label for="{{ field_id }}">{{ field.label }}</label>
-                {% if field.source == "saved" %}
-                  <span class="settings-source is-saved">Saved here</span>
-                {% elif field.source == "environment" %}
-                  <span class="settings-source">From server .env</span>
-                {% elif field.is_set %}
-                  <span class="settings-source">Default</span>
-                {% endif %}
-              </div>
-
-              {% if field.secret %}
-                <input id="{{ field_id }}" name="{{ field.name }}" type="password" spellcheck="false"
-                       autocomplete="new-password" aria-describedby="{{ field_id }}-help"
-                       placeholder="{% if field.is_set %}Set {{ field.hint }} · type a new one to replace it{% else %}Not set{% endif %}">
-                {% if field.source == "saved" %}
-                  <label class="settings-check">
-                    <input type="checkbox" name="clear_{{ field.name }}" value="1">
-                    Remove the saved {{ field.label|lower }}{% if field.has_env %} and use the server .env value{% endif %}
-                  </label>
-                {% endif %}
-              {% elif field.options %}
-                <select id="{{ field_id }}" name="{{ field.name }}" aria-describedby="{{ field_id }}-help">
-                  {% for value, text in field.options %}
-                    <option value="{{ value }}" {% if value == field.value %}selected{% endif %}>{{ text }}</option>
-                  {% endfor %}
-                </select>
-              {% elif field.multiline %}
-                <textarea id="{{ field_id }}" name="{{ field.name }}" rows="{{ field.rows or 4 }}" maxlength="4000"
-                          spellcheck="{{ 'false' if field.name == 'LOCAL_AI_MODELS' else 'true' }}"
-                          aria-describedby="{{ field_id }}-help">{{ field.value }}</textarea>
-              {% else %}
-                <input id="{{ field_id }}" name="{{ field.name }}" type="text" value="{{ field.value }}"
-                       spellcheck="false" aria-describedby="{{ field_id }}-help"
-                       {% if field.choices %}list="{{ field_id }}-choices"{% endif %}
-                       {% if field.name == "TELEGRAM_ALLOWED_USERS" %}inputmode="numeric" placeholder="123456789, 987654321"{% endif %}>
-                {% if field.choices %}
-                  <datalist id="{{ field_id }}-choices">
-                    {% for choice in field.choices %}<option value="{{ choice }}">{% endfor %}
-                  </datalist>
-                {% endif %}
-              {% endif %}
-
-              {% if field.error %}<p class="settings-error">{{ field.error }}</p>{% endif %}
-              <small id="{{ field_id }}-help">{{ field.help }}</small>
+          <section class="settings-card" id="users" aria-labelledby="users-heading">
+            <div class="settings-card-head">
+              <h2 id="users-heading">People ({{ users | selectattr("is_active") | list | length }})</h2>
+              <p>Everyone signs in to use the app. Administrators can also change the settings in this section.</p>
             </div>
-          {% endfor %}
-        </section>
-      {% endfor %}
+            <ul class="user-list">
+              {% for user in users if user.is_active %}
+                <li class="user-row">
+                  <div class="user-name">
+                    {{ avatar(user.username, user.avatar, "is-sm") }}
+                    <a href="{{ url_for('feed_profile', username=user.username) }}"><strong>{{ user.username }}</strong></a>
+                    {% if user.is_admin %}<span class="settings-source is-saved">Administrator</span>{% endif %}
+                    {% if user.id == current_user.id %}<span class="settings-source">You</span>{% endif %}
+                    <span class="user-meta">{{ post_counts.get(user.id, 0) }} post{{ "s" if post_counts.get(user.id, 0) != 1 }} · since {{ user.created_at[:10] }}</span>
+                  </div>
+                  <details class="user-manage">
+                    <summary class="button secondary">Manage</summary>
+                    <div class="user-manage-panel">
+                      <form class="user-action" action="{{ url_for('reset_password', user_id=user.id) }}" method="post">
+                        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                        <label class="visually-hidden" for="reset-{{ user.id }}">New password for {{ user.username }}</label>
+                        <input id="reset-{{ user.id }}" name="password" type="password" minlength="8" required
+                               placeholder="New password" autocomplete="new-password">
+                        <button class="secondary" type="submit">Set password</button>
+                      </form>
+                      {% if user.id != current_user.id %}
+                        <form action="{{ url_for('toggle_admin', user_id=user.id) }}" method="post">
+                          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                          <input type="hidden" name="is_admin" value="{{ '0' if user.is_admin else '1' }}">
+                          <button class="secondary" type="submit">{{ "Remove administrator" if user.is_admin else "Make administrator" }}</button>
+                        </form>
+                        <form action="{{ url_for('delete_user', user_id=user.id) }}" method="post"
+                              onsubmit="return confirm('Delete the account {{ user.username }}? Their posts and comments are deleted too.');">
+                          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                          <button class="danger" type="submit">Delete account</button>
+                        </form>
+                      {% endif %}
+                    </div>
+                  </details>
+                </li>
+              {% endfor %}
+            </ul>
+          </section>
 
-      <div class="settings-actions">
-        <button type="submit">Save settings</button>
-        <a class="button secondary" href="{{ url_for('settings_page') }}">Discard changes</a>
-      </div>
-    </form>
-
-    <section class="settings-card" id="users" aria-labelledby="users-heading">
-      <div class="settings-card-head">
-        <h2 id="users-heading">Users</h2>
-        <p>Everyone signs in to use the app. Administrators can also open this page.</p>
-      </div>
-      <ul class="user-list">
-        {% for user in users %}
-          <li class="user-row">
-            <div class="user-name">
-              <strong>{{ user.username }}</strong>
-              {% if user.is_admin %}<span class="settings-source is-saved">Administrator</span>{% endif %}
-              {% if not user.is_active %}<span class="settings-source is-pending">Waiting for approval</span>{% endif %}
-              {% if current_user and user.id == current_user.id %}<span class="settings-source">You</span>{% endif %}
+          <form class="settings-card" action="{{ url_for('add_user') }}" method="post" autocomplete="off">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <div class="settings-card-head">
+              <h2>Add a person</h2>
+              <p>They can sign in right away. Give them the password; they can change it in their own Settings.</p>
             </div>
-            {% if not user.is_active %}
-              <form action="{{ url_for('approve_user', user_id=user.id) }}" method="post">
-                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                <button type="submit">Approve</button>
-              </form>
-            {% endif %}
-            <form class="user-action" action="{{ url_for('reset_password', user_id=user.id) }}" method="post">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-              <label class="visually-hidden" for="reset-{{ user.id }}">New password for {{ user.username }}</label>
-              <input id="reset-{{ user.id }}" name="password" type="password" minlength="8" required
-                     placeholder="New password" autocomplete="new-password">
-              <button class="secondary" type="submit">Set password</button>
-            </form>
-            {% if not current_user or user.id != current_user.id %}
-              <form action="{{ url_for('delete_user', user_id=user.id) }}" method="post"
-                    onsubmit="return confirm('Delete the account {{ user.username }}?');">
-                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                <button class="request-delete" type="submit" title="Delete account" aria-label="Delete {{ user.username }}">✕</button>
-              </form>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ul>
-      <form class="user-add" action="{{ url_for('save_signup_mode') }}" method="post">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <h3>Sign-up page</h3>
-        <div class="user-add-fields">
-          <label class="visually-hidden" for="signup-mode">Who can sign up</label>
-          <select id="signup-mode" name="mode">
-            {% for value, label in signup_modes.items() %}
-              <option value="{{ value }}" {% if signup_mode == value %}selected{% endif %}>{{ label }}</option>
+            <div class="user-add-fields">
+              <label class="visually-hidden" for="new-username">Username</label>
+              <input id="new-username" name="username" type="text" required maxlength="40" placeholder="Username"
+                     autocapitalize="none" spellcheck="false">
+              <label class="visually-hidden" for="new-password">Password</label>
+              <input id="new-password" name="password" type="password" required minlength="8" placeholder="Password (8+ characters)"
+                     autocomplete="new-password">
+              <label class="settings-check"><input type="checkbox" name="is_admin" value="1"> Administrator</label>
+              <button type="submit">Add</button>
+            </div>
+          </form>
+
+          <form class="settings-card" action="{{ url_for('save_signup_mode') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <div class="settings-card-head">
+              <h2>Sign-up page</h2>
+              <p>People sign up at <a href="{{ url_for('register', _external=True) }}">{{ url_for('register', _external=True) }}</a>, linked from the sign-in page.</p>
+            </div>
+            <fieldset class="settings-radios">
+              <legend class="visually-hidden">Who can sign up</legend>
+              {% for value, label in signup_modes.items() %}
+                <label class="settings-radio"><input type="radio" name="mode" value="{{ value }}" {% if signup_mode == value %}checked{% endif %}> {{ label }}</label>
+              {% endfor %}
+            </fieldset>
+            <div class="settings-actions"><button type="submit">Save</button></div>
+          </form>
+
+        {% elif section.key in ("ai", "telegram") %}
+          {# --------------------------------------------- AI and Telegram #}
+          <form class="settings-form" action="{{ url_for('save_settings', section=section.key) }}" method="post" autocomplete="off">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            {% for group in groups %}
+              <section class="settings-card" aria-labelledby="group-{{ loop.index }}">
+                <div class="settings-card-head">
+                  <h2 id="group-{{ loop.index }}">{{ group.title }}</h2>
+                  <p>{{ group.description }}</p>
+                </div>
+                {% if group.status %}
+                  <p class="settings-status is-{{ group.status.state }}" role="status">
+                    <strong>{{ {"running": "Connected", "conflict": "Not connected", "error": "Not connected", "pending": "Connecting", "off": "Off"}[group.status.state] }}</strong>
+                    {{ group.status.message }}
+                  </p>
+                {% endif %}
+
+                {% for field in group.fields %}
+                  {% set field_id = "setting-" ~ field.name|lower %}
+                  <div class="settings-field{% if field.error %} has-error{% endif %}">
+                    <div class="settings-label-row">
+                      <label for="{{ field_id }}">{{ field.label }}</label>
+                      {% if field.source == "saved" %}
+                        <span class="settings-source is-saved">Saved here</span>
+                      {% elif field.source == "environment" %}
+                        <span class="settings-source">From server .env</span>
+                      {% elif field.is_set %}
+                        <span class="settings-source">Default</span>
+                      {% endif %}
+                    </div>
+
+                    {% if field.secret %}
+                      <input id="{{ field_id }}" name="{{ field.name }}" type="password" spellcheck="false"
+                             autocomplete="new-password" aria-describedby="{{ field_id }}-help"
+                             placeholder="{% if field.is_set %}Set {{ field.hint }} · type a new one to replace it{% else %}Not set{% endif %}">
+                      {% if field.source == "saved" %}
+                        <label class="settings-check">
+                          <input type="checkbox" name="clear_{{ field.name }}" value="1">
+                          Remove the saved {{ field.label|lower }}{% if field.has_env %} and use the server .env value{% endif %}
+                        </label>
+                      {% endif %}
+                    {% elif field.options %}
+                      <select id="{{ field_id }}" name="{{ field.name }}" aria-describedby="{{ field_id }}-help">
+                        {% for value, text in field.options %}
+                          <option value="{{ value }}" {% if value == field.value %}selected{% endif %}>{{ text }}</option>
+                        {% endfor %}
+                      </select>
+                    {% elif field.multiline %}
+                      <textarea id="{{ field_id }}" name="{{ field.name }}" rows="{{ field.rows or 4 }}" maxlength="4000"
+                                spellcheck="{{ 'false' if field.name == 'LOCAL_AI_MODELS' else 'true' }}"
+                                aria-describedby="{{ field_id }}-help">{{ field.value }}</textarea>
+                    {% else %}
+                      <input id="{{ field_id }}" name="{{ field.name }}" type="text" value="{{ field.value }}"
+                             spellcheck="false" aria-describedby="{{ field_id }}-help"
+                             {% if field.choices %}list="{{ field_id }}-choices"{% endif %}
+                             {% if field.name == "TELEGRAM_ALLOWED_USERS" %}inputmode="numeric" placeholder="123456789, 987654321"{% endif %}>
+                      {% if field.choices %}
+                        <datalist id="{{ field_id }}-choices">
+                          {% for choice in field.choices %}<option value="{{ choice }}">{% endfor %}
+                        </datalist>
+                      {% endif %}
+                    {% endif %}
+
+                    {% if field.error %}<p class="settings-error">{{ field.error }}</p>{% endif %}
+                    <small id="{{ field_id }}-help">{{ field.help }}</small>
+                  </div>
+                {% endfor %}
+              </section>
             {% endfor %}
-          </select>
-          <button class="secondary" type="submit">Save</button>
-        </div>
-        <small>People sign up at <a href="{{ url_for('register', _external=True) }}">{{ url_for('register', _external=True) }}</a>, linked from the sign-in page.</small>
-      </form>
-      <form class="user-add" action="{{ url_for('add_user') }}" method="post" autocomplete="off">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <h3>Add a person</h3>
-        <div class="user-add-fields">
-          <label class="visually-hidden" for="new-username">Username</label>
-          <input id="new-username" name="username" type="text" required maxlength="40" placeholder="Username"
-                 autocapitalize="none" spellcheck="false">
-          <label class="visually-hidden" for="new-password">Password</label>
-          <input id="new-password" name="password" type="password" required minlength="8" placeholder="Password (8+ characters)"
-                 autocomplete="new-password">
-          <label class="settings-check"><input type="checkbox" name="is_admin" value="1"> Administrator</label>
-          <button type="submit">Add</button>
-        </div>
-      </form>
-    </section>
 
-    <section class="settings-card" aria-labelledby="server-heading">
-      <div class="settings-card-head">
-        <h2 id="server-heading">Server</h2>
-        <p>Set in the server's .env or docker-compose.yml. Changing these needs a restart.</p>
-      </div>
-      <dl class="settings-info">
-        {% for label, value in server %}
-          <div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
-        {% endfor %}
-      </dl>
-    </section>
-  </main>
+            <div class="settings-actions settings-sticky-actions">
+              <button type="submit">Save changes</button>
+              <a class="button secondary" href="{{ url_for('settings_section', section=section.key) }}">Discard changes</a>
+            </div>
+          </form>
+
+        {% elif section.key == "server" %}
+          {# ----------------------------------------------------- server #}
+          <section class="settings-card" aria-labelledby="server-heading">
+            <div class="settings-card-head">
+              <h2 id="server-heading">This server</h2>
+              <p>Set in the server's .env or docker-compose.yml. Changing these needs a restart.</p>
+            </div>
+            <dl class="settings-info">
+              {% for label, value in server %}
+                <div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>
+              {% endfor %}
+            </dl>
+          </section>
+        {% endif %}
+      {% endif %}
+    </main>
+  </div>
+  {% if section and section.key == "account" %}
+    <script>
+      // Show the chosen profile photo before saving.
+      document.getElementById('avatar-input').addEventListener('change', function () {
+        var file = this.files[0];
+        if (!file || !/^image\/(jpeg|png|gif|webp)$/.test(file.type)) return;
+        var img = document.createElement('img');
+        img.className = 'avatar is-xl';
+        img.alt = '';
+        img.src = URL.createObjectURL(file);
+        var holder = document.getElementById('avatar-preview');
+        holder.innerHTML = '';
+        holder.appendChild(img);
+      });
+    </script>
+  {% endif %}
 </body>
 </html>

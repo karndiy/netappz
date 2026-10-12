@@ -45,7 +45,7 @@
       .then(function (data) {
         if (!data) return;
         show(data.unread);
-        data.fresh.slice().reverse().forEach(toast);
+        if (bell.dataset.popups !== '0') data.fresh.slice().reverse().forEach(toast);
         latest = Math.max(latest, data.latest || 0);
       })
       .catch(function () {});

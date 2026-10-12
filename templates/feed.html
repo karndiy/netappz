@@ -1,12 +1,13 @@
+{% from "_avatar.html" import avatar %}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ "Post" if single else "Feed" }} · Network Files</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% if profile %}{{ profile.username }}{% elif single %}Post{% else %}Feed{% endif %} · Network Files</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body class="feed-body-page">
   <header class="topbar">
     <a class="brand" href="{{ url_for('index') }}">Network Files</a>
     <nav class="topbar-nav" aria-label="Main navigation">
@@ -14,243 +15,155 @@
       <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
       <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
       <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
-      {% if current_user.is_admin %}<a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>{% endif %}
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
       <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
       {% include "_account_nav.html" %}
     </nav>
   </header>
-  <main class="container feed-page">
-    {% if single %}
-      <p class="feed-back"><a href="{{ url_for('feed', _anchor='post-' ~ posts[0].id) }}">← All posts</a></p>
-    {% else %}
-      <section class="heading">
-        <div>
-          <h1>Feed</h1>
-          <p class="page-description">Share news, photos and videos with everyone who uses this app. Type @name to mention someone.</p>
-        </div>
-      </section>
-    {% endif %}
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for category, message in messages %}
-        <div class="message {{ category }}">{{ message }}</div>
-      {% endfor %}
-    {% endwith %}
+  <div class="feed-layout">
+    <main class="feed-main">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="message {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endwith %}
 
-    {% if not single and not before %}
-      <form class="feed-composer" id="feed-composer" action="{{ url_for('feed_create') }}" method="post"
-            enctype="multipart/form-data">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <label class="visually-hidden" for="feed-body">What's new?</label>
-        <textarea id="feed-body" name="body" rows="3" maxlength="5000"
-                  placeholder="What's new, {{ current_user.username }}?">{{ form.body if form else '' }}</textarea>
-        <ul class="feed-previews" id="feed-previews" hidden></ul>
-        <div class="feed-composer-bar">
-          <label class="feed-attach">
-            <input id="feed-media" name="media" type="file" multiple accept="{{ accept }},image/*,video/*">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-5 4 4 2.5-2.5L20 17"/></svg>
-            Photo / video
-          </label>
-          <span class="feed-hint">Up to {{ max_files }} files · photos 25 MB · videos 500 MB</span>
-          <button type="submit" id="feed-submit">Post</button>
-        </div>
-        <div class="feed-progress" id="feed-progress" hidden>
-          <div class="feed-progress-bar"><span id="feed-progress-fill"></span></div>
-          <span id="feed-progress-text">Uploading…</span>
-        </div>
-      </form>
-    {% endif %}
-
-    <section class="feed-list" aria-label="Posts">
-      {% for post in posts %}
-        <article class="feed-post" id="post-{{ post.id }}">
-          <header class="feed-post-head">
-            <span class="feed-avatar" aria-hidden="true">{{ post.author[:1] | upper }}</span>
-            <div class="feed-post-who">
-              <strong>{{ post.author }}</strong>
-              <a class="feed-time" href="{{ url_for('feed_post', post_id=post.id) }}">
-                <time datetime="{{ post.created_at | note_iso }}" data-relative>{{ post.created_at | note_short_date }}</time>
-              </a>
-            </div>
-            {% if post.user_id == current_user.id or current_user.is_admin %}
-              <form action="{{ url_for('feed_delete', post_id=post.id) }}" method="post"
-                    onsubmit="return confirm('Delete this post and its photos, videos and comments?');">
-                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                <button class="feed-icon-button" type="submit" title="Delete post" aria-label="Delete post">✕</button>
-              </form>
-            {% endif %}
-          </header>
-          {% if post.body %}<div class="feed-body">{{ post.body | feed_text }}</div>{% endif %}
-          {% if post.media %}
-            <div class="feed-media count-{{ [post.media|length, 4]|min }}">
-              {% for item in post.media %}
-                {% if item.kind == "video" %}
-                  <video src="{{ url_for('feed_media', media_id=item.id) }}" controls playsinline preload="metadata"></video>
+      {% if single %}
+        <p class="feed-back"><a href="{{ url_for('feed', _anchor='post-' ~ posts[0].id) }}">← Back to the feed</a></p>
+      {% elif profile %}
+        <section class="feed-profile">
+          {{ avatar(profile.username, profile.avatar, "is-xl") }}
+          <div class="feed-profile-info">
+            <h1>{{ profile.username }}</h1>
+            <p class="feed-profile-stats"><strong>{{ profile.posts }}</strong> post{{ "s" if profile.posts != 1 }} · <strong>{{ profile.likes }}</strong> like{{ "s" if profile.likes != 1 }}</p>
+            {% if profile.bio %}<p class="feed-profile-bio">{{ profile.bio }}</p>{% endif %}
+            {% if profile.id == current_user.id %}<a class="button secondary" href="{{ url_for('settings_section', section='account') }}">Edit profile</a>{% endif %}
+          </div>
+        </section>
+        {% if posts %}
+          <div class="feed-view-toggle" role="tablist" aria-label="How to show posts">
+            <button type="button" role="tab" aria-selected="true" data-view="grid" title="Grid">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7"/><rect x="13.5" y="3.5" width="7" height="7"/><rect x="3.5" y="13.5" width="7" height="7"/><rect x="13.5" y="13.5" width="7" height="7"/></svg> Grid
+            </button>
+            <button type="button" role="tab" aria-selected="false" data-view="list" title="List">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="7" rx="1"/><rect x="3.5" y="14" width="17" height="6" rx="1"/></svg> Posts
+            </button>
+          </div>
+          <div class="feed-grid" id="feed-grid">
+            {% for post in posts %}
+              {% set first = post.media[0] if post.media else None %}
+              <a class="feed-tile" href="{{ url_for('feed_post', post_id=post.id) }}" aria-label="Post from {{ post.created_at[:10] }}">
+                {% if first and first.kind == "image" %}
+                  <img src="{{ url_for('feed_media', media_id=first.id) }}" alt="" loading="lazy">
+                {% elif first %}
+                  <video src="{{ url_for('feed_media', media_id=first.id) }}#t=0.5" preload="metadata" muted playsinline></video>
+                  <span class="feed-tile-badge">▶</span>
                 {% else %}
-                  <a href="{{ url_for('feed_media', media_id=item.id) }}" target="_blank" rel="noopener">
-                    <img src="{{ url_for('feed_media', media_id=item.id) }}" alt="Photo from {{ post.author }}" loading="lazy">
-                  </a>
+                  <span class="feed-tile-text" style="--hue: {{ post.author | hue }}">{{ post.body[:120] }}</span>
                 {% endif %}
-              {% endfor %}
-            </div>
-          {% endif %}
-
-          <div class="feed-stats">
-            <span class="feed-like-count" {% if not post.likers %}hidden{% endif %}
-                  title="{{ post.likers | join(', ') }}">👍 <span>{{ post.likers | length }}</span></span>
-            {% if post.comments %}<span>{{ post.comments | length }} comment{{ "" if post.comments | length == 1 else "s" }}</span>{% endif %}
-          </div>
-
-          <div class="feed-actions">
-            <form class="feed-like-form" action="{{ url_for('feed_like', post_id=post.id) }}" method="post">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-              {% if single %}<input type="hidden" name="single" value="1">{% endif %}
-              <button class="feed-action{% if post.liked %} is-liked{% endif %}" type="submit" aria-pressed="{{ 'true' if post.liked else 'false' }}">👍 Like</button>
-            </form>
-            <label class="feed-action" for="comment-{{ post.id }}">💬 Comment</label>
-          </div>
-
-          <ul class="feed-comments">
-            {% for comment in post.comments %}
-              <li class="feed-comment" id="comment-row-{{ comment.id }}">
-                <span class="feed-avatar is-small" aria-hidden="true">{{ comment.author[:1] | upper }}</span>
-                <div class="feed-comment-bubble">
-                  <strong>{{ comment.author }}</strong>
-                  <div class="feed-comment-text">{{ comment.body | feed_text }}</div>
-                  <time datetime="{{ comment.created_at | note_iso }}" data-relative>{{ comment.created_at | note_short_date }}</time>
-                </div>
-                {% if comment.user_id == current_user.id or post.user_id == current_user.id or current_user.is_admin %}
-                  <form action="{{ url_for('feed_comment_delete', comment_id=comment.id) }}" method="post"
-                        onsubmit="return confirm('Delete this comment?');">
-                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                    {% if single %}<input type="hidden" name="single" value="1">{% endif %}
-                    <button class="feed-icon-button" type="submit" title="Delete comment" aria-label="Delete comment">✕</button>
-                  </form>
-                {% endif %}
-              </li>
+                {% if post.media | length > 1 %}<span class="feed-tile-badge">❐ {{ post.media | length }}</span>{% endif %}
+                <span class="feed-tile-stats">❤ {{ post.likers | length }} &nbsp; 💬 {{ post.comments | length }}</span>
+              </a>
             {% endfor %}
-          </ul>
-          <form class="feed-comment-form" action="{{ url_for('feed_comment', post_id=post.id) }}" method="post">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-            {% if single %}<input type="hidden" name="single" value="1">{% endif %}
-            <label class="visually-hidden" for="comment-{{ post.id }}">Write a comment</label>
-            <textarea id="comment-{{ post.id }}" name="body" rows="1" maxlength="2000" required placeholder="Write a comment…"></textarea>
-            <button type="submit">Send</button>
-          </form>
-        </article>
+          </div>
+        {% endif %}
       {% else %}
-        <p class="empty feed-empty">{% if before %}No older posts.{% else %}No posts yet. Be the first to share something!{% endif %}</p>
-      {% endfor %}
-    </section>
+        <div class="feed-people-strip" aria-label="Members">
+          {% for person in people %}
+            <a class="feed-person" href="{{ url_for('feed_profile', username=person.username) }}">
+              <span class="feed-ring{% if person.posts %} has-posts{% endif %}">{{ avatar(person.username, person.avatar, "is-lg") }}</span>
+              <span class="feed-person-name">{{ "You" if person.id == current_user.id else person.username }}</span>
+            </a>
+          {% endfor %}
+        </div>
+      {% endif %}
 
-    {% if older or before %}
-      <nav class="feed-more" aria-label="More posts">
-        {% if before %}<a class="button secondary" href="{{ url_for('feed') }}">Newest posts</a>{% endif %}
-        {% if older %}<a class="button secondary" href="{{ url_for('feed', before=older) }}">Older posts</a>{% endif %}
-      </nav>
-    {% endif %}
-  </main>
-  <script>
-    (function () {
-      // Likes without reloading the page.
-      document.querySelectorAll('.feed-like-form').forEach(function (form) {
-        form.addEventListener('submit', function (event) {
-          event.preventDefault();
-          fetch(form.action, { method: 'POST', body: new FormData(form), headers: { 'X-Requested-With': 'fetch' } })
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-              if (data.error) { alert(data.error); return; }
-              var button = form.querySelector('button');
-              button.classList.toggle('is-liked', data.liked);
-              button.setAttribute('aria-pressed', data.liked ? 'true' : 'false');
-              var count = form.closest('.feed-post').querySelector('.feed-like-count');
-              count.querySelector('span').textContent = data.count;
-              count.hidden = !data.count;
-            })
-            .catch(function () { form.submit(); });
-        });
-      });
+      {% if not single and not profile and not before %}
+        <form class="feed-composer" id="feed-composer" action="{{ url_for('feed_create') }}" method="post"
+              enctype="multipart/form-data">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <div class="feed-composer-top">
+            {{ avatar(current_user.username, current_user.avatar) }}
+            <label class="visually-hidden" for="feed-body">What's on your mind?</label>
+            <textarea id="feed-body" name="body" rows="1" maxlength="5000"
+                      placeholder="What's on your mind, {{ current_user.username }}?">{{ form.body if form else '' }}</textarea>
+          </div>
+          <ul class="feed-previews" id="feed-previews" hidden></ul>
+          <div class="feed-drop-hint" id="feed-drop-hint" hidden>Drop photos or videos to add them</div>
+          <div class="feed-composer-bar">
+            <label class="feed-attach">
+              <input id="feed-media" name="media" type="file" multiple accept="{{ accept }},image/*,video/*">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m4 17 5-5 4 4 2.5-2.5L20 17"/></svg>
+              <span>Photo / video</span>
+            </label>
+            <span class="feed-hint" id="feed-hint">Up to {{ max_files }} · photos 25 MB · videos 500 MB</span>
+            <button type="submit" id="feed-submit">Post</button>
+          </div>
+          <div class="feed-progress" id="feed-progress" hidden>
+            <div class="feed-progress-bar"><span id="feed-progress-fill"></span></div>
+            <span id="feed-progress-text">Uploading…</span>
+          </div>
+        </form>
+      {% endif %}
 
-      // Enter sends a comment; Shift+Enter makes a new line. Boxes grow with the text.
-      document.querySelectorAll('.feed-comment-form textarea, #feed-body').forEach(function (box) {
-        function grow() { box.style.height = 'auto'; box.style.height = box.scrollHeight + 2 + 'px'; }
-        box.addEventListener('input', grow);
-        if (box.id !== 'feed-body') {
-          box.addEventListener('keydown', function (event) {
-            if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
-              event.preventDefault();
-              if (box.value.trim()) box.form.requestSubmit ? box.form.requestSubmit() : box.form.submit();
-            }
-          });
-        }
-      });
+      <section class="feed-list{% if profile %} is-profile-list{% endif %}" id="feed-list" aria-label="Posts" {% if profile and posts %}hidden{% endif %}>
+        {% set next_url = url_for("feed", before=older, partial=1) if older and not profile else "" %}
+        {% include "_feed_posts.html" %}
+        {% if not posts %}
+          <div class="feed-empty">
+            <p class="feed-empty-icon" aria-hidden="true">📷</p>
+            <p>{% if before %}No older posts.{% elif profile %}{{ "You haven't" if profile.id == current_user.id else profile.username ~ " hasn't" }} posted anything yet.{% else %}No posts yet. Share the first one!{% endif %}</p>
+          </div>
+        {% endif %}
+      </section>
+      <p class="feed-loading" id="feed-loading" hidden>Loading more posts…</p>
+      {% if profile and (older or before) %}
+        <nav class="feed-more">
+          {% if before %}<a class="button secondary" href="{{ url_for('feed_profile', username=profile.username) }}">Newest posts</a>{% endif %}
+          {% if older %}<a class="button secondary" href="{{ url_for('feed_profile', username=profile.username, before=older) }}">Older posts</a>{% endif %}
+        </nav>
+      {% elif older %}
+        <noscript><nav class="feed-more"><a class="button secondary" href="{{ url_for('feed', before=older) }}">Older posts</a></nav></noscript>
+      {% endif %}
+    </main>
 
-      var composer = document.getElementById('feed-composer');
-      if (!composer) return;
-      var input = document.getElementById('feed-media');
-      var previews = document.getElementById('feed-previews');
-      var urls = [];
-      input.addEventListener('change', function () {
-        urls.forEach(URL.revokeObjectURL);
-        urls = [];
-        previews.innerHTML = '';
-        Array.prototype.forEach.call(input.files, function (file) {
-          var li = document.createElement('li');
-          var isVideo = /^video\//.test(file.type) || /\.(mp4|m4v|mov|webm)$/i.test(file.name);
-          var canShow = isVideo || /^image\/(jpeg|png|gif|webp)$/.test(file.type);
-          if (canShow) {
-            var url = URL.createObjectURL(file);
-            urls.push(url);
-            var el = document.createElement(isVideo ? 'video' : 'img');
-            el.src = url;
-            if (isVideo) el.muted = true; else el.alt = '';
-            li.appendChild(el);
-          } else {
-            li.textContent = file.name;
-            li.className = 'is-name';
-          }
-          previews.appendChild(li);
-        });
-        previews.hidden = !input.files.length;
-      });
+    <aside class="feed-side" aria-label="You and other members">
+      <div class="feed-side-card">
+        <a class="feed-side-me" href="{{ url_for('feed_profile', username=current_user.username) }}">
+          {{ avatar(current_user.username, current_user.avatar, "is-lg") }}
+          <span><strong>{{ current_user.username }}</strong><small>{{ me_stats.posts }} post{{ "s" if me_stats.posts != 1 }} · {{ me_stats.likes }} like{{ "s" if me_stats.likes != 1 }}</small></span>
+        </a>
+        <a class="feed-side-link" href="{{ url_for('settings_section', section='account') }}">Edit profile</a>
+      </div>
+      <div class="feed-side-card">
+        <h2>Members</h2>
+        <ul class="feed-side-people">
+          {% for person in people if person.id != current_user.id %}
+            <li>
+              <a href="{{ url_for('feed_profile', username=person.username) }}">
+                {{ avatar(person.username, person.avatar, "is-sm") }}
+                <span><strong>{{ person.username }}</strong><small>{{ person.posts }} post{{ "s" if person.posts != 1 }}</small></span>
+              </a>
+            </li>
+          {% else %}
+            <li class="feed-side-empty">No one else yet.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </aside>
+  </div>
 
-      // Upload with a progress bar, since videos can be large.
-      composer.addEventListener('submit', function (event) {
-        if (!window.FormData || !window.XMLHttpRequest) return;
-        event.preventDefault();
-        var button = document.getElementById('feed-submit');
-        var progress = document.getElementById('feed-progress');
-        var fill = document.getElementById('feed-progress-fill');
-        var text = document.getElementById('feed-progress-text');
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', composer.action);
-        xhr.setRequestHeader('X-Requested-With', 'fetch');
-        xhr.upload.onprogress = function (e) {
-          if (!e.lengthComputable) return;
-          var pct = Math.round(e.loaded / e.total * 100);
-          fill.style.width = pct + '%';
-          text.textContent = pct < 100 ? 'Uploading… ' + pct + '%' : 'Checking the files…';
-        };
-        xhr.onload = function () {
-          var data = {};
-          try { data = JSON.parse(xhr.responseText); } catch (e) {}
-          if (xhr.status === 200 && data.url) { window.location.href = data.url; window.location.reload(); return; }
-          button.disabled = false;
-          progress.hidden = true;
-          alert(data.error || 'The post could not be sent (error ' + xhr.status + ').');
-        };
-        xhr.onerror = function () {
-          button.disabled = false;
-          progress.hidden = true;
-          alert('The connection was lost while uploading. Try again.');
-        };
-        button.disabled = true;
-        fill.style.width = '0';
-        text.textContent = 'Uploading…';
-        progress.hidden = !input.files.length;
-        xhr.send(new FormData(composer));
-      });
-    })();
-  </script>
+  {% if not single and not profile and not before %}
+    <button class="feed-fab" type="button" id="feed-fab" aria-label="New post">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  {% endif %}
+  <div class="feed-toast" id="feed-toast" role="status" aria-live="polite" hidden></div>
+  <div class="feed-lightbox" id="feed-lightbox" hidden>
+    <button class="feed-lightbox-close" type="button" aria-label="Close">✕</button>
+    <img alt="">
+  </div>
+  <script src="{{ url_for('static', filename='feed.js') }}" defer></script>
 </body>
 </html>

@@ -860,35 +860,37 @@ class FileManagerTests(unittest.TestCase):
         token = self._csrf()
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertEqual(self.client.get("/settings").status_code, 200)
-            response = self.client.post("/settings", data={
+            self.assertEqual(self.client.get("/settings/ai").status_code, 200)
+            response = self.client.post("/settings/ai", data={
                 "_csrf_token": token,
                 "ANTHROPIC_API_KEY": "test-anthropic-key-0123456789WXYZ",
                 "CHAT_MODEL": "claude-sonnet-5-5",
                 "CHAT_EFFORT": "high",
                 "CHAT_INSTRUCTIONS": "Always reply in Thai.",
-                "TELEGRAM_ALLOWED_USERS": "111, 222",
             })
-            self.assertEqual(response.status_code, 302)
+            self.assertEqual(response.status_code, 303)
+            self.client.post("/settings/telegram", data={"_csrf_token": token, "TELEGRAM_ALLOWED_USERS": "111, 222"})
             self.assertEqual(chat.setting("CHAT_MODEL"), "claude-sonnet-5-5")
             self.assertEqual(chat.setting("CHAT_EFFORT"), "high")
             self.assertTrue(chat.is_configured())
             self.assertIn("Always reply in Thai.", chat.system_prompt())
             self.assertEqual(telegram_bot.allowed_users(), {111, 222})
 
-            page = self.client.get("/settings").get_data(as_text=True)
+            page = self.client.get("/settings/ai").get_data(as_text=True)
             self.assertNotIn("test-anthropic-key-0123456789WXYZ", page)
             self.assertIn("…WXYZ", page)
 
             # A blank secret keeps the saved one; defaults are not pinned.
-            self.client.post("/settings", data={
+            self.client.post("/settings/ai", data={
                 "_csrf_token": token, "CHAT_MODEL": "claude-opus-5-5", "CHAT_EFFORT": "high",
             })
+            self.client.post("/settings/telegram", data={"_csrf_token": token, "TELEGRAM_ALLOWED_USERS": ""})
             settings = self.app.extensions["settings"].all()
             self.assertEqual(settings["ANTHROPIC_API_KEY"], "test-anthropic-key-0123456789WXYZ")
             self.assertNotIn("CHAT_MODEL", settings)
             self.assertNotIn("TELEGRAM_ALLOWED_USERS", settings)
 
-            self.client.post("/settings", data={
+            self.client.post("/settings/ai", data={
                 "_csrf_token": token, "CHAT_PROVIDER": "anthropic", "CHAT_EFFORT": "high",
                 "clear_ANTHROPIC_API_KEY": "1",
             })
@@ -897,26 +899,26 @@ class FileManagerTests(unittest.TestCase):
     def test_settings_rejects_invalid_values_without_saving(self):
         token = self._csrf()
         with mock.patch.dict("os.environ", {}, clear=True):
-            response = self.client.post("/settings", data={
+            response = self.client.post("/settings/ai", data={
                 "_csrf_token": token,
                 "CHAT_EFFORT": "extreme",
-                "TELEGRAM_ALLOWED_USERS": "me",
                 "CHAT_MODEL": "claude-haiku-5-5",
             })
             self.assertEqual(response.status_code, 400)
             page = response.get_data(as_text=True)
             self.assertIn("Choose low, medium, or high.", page)
-            self.assertIn("numeric Telegram user IDs", page)
             self.assertIn('value="claude-haiku-5-5"', page)
+            response = self.client.post("/settings/telegram", data={"_csrf_token": token, "TELEGRAM_ALLOWED_USERS": "me"})
+            self.assertIn("numeric Telegram user IDs", response.get_data(as_text=True))
             self.assertEqual(self.app.extensions["settings"].all(), {})
 
             bot_token = "123456:" + "A" * 35
             with mock.patch("app.verify_telegram_token", side_effect=ValueError("Telegram did not accept it.")):
-                response = self.client.post("/settings", data={"_csrf_token": token, "TELEGRAM_BOT_TOKEN": bot_token})
+                response = self.client.post("/settings/telegram", data={"_csrf_token": token, "TELEGRAM_BOT_TOKEN": bot_token})
             self.assertEqual(response.status_code, 400)
             with mock.patch("app.verify_telegram_token", return_value="netappz_bot"):
-                response = self.client.post("/settings", data={"_csrf_token": token, "TELEGRAM_BOT_TOKEN": bot_token})
-            self.assertEqual(response.status_code, 302)
+                response = self.client.post("/settings/telegram", data={"_csrf_token": token, "TELEGRAM_BOT_TOKEN": bot_token})
+            self.assertEqual(response.status_code, 303)
             self.assertEqual(chat.setting("TELEGRAM_BOT_TOKEN"), bot_token)
 
     def test_saved_settings_override_environment(self):
@@ -970,36 +972,36 @@ class FileManagerTests(unittest.TestCase):
 
     def test_settings_validate_local_ai_fields(self):
         token = self._csrf()
-        response = self.client.post("/settings", data={
+        response = self.client.post("/settings/ai", data={
             "_csrf_token": token, "CHAT_PROVIDER": "local", "LOCAL_AI_URL": "ai.example.test",
             "CHAT_EFFORT": "medium",
         })
         self.assertEqual(response.status_code, 400)
         self.assertIn("http:// or https://", response.get_data(as_text=True))
-        response = self.client.post("/settings", data={
+        response = self.client.post("/settings/ai", data={
             "_csrf_token": token, "CHAT_PROVIDER": "local", "LOCAL_AI_URL": chat.DEFAULT_LOCAL_URL,
             "LOCAL_AI_MODEL": chat.DEFAULT_LOCAL_MODEL, "CHAT_EFFORT": "medium",
         })
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 303)
         self.assertEqual(chat.provider(), "local")
         self.assertTrue(chat.is_configured())
         self.assertEqual(chat.assistant_name(), chat.DEFAULT_LOCAL_MODEL)
 
     def test_settings_add_local_model_and_use_it(self):
         token = self._csrf()
-        page = self.client.get("/settings").get_data(as_text=True)
+        page = self.client.get("/settings/ai").get_data(as_text=True)
         self.assertIn('<option value="qwen3/qwen3.8-27b"', page)
-        response = self.client.post("/settings", data={
+        response = self.client.post("/settings/ai", data={
             "_csrf_token": token, "CHAT_EFFORT": "medium", "LOCAL_AI_MODEL": "qwen3/qwen3.8-27b",
             "LOCAL_AI_MODELS": "qwen3/qwen3.6-35b\r\nqwen3/qwen3.8-27b\r\ngemma4:12b\r\n",
         })
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 303)
         self.assertEqual(chat.local_models(), ["qwen3/qwen3.6-35b", "qwen3/qwen3.8-27b", "gemma4:12b"])
         self.assertEqual(chat.assistant_name(), "qwen3/qwen3.8-27b")
-        self.assertIn('<option value="gemma4:12b"', self.client.get("/settings").get_data(as_text=True))
+        self.assertIn('<option value="gemma4:12b"', self.client.get("/settings/ai").get_data(as_text=True))
 
         # The model to use must be in the list.
-        response = self.client.post("/settings", data={
+        response = self.client.post("/settings/ai", data={
             "_csrf_token": token, "CHAT_EFFORT": "medium", "LOCAL_AI_MODEL": "gemma4:12b",
             "LOCAL_AI_MODELS": "qwen3/qwen3.6-35b",
         })
@@ -1009,18 +1011,18 @@ class FileManagerTests(unittest.TestCase):
     def test_settings_show_telegram_bot_status(self):
         settings = self.app.extensions["settings"]
         with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertIn("No bot token is set", self.client.get("/settings").get_data(as_text=True))
+            self.assertIn("No bot token is set", self.client.get("/settings/telegram").get_data(as_text=True))
             settings.save({"TELEGRAM_BOT_TOKEN": "123456:" + "a" * 35})
-            self.assertIn("Waiting for the bot to connect", self.client.get("/settings").get_data(as_text=True))
+            self.assertIn("Waiting for the bot to connect", self.client.get("/settings/telegram").get_data(as_text=True))
 
             error = telegram_bot.urllib.error.HTTPError("url", 409, "Conflict", {}, None)
             telegram_bot.StatusReporter(settings)(*telegram_bot.polling_problem(error))
-            page = self.client.get("/settings").get_data(as_text=True)
+            page = self.client.get("/settings/telegram").get_data(as_text=True)
             self.assertIn("settings-status is-conflict", page)
             self.assertIn("Claude Code Telegram plugin", page)
 
             telegram_bot.StatusReporter(settings)("running", "Connected as @netappz_bot.")
-            self.assertIn("Connected as @netappz_bot.", self.client.get("/settings").get_data(as_text=True))
+            self.assertIn("Connected as @netappz_bot.", self.client.get("/settings/telegram").get_data(as_text=True))
 
     CODE_REPLY = (
         "Here you go:\n\n```python app.py\nprint('hi')\n```\n\n"
@@ -1152,7 +1154,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["Location"], "/notes")
         page = client.get("/").get_data(as_text=True)
-        self.assertIn(">admin</a>", page)  # Name and Log out in the top bar.
+        self.assertIn("<span>admin</span></a>", page)  # Name and Log out in the top bar.
         self.assertIn("Log out", page)
 
         # Links back to another site are ignored after signing in.
@@ -1203,13 +1205,16 @@ class FileManagerTests(unittest.TestCase):
         self.client.post("/settings/users", data={"_csrf_token": token, "username": "somchai", "password": "first-pass"})
         somchai = users.by_name("somchai")
         self.assertFalse(somchai["is_admin"])
-        self.assertIn("somchai", self.client.get("/settings").get_data(as_text=True))
+        self.assertIn("somchai", self.client.get("/settings/users").get_data(as_text=True))
 
         # A regular user can't open Settings, but can change their own password.
         client, token2 = self._fresh_client()
         client.post("/login", data={"_csrf_token": token2, "username": "somchai", "password": "first-pass"})
-        self.assertEqual(client.get("/settings").status_code, 403)
-        self.assertNotIn(">Settings</a>", client.get("/").get_data(as_text=True))
+        self.assertEqual(client.get("/settings/users").status_code, 403)
+        self.assertEqual(client.get("/settings/ai").status_code, 403)
+        page = client.get("/settings").get_data(as_text=True)
+        self.assertIn("Profile &amp; password", page)
+        self.assertNotIn("Administration", page)
         with client.session_transaction() as sess:
             token2 = sess["_csrf_token"]
         response = client.post("/account", data={"_csrf_token": token2, "current": "wrong", "password": "new-pass-1", "confirm": "new-pass-1"})
@@ -1250,7 +1255,7 @@ class FileManagerTests(unittest.TestCase):
         alerts = self.app.extensions["notifications"].for_user(self.admin_id)
         self.assertIn("nok signed up", alerts[0]["message"])
         admin_token = self._csrf()
-        self.assertIn("Waiting for approval", self.client.get("/settings").get_data(as_text=True))
+        self.assertIn("Waiting for approval", self.client.get("/settings/users").get_data(as_text=True))
         self.client.post(f"/settings/users/{users.by_name('nok')['id']}/approve", data={"_csrf_token": admin_token})
         nok, _ = self._client_for("nok")
         self.assertEqual(nok.get("/feed").status_code, 200)
@@ -1305,7 +1310,7 @@ class FileManagerTests(unittest.TestCase):
         post_id = alerts[0]["post_id"]
         response = bee.post(f"/feed/posts/{post_id}/like", data={"_csrf_token": bee_token},
                             headers={"X-Requested-With": "fetch"})
-        self.assertEqual(response.get_json(), {"liked": True, "count": 1})
+        self.assertEqual(response.get_json(), {"liked": True, "count": 1, "likers": ["bee"]})
         bee.post(f"/feed/posts/{post_id}/comments", data={"_csrf_token": bee_token, "body": "Nice <b>photo</b>"})
         page = self.client.get(f"/feed/posts/{post_id}").get_data(as_text=True)
         self.assertIn("Nice &lt;b&gt;photo&lt;/b&gt;", page)
@@ -1331,9 +1336,9 @@ class FileManagerTests(unittest.TestCase):
         # Only the author (or an administrator) deletes a post; its files go with it.
         self.assertEqual(bee.post(f"/feed/posts/{post_id}/delete", data={"_csrf_token": bee_token}).status_code, 403)
         media_dir = Path(self.temp_dir.name) / "feed"
-        self.assertEqual(len(list(media_dir.iterdir())), 2)
+        self.assertEqual(len([f for f in media_dir.iterdir() if f.is_file()]), 2)
         self.client.post(f"/feed/posts/{post_id}/delete", data={"_csrf_token": token})
-        self.assertEqual(list(media_dir.iterdir()), [])
+        self.assertEqual([f for f in media_dir.iterdir() if f.is_file()], [])
         self.assertEqual(notifications.for_user(bee_id), [])
 
     def test_feed_rejects_fake_and_unsupported_files(self):
@@ -1343,10 +1348,72 @@ class FileManagerTests(unittest.TestCase):
                 "_csrf_token": token, "body": "x", "media": [(io.BytesIO(data), name)],
             }, content_type="multipart/form-data", headers={"X-Requested-With": "fetch"})
             self.assertEqual(response.status_code, 400, name)
-        self.assertEqual(list((Path(self.temp_dir.name) / "feed").iterdir()), [])
+        self.assertEqual([f for f in (Path(self.temp_dir.name) / "feed").iterdir() if f.is_file()], [])
         response = self.client.post("/feed/posts", data={"_csrf_token": token, "body": "  "})
         self.assertEqual(response.status_code, 303)
         self.assertEqual(self.app.extensions["feed"].posts(self.admin_id), [])
+
+    def test_profile_photo_notification_choices_and_editing_posts(self):
+        from PIL import Image
+
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        bee_id = users.add("bee", "member-pass")
+        bee, bee_token = self._client_for("bee")
+        token = self._csrf()
+
+        # A profile photo is cropped to a square JPEG and shown on the profile page.
+        photo = io.BytesIO()
+        Image.new("RGB", (300, 200), "green").save(photo, "PNG")
+        response = bee.post("/settings/account/profile", data={
+            "_csrf_token": bee_token, "bio": "  Design   team ", "avatar": (io.BytesIO(photo.getvalue()), "me.png"),
+        }, content_type="multipart/form-data")
+        self.assertEqual(response.status_code, 303)
+        bee_user = users.get(bee_id)
+        self.assertEqual(bee_user["bio"], "Design team")
+        avatar = bee.get(f"/avatars/{bee_user['avatar']}")
+        self.assertEqual(Image.open(io.BytesIO(avatar.data)).size, (320, 320))
+        avatar.close()
+        page = self.client.get("/feed/u/BEE").get_data(as_text=True)
+        self.assertIn("Design team", page)
+        self.assertIn(f"/avatars/{bee_user['avatar']}", page)
+        self.assertEqual(bee.get("/avatars/../app.py").status_code, 404)
+
+        # Bee turns off alerts for new posts but still hears about mentions.
+        bee.post("/settings/notifications", data={
+            "_csrf_token": bee_token, "kind_mention": "1", "kind_comment": "1", "kind_like": "1", "popups": "1"})
+        self.client.post("/feed/posts", data={"_csrf_token": token, "body": "Lunch is here"})
+        self.assertEqual(notifications.for_user(bee_id), [])
+        self.client.post("/feed/posts", data={"_csrf_token": token, "body": "@bee come too"})
+        self.assertEqual([a["kind"] for a in notifications.for_user(bee_id)], ["mention"])
+        self.assertIn("3 of 5 kinds on", bee.get("/settings").get_data(as_text=True))
+
+        # Only the author edits a post; the reply has the new text ready to show.
+        post_id = self.app.extensions["feed"].posts(self.admin_id)[0]["id"]
+        response = bee.post(f"/feed/posts/{post_id}/edit", data={"_csrf_token": bee_token, "body": "hacked"},
+                            headers={"X-Requested-With": "fetch"})
+        self.assertEqual(response.status_code, 400)
+        response = self.client.post(f"/feed/posts/{post_id}/edit", data={"_csrf_token": token, "body": "@bee see https://x.io"},
+                                    headers={"X-Requested-With": "fetch"})
+        self.assertIn('<span class="feed-mention">@bee</span>', response.get_json()["html"])
+
+        # Comments sent from the page come back as HTML; more posts load as you scroll.
+        response = bee.post(f"/feed/posts/{post_id}/comments", data={"_csrf_token": bee_token, "body": "On my way"},
+                            headers={"X-Requested-With": "fetch"})
+        self.assertIn("On my way", response.get_json()["html"])
+        partial = bee.get(f"/feed?before={post_id + 1}&partial=1").get_data(as_text=True)
+        self.assertIn(f'id="post-{post_id}"', partial)
+        self.assertNotIn("<html", partial)
+
+        # Administrators can make someone an administrator, but can't demote themselves.
+        self.client.post(f"/settings/users/{bee_id}/admin", data={"_csrf_token": token, "is_admin": "1"})
+        self.assertTrue(users.get(bee_id)["is_admin"])
+        self.client.post(f"/settings/users/{self.admin_id}/admin", data={"_csrf_token": token, "is_admin": "0"})
+        self.assertTrue(users.get(self.admin_id)["is_admin"])
+
+        # Deleting the account removes the profile photo too.
+        self.client.post(f"/settings/users/{bee_id}/delete", data={"_csrf_token": token})
+        self.assertFalse((Path(self.temp_dir.name) / "feed" / "avatars" / bee_user["avatar"]).exists())
 
 if __name__ == "__main__":
     unittest.main()

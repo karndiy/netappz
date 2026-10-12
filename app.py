@@ -44,6 +44,7 @@ import pdf_word
 # server's environment (.env); clearing it falls back to the environment again.
 SETTING_GROUPS = [
     {
+        "section": "ai",
         "title": "Chat AI",
         "description": "Used by the Chat page and the Telegram bot.",
         "fields": [
@@ -76,6 +77,7 @@ SETTING_GROUPS = [
         ],
     },
     {
+        "section": "ai",
         "title": "Local AI",
         "description": "An OpenAI-compatible server on your network or company, such as Open WebUI, vLLM, LM Studio, or Ollama.",
         "fields": [
@@ -101,6 +103,7 @@ SETTING_GROUPS = [
     },
     {
         "key": "telegram",
+        "section": "telegram",
         "title": "Telegram bot",
         "description": "Chat with the AI from your phone. Changes apply within about a minute.",
         "fields": [
@@ -116,6 +119,30 @@ SETTING_GROUPS = [
     },
 ]
 SETTING_FIELDS = {field["name"]: field for group in SETTING_GROUPS for field in group["fields"]}
+# The Settings page's categories: personal ones for everyone, the rest for administrators.
+SETTINGS_SECTIONS = [
+    {"key": "account", "title": "Profile & password", "icon": "👤", "admin": False,
+     "description": "Your profile photo, a few words about you, and your password."},
+    {"key": "notifications", "title": "Notifications", "icon": "🔔", "admin": False,
+     "description": "Choose what you're told about and whether alerts pop up."},
+    {"key": "users", "title": "Users & sign-up", "icon": "👥", "admin": True,
+     "description": "Add people, approve new accounts, and choose who can sign up."},
+    {"key": "ai", "title": "Chat AI", "icon": "🤖", "admin": True,
+     "description": "The AI that answers on the Chat page and in Telegram."},
+    {"key": "telegram", "title": "Telegram bot", "icon": "✈️", "admin": True,
+     "description": "Chat with the AI from your phone through a Telegram bot."},
+    {"key": "server", "title": "Server", "icon": "🖥️", "admin": True,
+     "description": "Storage, database and version. Changed in the server's files."},
+]
+SECTION_KEYS = {section["key"]: section for section in SETTINGS_SECTIONS}
+# Alerts people can turn off. Sign-up and approval alerts are always sent.
+NOTIFY_KINDS = {
+    "mention": "Someone @mentions you in a post or comment",
+    "comment": "Comments on your posts and on posts you commented on",
+    "like": "Likes on your posts",
+    "post": "New posts from other people",
+    "request": "News about requests on the Update log",
+}
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}")
 LOCAL_URL = re.compile(r"https?://[^\s/]+(/\S*)?")
 USERNAME = re.compile(r"[A-Za-z0-9._@-]{2,40}")
@@ -126,6 +153,22 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.30.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Settings is organised into categories, with a menu on the left (request: tidy up the Settings page). Personal: Profile & password, Notifications. Administration (administrators only): Users & sign-up, Chat AI, Telegram bot, Server.",
+            "Everyone can now open Settings for their own profile, password and notification choices. The overview shows each category's state at a glance, such as accounts waiting for approval or whether Telegram is connected. On phones the overview is the menu.",
+            "Profiles: add a profile photo (cropped to a square, location data removed) and a few words about yourself. Each member has a profile page with their posts in a grid.",
+            "Notification choices: turn off the kinds you don't want (new posts, comments, likes, mentions, requests) and the pop-ups.",
+            "Users: approve sign-ups at the top, make someone an administrator or remove it, and manage each account from one Manage button.",
+            "New Feed design for PC and phones, in the style of Instagram and Facebook (request: new Feed look). Members are on the right on a PC and in a row at the top on phones and tablets.",
+            "Photos swipe sideways with dots and arrows. Double-tap a photo to like it, or tap it to view it full size. Likes show who liked the post.",
+            "The new-post box grows as you write. You can drag photos onto it or paste them, remove a photo before posting, and on phones jump to it with the round + button.",
+            "Comments are sent without reloading the page, with Reply to mention someone. Long posts fold with See more. You can edit your own posts and copy a link to any post. Older posts load as you scroll.",
+            "Fixed the Telegram bot sometimes failing to start after an upgrade, when it and the web app tried to update the database at the same moment.",
+        ],
+    },
     {
         "version": "1.29.0",
         "date": "2026-10-12",
@@ -520,6 +563,11 @@ def create_app(test_config=None):
         timestamp_type = "TEXT"
         timestamp_select = "{0}"
 
+    def lock_schema(connection):
+        """The web app and the Telegram bot start together; on Postgres only one may change tables at a time."""
+        if database_url:
+            connection.execute("SELECT pg_advisory_xact_lock(4207301)")
+
     def table_columns(connection, table):
         if database_url:
             rows = connection.execute(
@@ -539,6 +587,7 @@ def create_app(test_config=None):
         return ", ".join("?" for _ in values)
 
     with notes_connection() as connection:
+        lock_schema(connection)
         connection.execute(
             f"""
             CREATE TABLE IF NOT EXISTS notes (
@@ -603,6 +652,7 @@ def create_app(test_config=None):
                 app.logger.warning("Could not clear the notes cache: %s", error)
 
     with notes_connection() as connection:
+        lock_schema(connection)
         connection.execute(
             f"""
             CREATE TABLE IF NOT EXISTS chat_conversations (
@@ -720,6 +770,7 @@ def create_app(test_config=None):
     app.extensions["chat"] = chat_store
 
     with notes_connection() as connection:
+        lock_schema(connection)
         connection.execute(
             "CREATE TABLE IF NOT EXISTS app_settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
@@ -751,8 +802,12 @@ def create_app(test_config=None):
         )
 
         # Sign-up (1.29.0): accounts made on the sign-up page can wait for an administrator.
-        if "is_active" not in table_columns(connection, "users"):
-            connection.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+        existing = table_columns(connection, "users")
+        # Sign-up (1.29.0) and profiles (1.30.0) added these columns to existing databases.
+        for column, definition in (("is_active", "INTEGER NOT NULL DEFAULT 1"), ("avatar", "TEXT NOT NULL DEFAULT ''"),
+                                   ("bio", "TEXT NOT NULL DEFAULT ''"), ("prefs", "TEXT NOT NULL DEFAULT '{}'")):
+            if column not in existing:
+                connection.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
         connection.execute(
             f"""
             CREATE TABLE IF NOT EXISTS feed_posts (
@@ -896,7 +951,8 @@ def create_app(test_config=None):
     class UserStore:
         """Accounts for signing in. Passwords are stored only as salted hashes."""
 
-        columns = f"id, username, password_hash, is_admin, is_active, {timestamp_select.format('created_at')}"
+        columns = (f"id, username, password_hash, is_admin, is_active, avatar, bio, prefs, "
+                   f"{timestamp_select.format('created_at')}")
 
         def count(self):
             with notes_connection() as connection:
@@ -932,6 +988,18 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 connection.execute(sql("UPDATE users SET is_active = 1 WHERE id = ?"), (user_id,))
 
+        def set_profile(self, user_id, bio, avatar):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE users SET bio = ?, avatar = ? WHERE id = ?"), (bio, avatar, user_id))
+
+        def set_prefs(self, user_id, prefs):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE users SET prefs = ? WHERE id = ?"), (json.dumps(prefs), user_id))
+
+        def set_admin(self, user_id, is_admin):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE users SET is_admin = ? WHERE id = ?"), (1 if is_admin else 0, user_id))
+
         def admin_ids(self):
             return [user["id"] for user in self.all() if user["is_admin"] and user["is_active"]]
 
@@ -944,6 +1012,13 @@ def create_app(test_config=None):
         def delete(self, user_id):
             with notes_connection() as connection:
                 connection.execute(sql("DELETE FROM users WHERE id = ?"), (user_id,))
+
+    def user_prefs(user):
+        try:
+            prefs = json.loads(user.get("prefs") or "{}")
+        except ValueError:
+            prefs = {}
+        return {"mute": [k for k in prefs.get("mute", []) if k in NOTIFY_KINDS], "popups": prefs.get("popups", True)}
 
     class NotificationStore:
         """Alerts for each person (comments, likes, mentions, new members...), read or not yet read."""
@@ -958,6 +1033,13 @@ def create_app(test_config=None):
             targets = sorted({uid for uid in user_ids if uid and uid != actor_id})
             if not targets:
                 return
+            if kind in NOTIFY_KINDS:  # Leave out people who turned this kind off.
+                with notes_connection() as connection:
+                    rows = connection.execute(
+                        sql(f"SELECT id, prefs FROM users WHERE id IN ({placeholders(targets)})"), targets
+                    ).fetchall()
+                muted = {row["id"] for row in rows if kind in user_prefs(dict(row))["mute"]}
+                targets = [uid for uid in targets if uid not in muted]
             with notes_connection() as connection:
                 for user_id in targets:
                     connection.execute(
@@ -1036,16 +1118,19 @@ def create_app(test_config=None):
         """Posts with text, photos and videos that members share, with likes and comments."""
 
         post_columns = (
-            "feed_posts.id, feed_posts.user_id, feed_posts.body, users.username AS author, "
+            "feed_posts.id, feed_posts.user_id, feed_posts.body, users.username AS author, users.avatar AS author_avatar, "
             f"{time_as('feed_posts.created_at')}"
         )
 
-        def posts(self, viewer_id, before_id=None, post_id=None, limit=15):
+        def posts(self, viewer_id, before_id=None, post_id=None, user_id=None, limit=15):
             where, params = [], []
+            if user_id is not None:
+                where.append("feed_posts.user_id = ?")
+                params.append(user_id)
             if post_id is not None:
                 where.append("feed_posts.id = ?")
                 params.append(post_id)
-            elif before_id:
+            if before_id:
                 where.append("feed_posts.id < ?")
                 params.append(before_id)
             with notes_connection() as connection:
@@ -1077,7 +1162,7 @@ def create_app(test_config=None):
                 comment_time = time_as("feed_comments.created_at")
                 comments = connection.execute(
                     sql(f"SELECT feed_comments.id, feed_comments.post_id, feed_comments.user_id, feed_comments.body, "
-                        f"users.username AS author, {comment_time} FROM feed_comments "
+                        f"users.username AS author, users.avatar AS author_avatar, {comment_time} FROM feed_comments "
                         f"JOIN users ON users.id = feed_comments.user_id WHERE feed_comments.post_id IN ({marks}) "
                         "ORDER BY feed_comments.id"), ids
                 ).fetchall()
@@ -1113,6 +1198,25 @@ def create_app(test_config=None):
                         (post_id, kind, stored, mime, position),
                     )
             return post_id
+
+        def edit_post(self, post_id, body):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE feed_posts SET body = ? WHERE id = ?"), (body, post_id))
+
+        def stats(self, user_id):
+            """Posts and likes received, for a profile."""
+            with notes_connection() as connection:
+                posts = connection.execute(
+                    sql("SELECT COUNT(*) AS n FROM feed_posts WHERE user_id = ?"), (user_id,)).fetchone()["n"]
+                likes = connection.execute(
+                    sql("SELECT COUNT(*) AS n FROM feed_likes JOIN feed_posts ON feed_posts.id = feed_likes.post_id "
+                        "WHERE feed_posts.user_id = ?"), (user_id,)).fetchone()["n"]
+            return {"posts": posts, "likes": likes}
+
+        def post_counts(self):
+            with notes_connection() as connection:
+                rows = connection.execute("SELECT user_id, COUNT(*) AS n FROM feed_posts GROUP BY user_id").fetchall()
+            return {row["user_id"]: row["n"] for row in rows}
 
         def media(self, media_id):
             with notes_connection() as connection:
@@ -1297,7 +1401,8 @@ def create_app(test_config=None):
         if user:
             try:
                 alerts = {"unread_alerts": notification_store.unread_count(user["id"]),
-                          "latest_alert": notification_store.latest_id(user["id"])}
+                          "latest_alert": notification_store.latest_id(user["id"]),
+                          "alert_popups": user_prefs(user)["popups"]}
             except Exception:  # The top bar must never break a page.
                 app.logger.exception("Could not count notifications")
         return {"current_user": user, **alerts}
@@ -1412,7 +1517,7 @@ def create_app(test_config=None):
                 notification_store.add(
                     user_store.admin_ids(), user_id, "signup",
                     f"{username} signed up." + ("" if active else " Approve or remove the account on Settings."),
-                    url_for("settings_page", _anchor="users"),
+                    url_for("settings_section", section="users"),
                 )
                 if active:
                     sign_in(user_store.get(user_id))
@@ -1432,6 +1537,8 @@ def create_app(test_config=None):
     @app.route("/account", methods=["GET", "POST"])
     def account():
         error = None
+        if request.method == "GET":
+            return redirect(url_for("settings_section", section="account"))
         if request.method == "POST":
             if not check_password_hash(g.user["password_hash"], request.form.get("current", "")):
                 error = "Your current password is not right."
@@ -1441,8 +1548,8 @@ def create_app(test_config=None):
             if not error:
                 user_store.set_password(g.user["id"], request.form["password"])
                 flash("Your password was changed.", "success")
-                return redirect(url_for("account"), code=303)
-        return render_template("auth.html", mode="account", error=error), (400 if error else 200)
+                return redirect(url_for("settings_section", section="account", _anchor="password"), code=303)
+        return render_settings("account", 400, password_error=error, **section_context("account"))
 
     @app.post("/settings/users")
     def add_user():
@@ -1456,7 +1563,7 @@ def create_app(test_config=None):
             user_store.add(username, password, is_admin=bool(request.form.get("is_admin")))
             flash(f"Added {username}. Give them their password; they can change it under their name at the top.",
                   "success")
-        return redirect(url_for("settings_page", _anchor="users"), code=303)
+        return redirect(url_for("settings_section", section="users"), code=303)
 
     @app.post("/settings/users/<int:user_id>/password")
     def reset_password(user_id):
@@ -1470,7 +1577,7 @@ def create_app(test_config=None):
         else:
             user_store.set_password(user_id, password)
             flash(f"New password set for {user['username']}.", "success")
-        return redirect(url_for("settings_page", _anchor="users"), code=303)
+        return redirect(url_for("settings_section", section="users"), code=303)
 
     @app.post("/settings/users/<int:user_id>/approve")
     def approve_user(user_id):
@@ -1483,7 +1590,24 @@ def create_app(test_config=None):
             notification_store.add([user_id], g.user["id"], "approved",
                                    "Your account was approved. Welcome!", url_for("feed"))
             flash(f"Approved {user['username']}. They can sign in now.", "success")
-        return redirect(url_for("settings_page", _anchor="users"), code=303)
+        return redirect(url_for("settings_section", section="users"), code=303)
+
+    @app.post("/settings/users/<int:user_id>/admin")
+    def toggle_admin(user_id):
+        admin_required()
+        user = user_store.get(user_id)
+        make_admin = request.form.get("is_admin") == "1"
+        if user is None:
+            flash("That account no longer exists.", "error")
+        elif not make_admin and user["id"] == g.user["id"]:
+            flash("You can't remove your own administrator rights. Ask another administrator.", "error")
+        elif make_admin and not user["is_active"]:
+            flash("Approve the account first.", "error")
+        else:
+            user_store.set_admin(user_id, make_admin)
+            flash(f"{user['username']} is {'now an administrator' if make_admin else 'no longer an administrator'}.",
+                  "success")
+        return redirect(url_for("settings_section", section="users"), code=303)
 
     @app.post("/settings/signup")
     def save_signup_mode():
@@ -1494,7 +1618,7 @@ def create_app(test_config=None):
         else:
             settings_store.save({"SIGNUP_MODE": mode})
             flash("Sign-up setting saved.", "success")
-        return redirect(url_for("settings_page", _anchor="users"), code=303)
+        return redirect(url_for("settings_section", section="users"), code=303)
 
     @app.post("/settings/users/<int:user_id>/delete")
     def delete_user(user_id):
@@ -1509,9 +1633,10 @@ def create_app(test_config=None):
             flash("Keep at least one administrator.", "error")
         else:
             feed_store.delete_user_content(user_id)
+            remove_avatar(user["avatar"])
             user_store.delete(user_id)
             flash(f"Deleted {user['username']}.", "success")
-        return redirect(url_for("settings_page", _anchor="users"), code=303)
+        return redirect(url_for("settings_section", section="users"), code=303)
 
     @app.before_request
     def validate_csrf():
@@ -1720,6 +1845,64 @@ def create_app(test_config=None):
             Path(temp.name).with_suffix(".jpg").unlink(missing_ok=True)
             raise
 
+    avatar_dir = feed_media_dir / "avatars"
+    avatar_dir.mkdir(exist_ok=True)
+    AVATAR_NAME = re.compile(r"[0-9a-f]{32}\.jpg")
+
+    def save_avatar(upload):
+        """Crop a profile photo to a 320 px square JPEG (no location data kept); return its file name."""
+        from PIL import Image, ImageOps, UnidentifiedImageError
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+        data = upload.read(FEED_MAX_IMAGE + 1)
+        if len(data) > FEED_MAX_IMAGE:
+            raise ValueError("Profile photos can be up to 25 MB.")
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image = ImageOps.exif_transpose(image).convert("RGB")
+                image = ImageOps.fit(image, (320, 320), Image.LANCZOS)
+        except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError):
+            raise ValueError("That file is not a photo the server can read. Try a JPG or PNG.")
+        name = f"{secrets.token_hex(16)}.jpg"
+        image.save(avatar_dir / name, "JPEG", quality=88)
+        return name
+
+    def remove_avatar(name):
+        if name and AVATAR_NAME.fullmatch(name):
+            (avatar_dir / name).unlink(missing_ok=True)
+
+    @app.get("/avatars/<name>")
+    def avatar_image(name):
+        if not AVATAR_NAME.fullmatch(name) or not (avatar_dir / name).is_file():
+            abort(404)
+        # Each new photo gets a new name, so browsers can keep this one for good.
+        response = send_file(avatar_dir / name, mimetype="image/jpeg", max_age=365 * 24 * 3600)
+        response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        return response
+
+    @app.template_filter("hue")
+    def name_hue(name):
+        """A steady colour for someone's initial when they have no profile photo."""
+        return sum(ord(char) * (index + 7) for index, char in enumerate(name or "?")) % 360
+
+    def feed_people():
+        counts = feed_store.post_counts()
+        people = [{**user, "posts": counts.get(user["id"], 0)} for user in user_store.all() if user["is_active"]]
+        return sorted(people, key=lambda person: (person["id"] != g.user["id"], -person["posts"],
+                                                  person["username"].lower()))
+
+    def feed_render(posts, **context):
+        context.setdefault("single", False)
+        context.setdefault("profile", None)
+        context.setdefault("before", None)
+        context.setdefault("older", None)
+        return render_template(
+            "feed.html", posts=posts, people=feed_people(), me_stats=feed_store.stats(g.user["id"]),
+            max_files=FEED_MAX_FILES, accept=",".join([*FEED_IMAGES, *FEED_VIDEOS]),
+            form=session.pop("feed_form", None), **context,
+        )
+
     def feed_back(post_id=None, single=False):
         if single and post_id:
             return redirect(url_for("feed_post", post_id=post_id), code=303)
@@ -1732,10 +1915,26 @@ def create_app(test_config=None):
     def feed():
         before = request.args.get("before", type=int)
         posts = feed_store.posts(g.user["id"], before_id=before)
-        return render_template("feed.html", posts=posts, single=False, before=before,
-                               older=posts[-1]["id"] if len(posts) == 15 else None,
-                               max_files=FEED_MAX_FILES, accept=",".join([*FEED_IMAGES, *FEED_VIDEOS]),
-                               form=session.pop("feed_form", None))
+        older = posts[-1]["id"] if len(posts) == 15 else None
+        if request.args.get("partial"):  # Infinite scroll asks for just the next posts.
+            return render_template("_feed_posts.html", posts=posts, single=False, older=older,
+                                   next_url=url_for("feed", before=older, partial=1) if older else "")
+        return feed_render(posts, before=before, older=older)
+
+    @app.get("/feed/u/<username>")
+    def feed_profile(username):
+        person = user_store.by_name(username)
+        if person is None or not person["is_active"]:
+            flash("There's no member with that name.", "error")
+            return redirect(url_for("feed"), code=303)
+        before = request.args.get("before", type=int)
+        posts = feed_store.posts(g.user["id"], before_id=before, user_id=person["id"], limit=30)
+        older = posts[-1]["id"] if len(posts) == 30 else None
+        if request.args.get("partial"):
+            return render_template("_feed_posts.html", posts=posts, single=False, older=older,
+                                   next_url=url_for("feed_profile", username=person["username"], before=older,
+                                                    partial=1) if older else "")
+        return feed_render(posts, profile={**person, **feed_store.stats(person["id"])}, before=before, older=older)
 
     @app.get("/feed/posts/<int:post_id>")
     def feed_post(post_id):
@@ -1744,8 +1943,32 @@ def create_app(test_config=None):
             flash("That post was deleted.", "error")
             return redirect(url_for("feed"), code=303)
         notification_store.read_for_post(g.user["id"], post_id)
-        return render_template("feed.html", posts=posts, single=True, before=None, older=None,
-                               max_files=FEED_MAX_FILES, accept="", form=None)
+        return feed_render(posts, single=True)
+
+    @app.post("/feed/posts/<int:post_id>/edit")
+    def feed_edit(post_id):
+        post = feed_store.post(post_id)
+        wants_json = request.headers.get("X-Requested-With") == "fetch"
+        body = request.form.get("body", "").strip().replace("\r\n", "\n")
+        error = None
+        if post is None:
+            error = "That post was deleted."
+        elif post["user_id"] != g.user["id"]:
+            error = "You can only edit your own posts."
+        elif len(body) > FEED_POST_LIMIT:
+            error = f"Posts can be at most {FEED_POST_LIMIT:,} characters."
+        elif not body and not feed_store.posts(g.user["id"], post_id=post_id)[0]["media"]:
+            error = "A post without photos or videos needs some text."
+        if error:
+            if wants_json:
+                return jsonify(error=error), 400
+            flash(error, "error")
+            return redirect(url_for("feed"), code=303)
+        feed_store.edit_post(post_id, body)
+        if wants_json:
+            return jsonify(html=str(feed_text(body)) if body else "")
+        flash("Post updated.", "success")
+        return feed_back(post_id, request.form.get("single") == "1")
 
     @app.post("/feed/posts")
     def feed_create():
@@ -1818,7 +2041,8 @@ def create_app(test_config=None):
                                                                              if post["body"] else "."),
                                    url_for("feed_post", post_id=post_id), post_id)
         if wants_json:
-            return jsonify(liked=liked, count=feed_store.like_count(post_id))
+            likers = feed_store.posts(g.user["id"], post_id=post_id)[0]["likers"]
+            return jsonify(liked=liked, count=len(likers), likers=likers)
         return feed_back(post_id, request.form.get("single") == "1")
 
     @app.post("/feed/posts/<int:post_id>/comments")
@@ -1826,27 +2050,35 @@ def create_app(test_config=None):
         post = feed_store.post(post_id)
         body = request.form.get("body", "").strip().replace("\r\n", "\n")
         single = request.form.get("single") == "1"
+        wants_json = request.headers.get("X-Requested-With") == "fetch"
+        error = None
         if post is None:
-            flash("That post was deleted.", "error")
-            return redirect(url_for("feed"), code=303)
-        if not body:
-            flash("Write a comment first.", "error")
+            error = "That post was deleted."
+        elif not body:
+            error = "Write a comment first."
         elif len(body) > FEED_COMMENT_LIMIT:
-            flash(f"Comments can be at most {FEED_COMMENT_LIMIT:,} characters.", "error")
-        else:
-            feed_store.add_comment(post_id, g.user["id"], body)
-            name, link = g.user["username"], url_for("feed_post", post_id=post_id)
-            mentioned = mentioned_ids(body)
-            notification_store.add(mentioned, g.user["id"], "mention",
-                                   f"{name} mentioned you in a comment: “{snippet(body)}”", link, post_id)
-            notification_store.add([post["user_id"]] if post["user_id"] not in mentioned else [], g.user["id"],
-                                   "comment", f"{name} commented on your post: “{snippet(body)}”", link, post_id)
-            others = [uid for uid in feed_store.commenter_ids(post_id)
-                      if uid != post["user_id"] and uid not in mentioned]
-            notification_store.add(others, g.user["id"], "comment",
-                                   f"{name} also commented on "
-                                   f"{'their' if post['user_id'] == g.user['id'] else post['author'] + chr(39) + 's'}"
-                                   f" post: “{snippet(body)}”", link, post_id)
+            error = f"Comments can be at most {FEED_COMMENT_LIMIT:,} characters."
+        if error:
+            if wants_json:
+                return jsonify(error=error), 400
+            flash(error, "error")
+            return feed_back(post_id if post else None, single and post is not None)
+
+        comment_id = feed_store.add_comment(post_id, g.user["id"], body)
+        name, link = g.user["username"], url_for("feed_post", post_id=post_id)
+        mentioned = mentioned_ids(body)
+        notification_store.add(mentioned, g.user["id"], "mention",
+                               f"{name} mentioned you in a comment: “{snippet(body)}”", link, post_id)
+        notification_store.add([post["user_id"]] if post["user_id"] not in mentioned else [], g.user["id"],
+                               "comment", f"{name} commented on your post: “{snippet(body)}”", link, post_id)
+        whose = "their" if post["user_id"] == g.user["id"] else f"{post['author']}'s"
+        others = [uid for uid in feed_store.commenter_ids(post_id) if uid != post["user_id"] and uid not in mentioned]
+        notification_store.add(others, g.user["id"], "comment",
+                               f"{name} also commented on {whose} post: “{snippet(body)}”", link, post_id)
+        if wants_json:
+            comment = next(c for c in feed_store.posts(g.user["id"], post_id=post_id)[0]["comments"]
+                           if c["id"] == comment_id)
+            return jsonify(html=render_template("_feed_comment.html", comment=comment, post=post, single=single))
         return feed_back(post_id, single)
 
     @app.post("/feed/comments/<int:comment_id>/delete")
@@ -2289,10 +2521,12 @@ def create_app(test_config=None):
             status["message"] += " (last checked over a day ago)"
         return status
 
-    def settings_view(values=None, errors=None):
+    def settings_view(values=None, errors=None, section=None):
         saved = settings_store.all()
         groups = []
         for group in SETTING_GROUPS:
+            if section and group["section"] != section:
+                continue
             fields = []
             for field in group["fields"]:
                 name = field["name"]
@@ -2326,11 +2560,15 @@ def create_app(test_config=None):
             groups.append({**group, **extra, "fields": fields})
         return groups
 
-    def read_settings_form():
-        """Return ({name: value or None}, {name: error}) from the posted settings form."""
+    def section_fields(section):
+        return {field["name"]: field for group in SETTING_GROUPS if group["section"] == section
+                for field in group["fields"]}
+
+    def read_settings_form(fields):
+        """Return ({name: value or None}, {name: error}) for these fields from the posted settings form."""
         saved = settings_store.all()
         changes, errors = {}, {}
-        for name, field in SETTING_FIELDS.items():
+        for name, field in fields.items():
             if field.get("secret"):
                 if request.form.get(f"clear_{name}"):
                     changes[name] = None
@@ -2389,6 +2627,7 @@ def create_app(test_config=None):
     def server_info():
         # Changing these needs a restart, so they are shown but not editable.
         return [
+            ("App version", APP_VERSION),
             ("Shared files folder", str(root)),
             ("Feed photos and videos folder", str(feed_media_dir)),
             ("Notes and chat database", "PostgreSQL" if database_url else "SQLite"),
@@ -2397,24 +2636,108 @@ def create_app(test_config=None):
             ("Largest upload", "5 GB"),
         ]
 
+    def settings_summary():
+        """One line per category for the Settings overview."""
+        users = user_store.all()
+        waiting = sum(1 for user in users if not user["is_active"])
+        prefs = user_prefs(g.user)
+        summary = {
+            "account": "Profile photo set" if g.user["avatar"] else "No profile photo yet",
+            "notifications": (f"{len(NOTIFY_KINDS) - len(prefs['mute'])} of {len(NOTIFY_KINDS)} kinds on"
+                              + ("" if prefs["popups"] else " · pop-ups off")),
+        }
+        if g.user["is_admin"]:
+            summary.update({
+                "users": f"{len(users)} account{'s' if len(users) != 1 else ''}"
+                         + (f" · {waiting} waiting for approval" if waiting else ""),
+                "ai": f"{'Local AI' if chat.provider() == 'local' else 'Claude'} · {chat.assistant_name()}"
+                      if chat.is_configured() else "Not set up yet",
+                "telegram": {"running": "Connected", "off": "Off", "pending": "Connecting"}.get(
+                    telegram_status(settings_store.all())["state"], "Not connected"),
+                "server": f"Version {APP_VERSION}",
+            })
+        return summary, waiting
+
+    def render_settings(section, status=200, **context):
+        sections = [item for item in SETTINGS_SECTIONS if g.user["is_admin"] or not item["admin"]]
+        summary, waiting = settings_summary()
+        return render_template(
+            "settings.html", section=SECTION_KEYS.get(section), sections=sections, summary=summary,
+            waiting=waiting, **context,
+        ), status
+
+    def section_context(section, values=None, errors=None):
+        if section in ("ai", "telegram"):
+            return {"groups": settings_view(values, errors, section)}
+        if section == "users":
+            return {"users": user_store.all(), "signup_mode": signup_mode(), "signup_modes": SIGNUP_MODES,
+                    "post_counts": feed_store.post_counts()}
+        if section == "server":
+            return {"server": server_info()}
+        if section == "notifications":
+            return {"prefs": user_prefs(g.user), "kinds": NOTIFY_KINDS}
+        if section == "account":
+            return {"stats": feed_store.stats(g.user["id"])}
+        return {}
+
     @app.get("/settings")
     def settings_page():
-        admin_required()
-        return render_template("settings.html", groups=settings_view(), server=server_info(), users=user_store.all(),
-                               signup_mode=signup_mode(), signup_modes=SIGNUP_MODES)
+        """The overview: one card per category. On phones it is the menu."""
+        return render_settings(None)
 
-    @app.post("/settings")
-    def save_settings():
+    @app.get("/settings/<section>")
+    def settings_section(section):
+        if section not in SECTION_KEYS:
+            abort(404)
+        if SECTION_KEYS[section]["admin"]:
+            admin_required()
+        return render_settings(section, **section_context(section))
+
+    @app.post("/settings/<section>")
+    def save_settings(section):
+        if section not in ("ai", "telegram"):
+            abort(404)
         admin_required()
-        changes, errors = read_settings_form()
+        fields = section_fields(section)
+        changes, errors = read_settings_form(fields)
         if errors:
             flash("Nothing was saved. Fix the highlighted settings and try again.", "error")
-            values = {name: request.form.get(name, "") for name, field in SETTING_FIELDS.items() if not field.get("secret")}
-            return render_template("settings.html", groups=settings_view(values, errors), server=server_info(),
-                                   users=user_store.all(), signup_mode=signup_mode(), signup_modes=SIGNUP_MODES), 400
+            values = {name: request.form.get(name, "") for name, field in fields.items() if not field.get("secret")}
+            return render_settings(section, 400, **section_context(section, values, errors))
         settings_store.save(changes)
         flash("Settings saved.", "success")
-        return redirect(url_for("settings_page"))
+        return redirect(url_for("settings_section", section=section), code=303)
+
+    @app.post("/settings/notifications")
+    def save_notification_prefs():
+        prefs = {"mute": [kind for kind in NOTIFY_KINDS if not request.form.get(f"kind_{kind}")],
+                 "popups": bool(request.form.get("popups"))}
+        user_store.set_prefs(g.user["id"], prefs)
+        flash("Notification choices saved.", "success")
+        return redirect(url_for("settings_section", section="notifications"), code=303)
+
+    @app.post("/settings/account/profile")
+    def save_profile():
+        bio = " ".join(request.form.get("bio", "").split())
+        if len(bio) > 160:
+            flash("Keep the few words about you under 160 characters.", "error")
+            return redirect(url_for("settings_section", section="account"), code=303)
+        avatar = g.user["avatar"]
+        upload = request.files.get("avatar")
+        if upload and upload.filename:
+            try:
+                new_avatar = save_avatar(upload)
+            except ValueError as error:
+                flash(str(error), "error")
+                return redirect(url_for("settings_section", section="account"), code=303)
+            remove_avatar(avatar)
+            avatar = new_avatar
+        elif request.form.get("remove_avatar"):
+            remove_avatar(avatar)
+            avatar = ""
+        user_store.set_profile(g.user["id"], bio, avatar)
+        flash("Profile saved.", "success")
+        return redirect(url_for("settings_section", section="account"), code=303)
 
     @app.get("/convert")
     def convert_page():

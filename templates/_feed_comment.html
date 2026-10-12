@@ -1,0 +1,21 @@
+{% from "_avatar.html" import avatar %}
+<li class="feed-comment" id="comment-row-{{ comment.id }}">
+  <a href="{{ url_for('feed_profile', username=comment.author) }}" tabindex="-1">{{ avatar(comment.author, comment.author_avatar, "is-sm") }}</a>
+  <div class="feed-comment-main">
+    <div class="feed-comment-bubble">
+      <a class="feed-name" href="{{ url_for('feed_profile', username=comment.author) }}">{{ comment.author }}</a>
+      <div class="feed-comment-text">{{ comment.body | feed_text }}</div>
+    </div>
+    <div class="feed-comment-meta">
+      <time datetime="{{ comment.created_at | note_iso }}" data-relative>{{ comment.created_at | note_short_date }}</time>
+      <button class="feed-link-button" type="button" data-reply="{{ comment.author }}">Reply</button>
+      {% if comment.user_id == current_user.id or post.user_id == current_user.id or current_user.is_admin %}
+        <form action="{{ url_for('feed_comment_delete', comment_id=comment.id) }}" method="post" data-confirm="Delete this comment?">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          {% if single %}<input type="hidden" name="single" value="1">{% endif %}
+          <button class="feed-link-button" type="submit">Delete</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</li>
