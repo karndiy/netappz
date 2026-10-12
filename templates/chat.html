@@ -83,8 +83,11 @@
         {% if not configured %}
           <div class="chat-notice error">
             <strong>Chat is not set up yet.</strong>
-            Add <code>ANTHROPIC_API_KEY=…</code> to the <code>.env</code> file next to <code>docker-compose.yml</code>,
-            then run <code>docker-compose up -d</code>.
+            {% if provider == "local" %}
+              Add the Local AI server address on the <a href="{{ url_for('settings_page') }}">Settings page</a>.
+            {% else %}
+              Add an Anthropic API key on the <a href="{{ url_for('settings_page') }}">Settings page</a>, or choose Local AI there.
+            {% endif %}
           </div>
         {% endif %}
         <div class="chat-thread" id="chat-thread">
@@ -104,7 +107,7 @@
       <form class="chat-composer" id="chat-form" action="{{ url_for('chat_send') }}" method="post">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="conversation_id" value="{{ selected.id if selected else '' }}">
-        <textarea name="message" rows="1" maxlength="20000" placeholder="Message Claude…" aria-label="Message"
+        <textarea name="message" rows="1" maxlength="20000" placeholder="Message {{ assistant }}…" aria-label="Message"
                   enterkeyhint="send" required {% if not configured %}disabled{% endif %}></textarea>
         <button class="chat-send" type="submit" title="Send" aria-label="Send" {% if not configured %}disabled{% endif %}>
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4M5 9l5-5 5 5"/></svg>

@@ -1,4 +1,4 @@
-"""Telegram bot that lets allowed users chat with Claude from anywhere.
+"""Telegram bot that lets allowed users chat with the AI from anywhere.
 
 It uses long polling: the bot connects out to Telegram, so the server needs no
 public address or open ports. Conversations are shared with the web chat page.
@@ -83,7 +83,7 @@ def handle(telegram, store, message, allowed):
     if command == "/start":
         telegram.send(
             chat_id,
-            "Hi! Send me a message to chat with Claude.\n\n"
+            "Hi! Send me a message to chat with the AI.\n\n"
             "This chat is shared with the Chat page in Network Files.\n"
             "/new starts a new conversation.",
         )

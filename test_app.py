@@ -815,6 +815,57 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(messages[-1]["role"], "system")
         self.assertEqual(chat.to_api_messages([{"role": "user", "content": "hi"}]), [{"role": "user", "content": "hi"}])
 
+    def test_think_filter_drops_reasoning_split_across_chunks(self):
+        think = chat.ThinkFilter()
+        chunks = ["<thi", "nk>plan the", " answer</th", "ink>\n\nHel", "lo <", "b>there</b>"]
+        text = "".join(think.feed(chunk) for chunk in chunks) + think.flush()
+        self.assertEqual(text, "Hello <b>there</b>")
+
+    def test_local_provider_streams_openai_compatible_reply(self):
+        self.app.extensions["settings"].save({
+            "CHAT_PROVIDER": "local", "LOCAL_AI_URL": "https://ai.example.test/api/v1/",
+            "LOCAL_AI_API_KEY": "sk-local-123",
+        })
+        events = [
+            {"choices": [{"delta": {"content": "<think>hmm</think>สวัส"}}]},
+            {"choices": [{"delta": {"content": "ดี"}, "finish_reason": "stop"}]},
+        ]
+        body = [f"data: {json.dumps(e)}\n".encode() for e in events] + [b"data: [DONE]\n"]
+
+        class Response(list):
+            headers = {"Content-Type": "text/event-stream"}
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+
+        with mock.patch("urllib.request.urlopen", return_value=Response(body)) as urlopen:
+            reply = chat.complete_reply([{"role": "user", "content": "hi"}], for_telegram=True)
+        self.assertEqual(reply, "สวัสดี")
+        request = urlopen.call_args[0][0]
+        self.assertEqual(request.full_url, "https://ai.example.test/api/v1/chat/completions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer sk-local-123")
+        sent = json.loads(request.data)
+        self.assertEqual(sent["model"], chat.DEFAULT_LOCAL_MODEL)
+        self.assertEqual(sent["messages"][0]["role"], "system")
+        self.assertIn("Telegram", sent["messages"][0]["content"])
+        self.assertEqual(sent["messages"][-1], {"role": "user", "content": "hi"})
+
+    def test_settings_validate_local_ai_fields(self):
+        token = self._csrf()
+        response = self.client.post("/settings", data={
+            "_csrf_token": token, "CHAT_PROVIDER": "local", "LOCAL_AI_URL": "ai.example.test",
+            "CHAT_EFFORT": "medium",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("http:// or https://", response.get_data(as_text=True))
+        response = self.client.post("/settings", data={
+            "_csrf_token": token, "CHAT_PROVIDER": "local", "LOCAL_AI_URL": chat.DEFAULT_LOCAL_URL,
+            "LOCAL_AI_MODEL": chat.DEFAULT_LOCAL_MODEL, "CHAT_EFFORT": "medium",
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(chat.provider(), "local")
+        self.assertTrue(chat.is_configured())
+        self.assertEqual(chat.assistant_name(), chat.DEFAULT_LOCAL_MODEL)
+
 
 if __name__ == "__main__":
     unittest.main()

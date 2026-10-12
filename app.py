@@ -40,9 +40,17 @@ import pdf_word
 # server's environment (.env); clearing it falls back to the environment again.
 SETTING_GROUPS = [
     {
-        "title": "Chat with Claude",
+        "title": "Chat AI",
         "description": "Used by the Chat page and the Telegram bot.",
         "fields": [
+            {
+                "name": "CHAT_PROVIDER", "label": "AI provider", "default": chat.DEFAULT_PROVIDER,
+                "options": [
+                    ("anthropic", "Claude (Anthropic API)"),
+                    ("local", "Local AI (OpenAI-compatible server)"),
+                ],
+                "help": "Claude uses the Anthropic settings below; Local AI uses the Local AI settings.",
+            },
             {
                 "name": "ANTHROPIC_API_KEY", "label": "Anthropic API key", "secret": True,
                 "help": "Create one at platform.claude.com/settings/keys. Usage is billed to this key.",
@@ -55,7 +63,7 @@ SETTING_GROUPS = [
             {
                 "name": "CHAT_EFFORT", "label": "Effort", "default": chat.DEFAULT_EFFORT,
                 "options": [("low", "Low: fastest"), ("medium", "Medium: balanced"), ("high", "High: most thorough")],
-                "help": "How hard Claude thinks before replying.",
+                "help": "How hard Claude thinks before replying. Claude only.",
             },
             {
                 "name": "CHAT_INSTRUCTIONS", "label": "Extra instructions", "multiline": True,
@@ -64,8 +72,27 @@ SETTING_GROUPS = [
         ],
     },
     {
+        "title": "Local AI",
+        "description": "An OpenAI-compatible server on your network or company, such as Open WebUI, vLLM, LM Studio, or Ollama.",
+        "fields": [
+            {
+                "name": "LOCAL_AI_URL", "label": "API base URL", "default": chat.DEFAULT_LOCAL_URL,
+                "help": "The address that ends before /chat/completions. Open WebUI: https://<server>/api/v1",
+            },
+            {
+                "name": "LOCAL_AI_API_KEY", "label": "API key", "secret": True,
+                "help": "Open WebUI: Settings → Account → API keys. Leave empty if the server needs no key.",
+            },
+            {
+                "name": "LOCAL_AI_MODEL", "label": "Model", "default": chat.DEFAULT_LOCAL_MODEL,
+                "choices": [chat.DEFAULT_LOCAL_MODEL],
+                "help": "The model ID as the server lists it.",
+            },
+        ],
+    },
+    {
         "title": "Telegram bot",
-        "description": "Chat with Claude from your phone. Changes apply within about a minute.",
+        "description": "Chat with the AI from your phone. Changes apply within about a minute.",
         "fields": [
             {
                 "name": "TELEGRAM_BOT_TOKEN", "label": "Bot token", "secret": True,
@@ -80,6 +107,7 @@ SETTING_GROUPS = [
 ]
 SETTING_FIELDS = {field["name"]: field for group in SETTING_GROUPS for field in group["fields"]}
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@\[\]-]{0,99}")
+LOCAL_URL = re.compile(r"https?://[^\s/]+(/\S*)?")
 TELEGRAM_TOKEN = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
 TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
@@ -445,6 +473,16 @@ def create_app(test_config=None):
     @app.get("/updates")
     def updates():
         entries = [
+            {
+                "version": "1.18.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "Chat and the Telegram bot can now use a local AI instead of Claude: pick the AI provider on the Settings page.",
+                    "Local AI works with any OpenAI-compatible server (Open WebUI, vLLM, LM Studio, Ollama). It starts set to https://ai.esm-solution.com/api/v1 with the qwen3/qwen3.6-35b model.",
+                    "Set the server address, API key, and model on the Settings page; changes apply right away.",
+                    "Replies stream in as they are written, and the model's hidden thinking (<think>) is left out of the reply.",
+                ],
+            },
             {
                 "version": "1.17.0",
                 "date": "2026-10-09",
@@ -890,6 +928,8 @@ def create_app(test_config=None):
             selected=selected,
             messages=chat_store.messages(selected["id"]) if selected else [],
             configured=chat.is_configured(),
+            provider=chat.provider(),
+            assistant=chat.assistant_name(),
             telegram_enabled=bool(chat.setting("TELEGRAM_BOT_TOKEN")),
             # On phones the conversation replaces the list only when one was explicitly opened.
             explicit=conversation_id is not None or starting_new,
@@ -924,7 +964,7 @@ def create_app(test_config=None):
                 return
             except Exception:
                 app.logger.exception("Chat reply failed")
-                yield line({"type": "error", "error": "Something went wrong while Claude was replying."})
+                yield line({"type": "error", "error": "Something went wrong while the AI was replying."})
                 return
             message_id = chat_store.add(conversation_id, "assistant", reply, "web") if reply else None
             yield line({"type": "done", "message_id": message_id})
@@ -1004,10 +1044,16 @@ def create_app(test_config=None):
                     changes[name] = "" if fallback else None
                     continue
 
-            if name == "CHAT_MODEL" and not MODEL_ID.fullmatch(value):
+            if name in ("CHAT_MODEL", "LOCAL_AI_MODEL") and not MODEL_ID.fullmatch(value):
                 errors[name] = "Enter a model ID such as claude-opus-5-5."
             elif name == "CHAT_EFFORT" and value not in {key for key, _ in field["options"]}:
                 errors[name] = "Choose low, medium, or high."
+            elif name == "CHAT_PROVIDER" and value not in {key for key, _ in field["options"]}:
+                errors[name] = "Choose Claude or Local AI."
+            elif name == "LOCAL_AI_URL" and not LOCAL_URL.fullmatch(value):
+                errors[name] = "Enter an address that starts with http:// or https://."
+            elif name == "LOCAL_AI_API_KEY" and any(c.isspace() for c in value):
+                errors[name] = "API keys can't contain spaces."
             elif name == "CHAT_INSTRUCTIONS" and len(value) > 4000:
                 errors[name] = "Keep instructions under 4,000 characters."
             elif name == "TELEGRAM_ALLOWED_USERS" and not TELEGRAM_USERS.fullmatch(value):
