@@ -26,6 +26,18 @@ RUN printf '%s\n' \
         tesseract-ocr tesseract-ocr-tha tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
+# Tesseract's "best" Thai and English models read scans far more accurately than the
+# small ones Debian ships. Pinned to the 4.1.0 release and checked by SHA-256.
+RUN mkdir -p /usr/share/tesseract-ocr/best \
+    && cp -r /usr/share/tesseract-ocr/4.00/tessdata/configs /usr/share/tesseract-ocr/best/ \
+    && python -c "import hashlib, urllib.request; \
+url = 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/4.1.0/{}.traineddata'; \
+want = {'tha': 'ee8adab6dc69eb8df3d3c8307ae8295471b7bd7d86a06d9267aa8f479b064eac', \
+        'eng': '8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba'}; \
+[(lambda data: (hashlib.sha256(data).hexdigest() == sha or exit(f'{lang}: bad checksum')) \
+    and open(f'/usr/share/tesseract-ocr/best/{lang}.traineddata', 'wb').write(data)) \
+  (urllib.request.urlopen(url.format(lang), timeout=120).read()) for lang, sha in want.items()]"
+
 # Word documents name Windows Thai fonts; map them to the matching TLWG fonts
 # (Laksaman is TH Sarabun) so LibreOffice lays Thai text out the same way.
 COPY fonts-thai-aliases.conf /etc/fonts/conf.d/60-thai-aliases.conf

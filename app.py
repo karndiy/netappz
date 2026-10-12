@@ -525,6 +525,18 @@ def create_app(test_config=None):
     def updates():
         entries = [
             {
+                "version": "1.25.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "Much more accurate PDF to Word for scanned Thai documents: a scanned driving licence form went from about 62% to 96% of characters right.",
+                    "Thai tone marks and upper vowels are no longer lost (เรียน, ชั่วคราว, อื่น ๆ come out whole), and the junk lines they used to leave are gone.",
+                    "Dotted fill-in lines on forms are no longer read as long strings of numbers; they come back as dotted lines you can type on.",
+                    "Tick boxes and circles on forms come back as ☐ and ○.",
+                    "Words standing alone between fill-in lines (such as สัญชาติ) are found, and English inside Thai text stays correct.",
+                    "Uses Tesseract's most accurate Thai and English models.",
+                ],
+            },
+            {
                 "version": "1.24.0",
                 "date": "2026-10-12",
                 "changes": [

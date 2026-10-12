@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -604,6 +605,46 @@ class FileManagerTests(unittest.TestCase):
         ratio = difflib.SequenceMatcher(None, expected.replace(" ", ""), text.replace(" ", "").replace("\n", "")).ratio()
         self.assertGreater(ratio, 0.9, text)
         self.assertIn("Document Management System", text)
+
+    @unittest.skipUnless(Path(THAI_FONTS, "Laksaman.ttf").exists(), "TLWG Thai fonts not installed")
+    def test_scanned_thai_form_keeps_marks_fill_lines_and_tick_boxes(self):
+        import docx
+        import pymupdf
+
+        # A scanned government-style form: fill-in dots, tick boxes, circles, and Thai
+        # with tone marks above the letters.
+        document = pymupdf.open()
+        page = document.new_page()
+        page.insert_htmlbox(
+            pymupdf.Rect(90, 60, 560, 400),
+            "<p>เรียน นายทะเบียน</p>"
+            f"<p>ข้าพเจ้า{'.' * 50}สัญชาติ{'.' * 20}</p>"
+            "<p>ขอรับใบอนุญาต</p>"
+            "<p>รถยนต์ส่วนบุคคลชั่วคราว</p>",
+            css="* { font-family: sans-serif; font-size: 16px; } p { margin: 0 0 14px; }",
+        )
+        # Lines 3 and 4 start with a circle and a tick box.
+        page.draw_circle((78, 142), 5, width=0.8)
+        page.draw_rect(pymupdf.Rect(73, 169, 83, 179), width=0.8)
+        picture = page.get_pixmap(dpi=300, colorspace=pymupdf.csGRAY)
+        scan = pymupdf.open()
+        scan.new_page().insert_image(pymupdf.Rect(0, 0, 595, 842), pixmap=picture)
+        data = scan.tobytes()
+
+        response = self.client.post(
+            "/convert/pdf2word",
+            data={"_csrf_token": self._csrf(), "files": (io.BytesIO(data), "form.pdf"), "ocr": "on"},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        text = "\n".join(p.text for p in docx.Document(io.BytesIO(response.data)).paragraphs)
+        response.close()
+        for word in ("เรียน", "นายทะเบียน", "ข้าพเจ้า", "สัญชาติ", "ขอรับใบอนุญาต", "ชั่วคราว"):
+            self.assertIn(word, text.replace(" ", ""))
+        self.assertIsNone(re.search(r"\d{5,}", text), text)  # Dots are not read as digits...
+        self.assertIn(".....", text)  # ...they come back as a fill line.
+        self.assertIn("\u2610", text)
+        self.assertIn("\u25cb", text)
 
     @unittest.skipUnless(shutil.which("soffice") or shutil.which("libreoffice"), "LibreOffice not installed")
     def test_word_to_pdf_uses_libreoffice(self):

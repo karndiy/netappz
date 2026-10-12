@@ -279,12 +279,24 @@ def ocr_available():
 
 # ------------------------------------------------------------------ OCR
 
-def _ocr_words(image_path, langs):
-    """Run Tesseract and return its words in reading order."""
+# Tesseract's "best" models read Thai far better than the small ones Debian ships;
+# the Docker image installs them here (see Dockerfile).
+BEST_TESSDATA = Path("/usr/share/tesseract-ocr/best")
+
+
+def _ocr_words(image_path, langs, psm=3, best=False):
+    """Run Tesseract and return its words in reading order.
+
+    image_path may be a .txt file listing several images: Tesseract then loads its
+    model once for all of them, and each word's "image" says which one it came from.
+    """
+    command = ["tesseract", str(image_path), "stdout", "-l", langs, "--oem", "1", "--psm", str(psm),
+               "--dpi", str(OCR_DPI), "-c", "preserve_interword_spaces=1"]
+    if best and (BEST_TESSDATA / "tha.traineddata").exists():
+        command += ["--tessdata-dir", str(BEST_TESSDATA)]
     result = subprocess.run(
-        ["tesseract", str(image_path), "stdout", "-l", langs, "--oem", "1", "--psm", "3", "--dpi", str(OCR_DPI),
-         "-c", "preserve_interword_spaces=1", "tsv"],
-        capture_output=True, text=True, timeout=300,
+        command + ["tsv"],
+        capture_output=True, text=True, timeout=600,
         # One thread per Tesseract: several threads fight over the CPU and run ~8x slower.
         env={"OMP_THREAD_LIMIT": "1", "PATH": "/usr/bin:/bin:/usr/local/bin"},
     )
@@ -300,11 +312,83 @@ def _ocr_words(image_path, langs):
         except ValueError:
             conf = 0.0
         words.append({
+            "image": int(parts[1]) - 1,
             "line": (int(parts[2]), int(parts[3]), int(parts[4])),
             "left": int(parts[6]), "top": int(parts[7]), "width": int(parts[8]), "height": int(parts[9]),
             "conf": conf, "text": parts[11].strip(),
         })
     return words
+
+
+def _clean_scan(image_path):
+    """Remove what OCR misreads on forms, and remember it to put back as text.
+
+    Dotted fill-in lines turn into strings of digits, table rules into letters, and
+    tick boxes into stray characters. They are erased from a cleaned copy of the page
+    before OCR; their positions come back as fill tokens ("....") and ☐ / ○ marks.
+    Returns (path to read, extra tokens).
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return image_path, []
+    gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+    _, ink = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    clean = ink.copy()
+    # Long straight rules: table borders, boxes, underlines.
+    for size in ((80, 1), (1, 80)):
+        rules = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, size))
+        clean[cv2.dilate(rules, np.ones((3, 3), np.uint8)) > 0] = 0
+
+    tokens = []
+    count, labels, stats, centers = cv2.connectedComponentsWithStats(clean, 8)
+    # Dotted lines: 5 or more dot-sized blobs on one baseline, close together.
+    dots = sorted(
+        (i for i in range(1, count) if stats[i, 2] <= 10 and stats[i, 3] <= 10 and stats[i, 4] <= 60),
+        key=lambda i: (int(centers[i][1] // 6), centers[i][0]),
+    )
+    rows = {}
+    for i in dots:
+        rows.setdefault(int(centers[i][1] // 6), []).append(i)
+    used = set()
+    erase = np.zeros(count, bool)
+    for key in sorted(rows):
+        run = []
+        for i in sorted((i for i in rows[key] + rows.get(key + 1, []) if i not in used), key=lambda i: centers[i][0]):
+            if run and (centers[i][0] - centers[run[-1]][0] > 30 or abs(centers[i][1] - centers[run[-1]][1]) > 5):
+                run = run if len(run) >= 5 else []
+                if run:
+                    used.update(run)
+                    tokens.append(("fill", run))
+                run = []
+            run.append(i)
+        if len(run) >= 5:
+            used.update(run)
+            tokens.append(("fill", run))
+    extras = []
+    for _, run in tokens:
+        erase[run] = True
+        left = min(stats[i, 0] for i in run)
+        right = max(stats[i, 0] + stats[i, 2] for i in run)
+        top = min(stats[i, 1] for i in run)
+        bottom = max(stats[i, 1] + stats[i, 3] for i in run)
+        extras.append({"kind": "fill", "left": left, "top": top, "width": right - left, "height": bottom - top})
+    # Tick boxes and circles: hollow, about a letter tall, as wide as tall.
+    for i in range(1, count):
+        x, y, w, h, area = stats[i]
+        if erase[i] or not (24 <= w <= 50 and 24 <= h <= 50 and 0.85 <= w / h <= 1.18):
+            continue
+        middle = clean[y + h // 4: y + 3 * h // 4, x + w // 4: x + 3 * w // 4]
+        if area / (w * h) < 0.45 and middle.mean() < 20:
+            square = clean[y:y + h // 5, x:x + w // 5].mean() > 60  # Ink in the corner: a box, not a circle.
+            erase[i] = True
+            extras.append({"kind": "box", "text": "\u2610" if square else "\u25cb",
+                           "left": x, "top": y, "width": w, "height": h})
+    clean[erase[labels]] = 0
+    path = image_path.with_name(image_path.stem + "-clean.png")
+    cv2.imwrite(str(path), 255 - clean)
+    return path, extras
 
 
 LATIN_WORD = re.compile(r"[\x21-\x7e\u2018\u2019\u201c\u201d\u2013\u2014]*[A-Za-z0-9][\x21-\x7e\u2018\u2019\u201c\u201d\u2013\u2014]*")
@@ -323,6 +407,18 @@ def _merge_english(line, english):
         middle = word["top"] + word["height"] / 2
         if word["conf"] >= 85 and top <= middle <= bottom and LATIN_WORD.fullmatch(word["text"]):
             candidates.append(word)
+    def covered(english_word):
+        return [w for w in line if english_word["left"] <= w["left"] + w["width"] / 2 <= english_word["left"] + english_word["width"]]
+
+    def trusted(english_word):
+        # Numbers and real words win. One or two letters over confident Thai are usually
+        # the English pass turning Thai letters into look-alikes ("a", "ly", "WA").
+        if re.search(r"\d", english_word["text"]) or len(re.findall(r"[A-Za-z]", english_word["text"])) >= 3:
+            return True
+        under = covered(english_word)
+        return not any(THAI.search(w["text"]) for w in under) or statistics.mean(w["conf"] for w in under) < 60
+
+    candidates = [e for e in candidates if trusted(e)]
     tokens = []
     used = set()
     for word in line:
@@ -369,7 +465,11 @@ def _line_text(tokens, unit):
     text = ""
     right = None
     for token in tokens:
-        piece = normalize_thai(token["text"])
+        if token.get("kind") == "fill":
+            # Dots about as long as the original line: a "." is roughly 0.27 em wide.
+            piece = "." * max(3, round(token["width"] / (unit / 0.61 * 0.27)))
+        else:
+            piece = normalize_thai(token["text"])
         if right is not None and not MARKS.match(piece):  # Never a space before a vowel or tone mark.
             gap = token["left"] - right
             thai_before, thai_after = THAI.search(text[-1:]), THAI.search(piece[:1])
@@ -402,34 +502,237 @@ def _ink(image, words):
     return dark / total if total else 0
 
 
+def _box(words):
+    return (min(w["left"] for w in words), min(w["top"] for w in words),
+            max(w["left"] + w["width"] for w in words), max(w["top"] + w["height"] for w in words))
+
+
+def _reread_lines(image_path, words):
+    """Fix Thai lines that lost their tone marks; returns [(top, bottom, words)] in reading order.
+
+    On a page, Tesseract often puts the row of vowels and tone marks above a Thai line
+    into a "line" of its own: that row reads as junk and the real line loses its marks
+    (เรียน comes out as เรยน). Those rows are merged back into the line they belong to,
+    and each line is read again on its own (one text line per image), which keeps the
+    marks with their letters.
+    """
+    from PIL import Image
+
+    grouped = {}
+    for word in words:
+        grouped.setdefault(word["line"], []).append(word)
+    lines = []
+    for key, items in grouped.items():  # Tesseract's reading order.
+        left, top, right, bottom = _box(items)
+        lines.append({"key": key, "words": items, "left": left, "top": top, "right": right, "bottom": bottom,
+                      "height": statistics.median(w["height"] for w in items),
+                      "chars": sum(len(w["text"]) for w in items),
+                      "conf": statistics.mean(w["conf"] for w in items)})
+    if not lines:
+        return []
+    # Tesseract returns whole words for clean prints but single glyphs for many scans, so count characters.
+    typical = statistics.median(l["height"] for l in lines if l["chars"] >= 5) if any(
+        l["chars"] >= 5 for l in lines) else statistics.median(l["height"] for l in lines)
+    spacing = statistics.median(l["bottom"] - l["top"] for l in lines)
+
+    def real(line):
+        # Rows of marks have short glyph boxes and read as unsure junk; a real line with
+        # fill-in dots can be unsure too, but its letters are full height.
+        return line["height"] >= typical * 0.8 and line["conf"] >= 55 and line["chars"] >= 3
+
+    kept = [line for line in lines if real(line)]
+    for line in lines:
+        if real(line):
+            continue
+        near = None
+        for other in kept:
+            if not real(other) or min(other["right"], line["right"]) <= max(other["left"], line["left"]):
+                continue
+            # Overlapping it, just above it (upper marks), or just below it (lower marks).
+            gap = max(other["top"] - line["bottom"], line["top"] - other["bottom"])
+            if gap < spacing * 0.5 and (near is None or gap < near[0]):
+                near = (gap, other)
+        if near:
+            other = near[1]
+            other["top"], other["bottom"] = min(other["top"], line["top"]), max(other["bottom"], line["bottom"])
+        else:
+            kept.append(line)  # A short line on its own, such as a label.
+    kept.sort(key=lambda line: line["key"])
+
+    # Read every line again, one line per image, in one Tesseract run per CPU.
+    page = Image.open(image_path)
+    ink = page.convert("L").point(lambda v: 255 if v < 128 else 0)
+    pad = 10
+    reach = int(typical * 2.5)  # Letters further than this from the line belong to something else.
+    for line in kept:
+        # Tesseract sometimes misses the first or last letters; take in ink that continues the line.
+        band = ink.crop((0, line["top"], page.width, line["bottom"]))
+        columns = [x for x, value in enumerate(band.resize((page.width, 1), Image.BOX).getdata()) if value]
+        for x in reversed([c for c in columns if c < line["left"]]):
+            if line["left"] - x > reach:
+                break
+            line["left"] = x
+        for x in [c for c in columns if c > line["right"]]:
+            if x - line["right"] > reach:
+                break
+            line["right"] = x
+    _add_missed_ink(image_path, kept, typical, reach)
+    # Lines that now overlap are one line read in pieces; read it once.
+    merged = []
+    for line in kept:
+        same = next((m for m in merged if min(m["right"], line["right"]) > max(m["left"], line["left"])
+                     and min(m["bottom"], line["bottom"]) - max(m["top"], line["top"])
+                     > min(m["bottom"] - m["top"], line["bottom"] - line["top"]) * 0.5), None)
+        if same:
+            for side, pick in (("left", min), ("top", min), ("right", max), ("bottom", max)):
+                same[side] = pick(same[side], line[side])
+            same["words"] = same["words"] + line["words"]
+            same["conf"] = statistics.mean(w["conf"] for w in same["words"])
+        else:
+            merged.append(line)
+    kept = merged
+    crops = []
+    for number, line in enumerate(kept):
+        origin = (max(0, line["left"] - pad), max(0, line["top"] - pad))
+        crop = page.crop((*origin, min(page.width, line["right"] + pad), min(page.height, line["bottom"] + pad)))
+        path = image_path.with_name(f"{image_path.stem}-line{number:03d}.png")
+        crop.save(path)
+        crops.append((path, origin))
+    halves = [list(range(len(crops)))[i::2] for i in range(2)]
+
+    def read(indexes):
+        if not indexes:
+            return []
+        listing = image_path.with_name(f"{image_path.stem}-lines{indexes[0] % 2}.txt")
+        listing.write_text("".join(f"{crops[i][0]}\n" for i in indexes))
+        found = _ocr_words(listing, "tha+eng", psm=7, best=True)
+        for word in found:
+            word["image"] = indexes[word["image"]]
+        return found
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        again = [word for part in pool.map(read, halves) for word in part]
+    by_line = {}
+    for word in again:
+        x, y = crops[word["image"]][1]
+        word["left"] += x
+        word["top"] += y
+        by_line.setdefault(word["image"], []).append(word)
+
+    result = []
+    for number, line in enumerate(kept):
+        new = by_line.get(number, [])
+        # Keep the first reading when the second is clearly less sure, which happens when
+        # a line crop catches pieces of its neighbours.
+        if new and statistics.mean(w["conf"] for w in new) >= line["conf"] - 5:
+            chosen = new
+        else:
+            chosen = line["words"]
+        if not chosen:
+            continue
+        # Leftover rows of marks and specks (stamps, emblems) read as unsure junk.
+        if statistics.mean(w["conf"] for w in chosen) < 70:
+            continue
+        result.append((line["top"], line["bottom"], chosen))
+    return result
+
+
+def _add_missed_ink(image_path, lines, typical, reach):
+    """Tesseract's page layout sometimes skips a word standing alone, such as "สัญชาติ"
+    between two erased fill-in lines. Find letter-sized ink outside every line and add it:
+    to the line on the same row, or as a line of its own."""
+    try:
+        import cv2
+    except ImportError:
+        return
+    gray = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+    _, ink = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY_INV)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    pad = typical * 0.3
+    loose = []
+    for i in range(1, count):
+        x, y, w, h, _ = stats[i]
+        if h < typical * 0.5 or h > typical * 3 or w > typical * 6:
+            continue  # Specks, marks, pictures, rules.
+        cx, cy = x + w / 2, y + h / 2
+        if any(l["left"] - pad <= cx <= l["right"] + pad and l["top"] - pad <= cy <= l["bottom"] + pad for l in lines):
+            continue
+        loose.append((x, y, x + w, y + h))
+    # Group into runs of letters: same row, close together.
+    groups = []
+    for box in sorted(loose):
+        group = next((g for g in groups if box[0] - g[2] < reach
+                      and min(g[3], box[3]) - max(g[1], box[1]) > min(g[3] - g[1], box[3] - box[1]) * 0.5), None)
+        if group:
+            group[:] = [min(group[0], box[0]), min(group[1], box[1]), max(group[2], box[2]), max(group[3], box[3])]
+        else:
+            groups.append(list(box))
+    for left, top, right, bottom in groups:
+        if right - left < typical * 0.8:
+            continue  # A single stray blob.
+        row = next((l for l in lines if min(l["bottom"], bottom) - max(l["top"], top) > (bottom - top) * 0.5), None)
+        if row:
+            row["left"], row["right"] = min(row["left"], left), max(row["right"], right)
+            row["top"], row["bottom"] = min(row["top"], top), max(row["bottom"], bottom)
+        else:
+            above = [l for l in lines if l["top"] <= top]
+            key = (max(above, key=lambda l: l["top"])["key"] if above else (0,)) + (1,)
+            lines.append({"key": key, "words": [], "left": left, "top": top, "right": right, "bottom": bottom,
+                          "conf": 0.0, "height": bottom - top, "chars": 0})
+    lines.sort(key=lambda line: line["key"])
+
+
+def _place_extras(lines, extras):
+    """Add fill lines and tick boxes to the text line they sit on (or drop them)."""
+    for extra in extras:
+        middle = extra["top"] + extra["height"] / 2
+        best = None
+        for index, (top, bottom, words) in enumerate(lines):
+            height = bottom - top
+            if not (top - height * 0.2 <= middle <= bottom + height * 0.3):
+                continue
+            left, _, right, _ = _box(words)
+            distance = max(left - (extra["left"] + extra["width"]), extra["left"] - right, 0)
+            if best is None or distance < best[0]:
+                best = (distance, index)
+        if best:
+            lines[best[1]][2].append({**extra, "conf": 100, "text": extra.get("text", "")})
+
+
 def _ocr_page(image_path):
     from PIL import Image
 
-    thai = _ocr_words(image_path, "tha+eng")
-    english = _ocr_words(image_path, "eng") if thai else []
-    grouped = {}
-    for word in thai:
-        if re.fullmatch(r"[|\[\]]+", word["text"]):
-            continue  # Table borders read as characters.
-        grouped.setdefault(word["line"], []).append(word)
+    clean_path, extras = _clean_scan(image_path)
+    found = _ocr_words(clean_path, "tha+eng")
+    english = _ocr_words(clean_path, "eng") if found else []
+    found = [w for w in found if not re.fullmatch(r"[|\[\]]+", w["text"])]  # Table borders read as characters.
+    text_lines = _reread_lines(clean_path, found)
+    _place_extras(text_lines, extras)
     image = Image.open(image_path).convert("L")
 
     lines = []
-    for key, words in grouped.items():  # Tesseract's reading order.
-        unit = _unit(words)
-        tokens = _merge_english(words, english)
+    for _, _, words in text_lines:
+        letters = [w for w in words if "kind" not in w]
+        if not letters:
+            continue
+        unit = _unit(letters)
+        # Keep Tesseract's order for the letters: Thai vowel and tone mark boxes overlap
+        # their neighbours, so sorting by position would scramble them.
+        tokens = _merge_english(letters, english)
+        for extra in sorted((w for w in words if "kind" in w), key=lambda w: w["left"]):
+            at = next((i for i, t in enumerate(tokens) if t["left"] >= extra["left"]), len(tokens))
+            tokens.insert(at, extra)
         first = tokens[0]
+        left, top, right, bottom = _box(words)
         lines.append({
             "text": _line_text(tokens, unit),
             # Width of the first word: Thai comes a glyph at a time, so assume a short word.
-            "first_width": first["width"] if LATIN_WORD.fullmatch(first["text"]) else unit * 3,
-            "left": min(w["left"] for w in words),
-            "right": max(w["left"] + w["width"] for w in words),
-            "top": min(w["top"] for w in words),
-            "bottom": max(w["top"] + w["height"] for w in words),
+            "first_width": first["width"] if LATIN_WORD.fullmatch(first.get("text", "")) else unit * 3,
+            "left": left, "right": right, "top": top, "bottom": bottom,
             "size": _font_size(unit),
-            "ink": _ink(image, words),
-            "conf": statistics.mean(w["conf"] for w in words),
+            "ink": _ink(image, letters),
+            "conf": statistics.mean(w["conf"] for w in letters),
+            "form": any("kind" in w for w in words),
         })
     if not lines:
         return []
@@ -450,7 +753,8 @@ def _ocr_page(image_path):
     for line in lines:
         previous = paragraphs[-1]["lines"][-1] if paragraphs else None
         joins = False
-        if previous and "\t" not in line["text"] and "\t" not in previous["text"]:
+        # Form lines (fill-in dots, tick boxes) stay on their own, like the printed form.
+        if previous and "\t" not in line["text"] and "\t" not in previous["text"] and not (line["form"] or previous["form"]):
             pitch = line["top"] - previous["top"]
             same_size = abs(line["size"] - previous["size"]) < previous["size"] * 0.2
             # The previous line was full if this line's first word wouldn't have fit after it.
