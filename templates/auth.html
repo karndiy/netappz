@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ {"setup": "Set up", "login": "Sign in", "account": "Your account"}[mode] }} · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    {% if mode == "account" %}
+      <nav class="topbar-nav" aria-label="Main navigation">
+        <a class="topbar-link" href="{{ url_for('index') }}">Back to files</a>
+        {% include "_account_nav.html" %}
+      </nav>
+    {% endif %}
+  </header>
+  <main class="auth-page">
+    <section class="auth-card" aria-labelledby="auth-heading">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+          <div class="message {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endwith %}
+      {% if mode == "setup" %}
+        <h1 id="auth-heading">Create the administrator account</h1>
+        <p class="auth-lead">The app now asks everyone to sign in. This first account can add other people and change settings.</p>
+      {% elif mode == "login" %}
+        <h1 id="auth-heading">Sign in</h1>
+        <p class="auth-lead">Sign in to use Network Files.</p>
+      {% else %}
+        <h1 id="auth-heading">Your account</h1>
+        <p class="auth-lead">Signed in as <strong>{{ current_user.username }}</strong>{% if current_user.is_admin %} (administrator){% endif %}. Change your password here.</p>
+      {% endif %}
+
+      {% if error %}<div class="message error" role="alert">{{ error }}</div>{% endif %}
+
+      <form class="auth-form" method="post">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        {% if mode == "login" %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+        {% if mode in ("setup", "login") %}
+          <label for="auth-username">Username</label>
+          <input id="auth-username" name="username" type="text" value="{{ username }}" required maxlength="40"
+                 autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>
+        {% else %}
+          <label for="auth-current">Current password</label>
+          <input id="auth-current" name="current" type="password" required autocomplete="current-password">
+        {% endif %}
+        <label for="auth-password">{{ "New password" if mode == "account" else "Password" }}</label>
+        <input id="auth-password" name="password" type="password" required
+               {% if mode == "login" %}autocomplete="current-password"{% else %}autocomplete="new-password" minlength="8"{% endif %}>
+        {% if mode != "login" %}
+          <label for="auth-confirm">Type it again</label>
+          <input id="auth-confirm" name="confirm" type="password" required minlength="8" autocomplete="new-password">
+          <small>At least 8 characters.</small>
+        {% endif %}
+        <button type="submit">{{ {"setup": "Create account and sign in", "login": "Sign in", "account": "Change password"}[mode] }}</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

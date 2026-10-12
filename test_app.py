@@ -30,6 +30,10 @@ class FileManagerTests(unittest.TestCase):
             }
         )
         self.client = self.app.test_client()
+        # Every page needs a signed-in user; the tests use an administrator.
+        self.admin_id = self.app.extensions["users"].add("admin", "admin-password", is_admin=True)
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -1121,6 +1125,105 @@ class FileManagerTests(unittest.TestCase):
 
         self.client.post(f"/updates/requests/{done_id}/delete", data={"_csrf_token": token})
         self.assertIsNone(store.get(done_id))
+
+    def _fresh_client(self):
+        client = self.app.test_client()
+        client.get("/login")
+        with client.session_transaction() as sess:
+            return client, sess["_csrf_token"]
+
+    def test_pages_need_sign_in_and_wrong_passwords_are_refused(self):
+        client, token = self._fresh_client()
+        response = client.get("/notes?q=x")
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/login?next=/notes?q%3Dx", response.headers["Location"])
+        self.assertEqual(client.get("/healthz").status_code, 200)  # Docker's health check stays open.
+        # Scripts get an error they can show instead of the sign-in page.
+        self.assertEqual(client.post("/chat/send", data={"_csrf_token": token, "message": "hi"}).status_code, 401)
+
+        response = client.post("/login", data={"_csrf_token": token, "username": "admin", "password": "nope"})
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Wrong username or password.", response.get_data(as_text=True))
+
+        response = client.post("/login", data={
+            "_csrf_token": token, "username": "ADMIN", "password": "admin-password", "next": "/notes",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["Location"], "/notes")
+        page = client.get("/").get_data(as_text=True)
+        self.assertIn(">admin</a>", page)  # Name and Log out in the top bar.
+        self.assertIn("Log out", page)
+
+        # Links back to another site are ignored after signing in.
+        client2, token2 = self._fresh_client()
+        response = client2.post("/login", data={
+            "_csrf_token": token2, "username": "admin", "password": "admin-password", "next": "//evil.example/",
+        })
+        self.assertEqual(response.headers["Location"], "/")
+
+        with client.session_transaction() as sess:
+            token = sess["_csrf_token"]
+        client.post("/logout", data={"_csrf_token": token})
+        self.assertEqual(client.get("/").status_code, 302)
+
+    def test_too_many_wrong_passwords_are_slowed_down(self):
+        client, token = self._fresh_client()
+        for _ in range(8):
+            client.post("/login", data={"_csrf_token": token, "username": "admin", "password": "wrong"})
+        response = client.post("/login", data={"_csrf_token": token, "username": "admin", "password": "admin-password"})
+        self.assertIn("Too many wrong passwords", response.get_data(as_text=True))
+
+    def test_first_visit_creates_the_administrator(self):
+        import tempfile as temp
+
+        folder = temp.mkdtemp()
+        app = create_app({"TESTING": True, "FILES_ROOT": folder, "NOTES_DATABASE": folder + "/n.sqlite3",
+                          "SECRET_KEY": "x"})
+        client = app.test_client()
+        self.assertEqual(client.get("/").headers["Location"], "/setup")
+        with client.session_transaction() as sess:
+            token = sess.get("_csrf_token") or ""
+        client.get("/setup")
+        with client.session_transaction() as sess:
+            token = sess["_csrf_token"]
+        response = client.post("/setup", data={"_csrf_token": token, "username": "karn", "password": "short", "confirm": "short"})
+        self.assertIn("at least 8 characters", response.get_data(as_text=True))
+        response = client.post("/setup", data={
+            "_csrf_token": token, "username": "karn", "password": "long-enough", "confirm": "long-enough",
+        })
+        self.assertEqual(response.status_code, 303)
+        self.assertTrue(app.extensions["users"].by_name("karn")["is_admin"])
+        self.assertEqual(client.get("/").status_code, 200)  # Signed in straight away.
+        self.assertEqual(client.get("/setup").status_code, 302)  # Setup can't run twice.
+
+    def test_admin_manages_users_and_people_change_their_password(self):
+        token = self._csrf()
+        users = self.app.extensions["users"]
+        self.client.post("/settings/users", data={"_csrf_token": token, "username": "somchai", "password": "first-pass"})
+        somchai = users.by_name("somchai")
+        self.assertFalse(somchai["is_admin"])
+        self.assertIn("somchai", self.client.get("/settings").get_data(as_text=True))
+
+        # A regular user can't open Settings, but can change their own password.
+        client, token2 = self._fresh_client()
+        client.post("/login", data={"_csrf_token": token2, "username": "somchai", "password": "first-pass"})
+        self.assertEqual(client.get("/settings").status_code, 403)
+        self.assertNotIn(">Settings</a>", client.get("/").get_data(as_text=True))
+        with client.session_transaction() as sess:
+            token2 = sess["_csrf_token"]
+        response = client.post("/account", data={"_csrf_token": token2, "current": "wrong", "password": "new-pass-1", "confirm": "new-pass-1"})
+        self.assertIn("current password is not right", response.get_data(as_text=True))
+        client.post("/account", data={"_csrf_token": token2, "current": "first-pass", "password": "new-pass-1", "confirm": "new-pass-1"})
+
+        # The administrator resets it, and can't delete the last administrator (themselves).
+        self.client.post(f"/settings/users/{somchai['id']}/password", data={"_csrf_token": token, "password": "reset-pass"})
+        from werkzeug.security import check_password_hash
+        self.assertTrue(check_password_hash(users.get(somchai["id"])["password_hash"], "reset-pass"))
+        self.client.post(f"/settings/users/{self.admin_id}/delete", data={"_csrf_token": token})
+        self.assertIsNotNone(users.get(self.admin_id))
+        self.client.post(f"/settings/users/{somchai['id']}/delete", data={"_csrf_token": token})
+        self.assertIsNone(users.get(somchai["id"]))
+        self.assertEqual(client.get("/").status_code, 302)  # A deleted account is signed out.
 
 
 if __name__ == "__main__":

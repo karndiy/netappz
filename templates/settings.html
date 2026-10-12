@@ -13,8 +13,9 @@
       <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
       <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
       <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
-      <a class="topbar-link" href="{{ url_for('settings_page') }}" aria-current="page">Settings</a>
+      {% if current_user and current_user.is_admin %}<a class="topbar-link" href="{{ url_for('settings_page') }}" aria-current="page">Settings</a>{% endif %}
       <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+      {% include "_account_nav.html" %}
     </nav>
   </header>
   <main class="container">
@@ -105,6 +106,52 @@
         <a class="button secondary" href="{{ url_for('settings_page') }}">Discard changes</a>
       </div>
     </form>
+
+    <section class="settings-card" id="users" aria-labelledby="users-heading">
+      <div class="settings-card-head">
+        <h2 id="users-heading">Users</h2>
+        <p>Everyone signs in to use the app. Administrators can also open this page.</p>
+      </div>
+      <ul class="user-list">
+        {% for user in users %}
+          <li class="user-row">
+            <div class="user-name">
+              <strong>{{ user.username }}</strong>
+              {% if user.is_admin %}<span class="settings-source is-saved">Administrator</span>{% endif %}
+              {% if current_user and user.id == current_user.id %}<span class="settings-source">You</span>{% endif %}
+            </div>
+            <form class="user-action" action="{{ url_for('reset_password', user_id=user.id) }}" method="post">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <label class="visually-hidden" for="reset-{{ user.id }}">New password for {{ user.username }}</label>
+              <input id="reset-{{ user.id }}" name="password" type="password" minlength="8" required
+                     placeholder="New password" autocomplete="new-password">
+              <button class="secondary" type="submit">Set password</button>
+            </form>
+            {% if not current_user or user.id != current_user.id %}
+              <form action="{{ url_for('delete_user', user_id=user.id) }}" method="post"
+                    onsubmit="return confirm('Delete the account {{ user.username }}?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button class="request-delete" type="submit" title="Delete account" aria-label="Delete {{ user.username }}">✕</button>
+              </form>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+      <form class="user-add" action="{{ url_for('add_user') }}" method="post" autocomplete="off">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <h3>Add a person</h3>
+        <div class="user-add-fields">
+          <label class="visually-hidden" for="new-username">Username</label>
+          <input id="new-username" name="username" type="text" required maxlength="40" placeholder="Username"
+                 autocapitalize="none" spellcheck="false">
+          <label class="visually-hidden" for="new-password">Password</label>
+          <input id="new-password" name="password" type="password" required minlength="8" placeholder="Password (8+ characters)"
+                 autocomplete="new-password">
+          <label class="settings-check"><input type="checkbox" name="is_admin" value="1"> Administrator</label>
+          <button type="submit">Add</button>
+        </div>
+      </form>
+    </section>
 
     <section class="settings-card" aria-labelledby="server-heading">
       <div class="settings-card-head">

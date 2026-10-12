@@ -20,6 +20,7 @@ from flask import (
     Response,
     abort,
     flash,
+    g,
     jsonify,
     redirect,
     render_template,
@@ -29,6 +30,7 @@ from flask import (
     url_for,
 )
 from flask_session import Session
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 import chat
@@ -115,12 +117,25 @@ SETTING_GROUPS = [
 SETTING_FIELDS = {field["name"]: field for group in SETTING_GROUPS for field in group["fields"]}
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}")
 LOCAL_URL = re.compile(r"https?://[^\s/]+(/\S*)?")
+USERNAME = re.compile(r"[A-Za-z0-9._@-]{2,40}")
+MIN_PASSWORD = 8
 TELEGRAM_TOKEN = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
 TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.28.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Sign-in: everyone now signs in with a username and password before using the app (request: a simple user login).",
+            "The first visit creates the administrator account. Administrators add people, set new passwords, and remove accounts on the Settings page.",
+            "Settings is for administrators only. Everyone can change their own password by clicking their name at the top.",
+            "Passwords are stored as salted hashes, and after 8 wrong passwords sign-in pauses for 10 minutes.",
+            "Your name and a Log out button are in the top bar. The Telegram bot works as before.",
+        ],
+    },
     {
         "version": "1.27.0",
         "date": "2026-10-12",
@@ -655,6 +670,17 @@ def create_app(test_config=None):
         )
         connection.execute(
             f"""
+            CREATE TABLE IF NOT EXISTS users (
+                {id_column},
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            f"""
             CREATE TABLE IF NOT EXISTS user_requests (
                 {id_column},
                 kind TEXT NOT NULL,
@@ -745,6 +771,53 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 connection.execute(sql("DELETE FROM user_requests WHERE id = ?"), (request_id,))
 
+    class UserStore:
+        """Accounts for signing in. Passwords are stored only as salted hashes."""
+
+        columns = f"id, username, password_hash, is_admin, {timestamp_select.format('created_at')}"
+
+        def count(self):
+            with notes_connection() as connection:
+                return connection.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+
+        def all(self):
+            with notes_connection() as connection:
+                rows = connection.execute(f"SELECT {self.columns} FROM users ORDER BY LOWER(username)").fetchall()
+            return [dict(row) for row in rows]
+
+        def get(self, user_id):
+            with notes_connection() as connection:
+                row = connection.execute(sql(f"SELECT {self.columns} FROM users WHERE id = ?"), (user_id,)).fetchone()
+            return dict(row) if row else None
+
+        def by_name(self, username):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(f"SELECT {self.columns} FROM users WHERE LOWER(username) = LOWER(?)"), (username,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def add(self, username, password, is_admin=False):
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)") + returning_id,
+                    (username, generate_password_hash(password), 1 if is_admin else 0),
+                )
+                return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def set_password(self, user_id, password):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("UPDATE users SET password_hash = ? WHERE id = ?"), (generate_password_hash(password), user_id)
+                )
+
+        def delete(self, user_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM users WHERE id = ?"), (user_id,))
+
+    user_store = UserStore()
+    app.extensions["users"] = user_store
+
     request_store = RequestStore()
     app.extensions["requests"] = request_store
 
@@ -809,6 +882,177 @@ def create_app(test_config=None):
         return session["_csrf_token"]
 
     app.jinja_env.globals["csrf_token"] = csrf_token
+
+    # ---------------------------------------------------------------- sign-in
+
+    PUBLIC_ENDPOINTS = {"static", "healthz", "login", "setup"}
+    failed_logins = {}  # address -> times of recent failed sign-ins
+
+    def too_many_failures(address):
+        recent = [t for t in failed_logins.get(address, []) if time.time() - t < 600]
+        failed_logins[address] = recent
+        return len(recent) >= 8
+
+    def safe_next(target):
+        # Only paths on this site, never another host ("//evil.example" or "https://…").
+        return target if target and target.startswith("/") and not target.startswith("//") else url_for("index")
+
+    def sign_in(user):
+        session.clear()
+        regenerate = getattr(app.session_interface, "regenerate", None)
+        if regenerate:
+            try:
+                regenerate(session)  # A new session id, so an old one can't be reused.
+            except Exception:
+                pass
+        session["user_id"] = user["id"]
+        session.permanent = True
+
+    @app.context_processor
+    def account_context():
+        return {"current_user": g.get("user")}
+
+    @app.before_request
+    def require_login():
+        g.user = None
+        user_id = session.get("user_id")
+        if user_id is not None:
+            g.user = user_store.get(user_id)
+            if g.user is None:
+                session.pop("user_id", None)  # The account was deleted.
+        if g.user or request.endpoint in PUBLIC_ENDPOINTS:
+            return None
+        if user_store.count() == 0:
+            return redirect(url_for("setup"))
+        # Scripts (chat, PDF editor) get a plain error they can show; pages go to the sign-in form.
+        wants_json = request.headers.get("X-CSRF-Token") or request.accept_mimetypes.best == "application/json"
+        if wants_json or request.path == "/chat/send":
+            return jsonify(error="You've been signed out. Reload the page and sign in again."), 401
+        target = request.full_path if request.method == "GET" else (request.referrer or "/")
+        return redirect(url_for("login", next=target.rstrip("?")))
+
+    def admin_required():
+        if not (g.user and g.user["is_admin"]):
+            abort(403, "Only an administrator can open this page.")
+
+    @app.route("/setup", methods=["GET", "POST"])
+    def setup():
+        """The very first visit creates the administrator account."""
+        if user_store.count():
+            return redirect(url_for("login"))
+        error = None
+        username = ""
+        if request.method == "POST":
+            username = request.form.get("username", "").strip()
+            password = request.form.get("password", "")
+            error = check_new_account(username, password, request.form.get("confirm", ""))
+            if not error:
+                user_id = user_store.add(username, password, is_admin=True)
+                sign_in(user_store.get(user_id))
+                flash(f"Welcome, {username}! You're the administrator: add other people on the Settings page.", "success")
+                return redirect(url_for("index"), code=303)
+        return render_template("auth.html", mode="setup", error=error, username=username), (400 if error else 200)
+
+    def check_new_account(username, password, confirm, check_name=True):
+        if check_name and not USERNAME.fullmatch(username):
+            return "Use 2 to 40 letters, numbers, dots, dashes, underscores or @ for the username."
+        if check_name and user_store.by_name(username):
+            return "That username is taken."
+        if len(password) < MIN_PASSWORD:
+            return f"Use at least {MIN_PASSWORD} characters for the password."
+        if password != confirm:
+            return "The two passwords don't match."
+        return None
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        if user_store.count() == 0:
+            return redirect(url_for("setup"))
+        next_page = safe_next(request.values.get("next", ""))
+        if g.user:
+            return redirect(next_page)
+        error = None
+        username = ""
+        if request.method == "POST":
+            address = request.remote_addr or "?"
+            username = request.form.get("username", "").strip()
+            user = user_store.by_name(username)
+            if too_many_failures(address):
+                error = "Too many wrong passwords. Wait 10 minutes and try again."
+            elif user and check_password_hash(user["password_hash"], request.form.get("password", "")):
+                failed_logins.pop(address, None)
+                sign_in(user)
+                return redirect(next_page, code=303)
+            else:
+                failed_logins.setdefault(address, []).append(time.time())
+                error = "Wrong username or password."
+        return render_template("auth.html", mode="login", error=error, username=username, next=next_page), (
+            401 if error else 200)
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        flash("You've signed out.", "success")
+        return redirect(url_for("login"), code=303)
+
+    @app.route("/account", methods=["GET", "POST"])
+    def account():
+        error = None
+        if request.method == "POST":
+            if not check_password_hash(g.user["password_hash"], request.form.get("current", "")):
+                error = "Your current password is not right."
+            else:
+                error = check_new_account("", request.form.get("password", ""), request.form.get("confirm", ""),
+                                          check_name=False)
+            if not error:
+                user_store.set_password(g.user["id"], request.form["password"])
+                flash("Your password was changed.", "success")
+                return redirect(url_for("account"), code=303)
+        return render_template("auth.html", mode="account", error=error), (400 if error else 200)
+
+    @app.post("/settings/users")
+    def add_user():
+        admin_required()
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        error = check_new_account(username, password, password)
+        if error:
+            flash(error, "error")
+        else:
+            user_store.add(username, password, is_admin=bool(request.form.get("is_admin")))
+            flash(f"Added {username}. Give them their password; they can change it under their name at the top.",
+                  "success")
+        return redirect(url_for("settings_page", _anchor="users"), code=303)
+
+    @app.post("/settings/users/<int:user_id>/password")
+    def reset_password(user_id):
+        admin_required()
+        user = user_store.get(user_id)
+        password = request.form.get("password", "")
+        if user is None:
+            flash("That account no longer exists.", "error")
+        elif len(password) < MIN_PASSWORD:
+            flash(f"Use at least {MIN_PASSWORD} characters for the password.", "error")
+        else:
+            user_store.set_password(user_id, password)
+            flash(f"New password set for {user['username']}.", "success")
+        return redirect(url_for("settings_page", _anchor="users"), code=303)
+
+    @app.post("/settings/users/<int:user_id>/delete")
+    def delete_user(user_id):
+        admin_required()
+        user = user_store.get(user_id)
+        admins = [u for u in user_store.all() if u["is_admin"]]
+        if user is None:
+            flash("That account no longer exists.", "error")
+        elif user["id"] == g.user["id"]:
+            flash("You can't delete your own account while signed in to it.", "error")
+        elif user["is_admin"] and len(admins) <= 1:
+            flash("Keep at least one administrator.", "error")
+        else:
+            user_store.delete(user_id)
+            flash(f"Deleted {user['username']}.", "success")
+        return redirect(url_for("settings_page", _anchor="users"), code=303)
 
     @app.before_request
     def validate_csrf():
@@ -1408,15 +1652,18 @@ def create_app(test_config=None):
 
     @app.get("/settings")
     def settings_page():
-        return render_template("settings.html", groups=settings_view(), server=server_info())
+        admin_required()
+        return render_template("settings.html", groups=settings_view(), server=server_info(), users=user_store.all())
 
     @app.post("/settings")
     def save_settings():
+        admin_required()
         changes, errors = read_settings_form()
         if errors:
             flash("Nothing was saved. Fix the highlighted settings and try again.", "error")
             values = {name: request.form.get(name, "") for name, field in SETTING_FIELDS.items() if not field.get("secret")}
-            return render_template("settings.html", groups=settings_view(values, errors), server=server_info()), 400
+            return render_template("settings.html", groups=settings_view(values, errors), server=server_info(),
+                                   users=user_store.all()), 400
         settings_store.save(changes)
         flash("Settings saved.", "success")
         return redirect(url_for("settings_page"))

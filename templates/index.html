@@ -13,8 +13,9 @@
       <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
       <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
       <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
-      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      {% if current_user and current_user.is_admin %}<a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>{% endif %}
       <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+      {% include "_account_nav.html" %}
     </nav>
   </header>
   <main class="container">

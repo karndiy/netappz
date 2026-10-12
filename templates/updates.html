@@ -13,8 +13,9 @@
       <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
       <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
       <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
-      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      {% if current_user and current_user.is_admin %}<a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>{% endif %}
       <a class="topbar-link" href="{{ url_for('index') }}">Back to files</a>
+      {% include "_account_nav.html" %}
     </nav>
   </header>
   <main class="container">
@@ -60,7 +61,7 @@
           <textarea id="request-details" name="details" rows="3" maxlength="4000"
                     placeholder="What should happen? For a problem: what did you do, and what went wrong?">{{ form.details if form else '' }}</textarea>
           <label for="request-by">Your name <span class="optional">(optional)</span></label>
-          <input id="request-by" name="requested_by" type="text" maxlength="60" value="{{ form.requested_by if form else '' }}">
+          <input id="request-by" name="requested_by" type="text" maxlength="60" value="{{ form.requested_by if form else (current_user.username if current_user else '') }}">
           <div class="request-actions"><button type="submit">Send request</button></div>
         </form>
       </details>
