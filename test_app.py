@@ -949,6 +949,12 @@ class FileManagerTests(unittest.TestCase):
         self.assertIn("app.py", zipfile.ZipFile(io.BytesIO(data)).namelist())
         self.assertIn("app.py", telegram.send_document.call_args.kwargs["caption"])
 
+    def test_note_editor_offers_links(self):
+        page = self.client.get("/notes?new=1").get_data(as_text=True)
+        self.assertIn('id="notes-insert-link"', page)
+        self.assertIn('id="notes-body-links"', page)
+        self.assertIn('id="notes-link-open"', page)
+
 
 if __name__ == "__main__":
     unittest.main()

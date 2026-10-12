@@ -488,6 +488,16 @@ def create_app(test_config=None):
     def updates():
         entries = [
             {
+                "version": "1.23.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "Notes can hold links: web addresses (https://… or www.…) are underlined as you type.",
+                    "Put the cursor on a link and an Open button appears; on a computer, ⌘-click or Ctrl-click opens it right away.",
+                    "New Insert link button (⌘K): select some text first to turn it into a named link, written as [text](address).",
+                    "Notes are still saved as plain text, so nothing changes for existing notes.",
+                ],
+            },
+            {
                 "version": "1.22.0",
                 "date": "2026-10-12",
                 "changes": [

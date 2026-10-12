@@ -88,6 +88,10 @@
             <svg class="icon-exit" viewBox="0 0 20 20" aria-hidden="true" hidden><path d="M7.5 3v4.5H3M17 7.5h-4.5V3M12.5 17v-4.5H17M3 12.5h4.5V17"/></svg>
           </button>
           {% if selected or creating %}
+            <button class="notes-icon-button" id="notes-insert-link" type="button"
+                    title="Insert link (⌘K)" aria-label="Insert link">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5L9.8 5.2M11.5 8.5a3.5 3.5 0 0 0-5 0L4 11a3.5 3.5 0 0 0 5 5l1.2-1.2"/></svg>
+            </button>
             <button class="notes-save-button" type="submit" form="note-form"
                     title="{{ 'Save now · changes also save automatically (⌘S)' if selected else 'Create note (⌘S)' }}">
               {{ 'Save' if selected else 'Create note' }}
@@ -120,8 +124,15 @@
           <textarea class="notes-title-input" name="title" rows="1" maxlength="120" required
                     placeholder="Title" aria-label="Title" enterkeyhint="next"
                     {% if creating %}autofocus{% endif %}>{{ selected.title if selected else '' }}</textarea>
-          <textarea class="notes-body-input" name="content" maxlength="10000" required
-                    placeholder="Start writing…" aria-label="Note">{{ selected.content if selected else '' }}</textarea>
+          <div class="notes-body-wrap">
+            <div class="notes-body-links" id="notes-body-links" aria-hidden="true"></div>
+            <textarea class="notes-body-input" name="content" maxlength="10000" required
+                      placeholder="Start writing…" aria-label="Note">{{ selected.content if selected else '' }}</textarea>
+            <a class="notes-link-open" id="notes-link-open" target="_blank" rel="noopener noreferrer" hidden>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4H4.5v11.5H16V12M11 3.5h5.5V9M16.5 3.5 9 11"/></svg>
+              <span>Open</span><span class="notes-link-host"></span>
+            </a>
+          </div>
         </form>
       {% else %}
         <p class="notes-placeholder">No note selected</p>
@@ -222,10 +233,120 @@
     function setStatus(text) { status.textContent = text; }
     function isValid() { return title.value.trim() && body.value.trim(); }
 
+    // Links: web addresses and [text](https://…) are underlined by a layer drawn behind the
+    // note text. With the cursor on a link an Open button appears; ⌘/Ctrl-click opens it directly.
+    var LINK = /\[([^\]\n]+)\]\(((?:https?:\/\/|www\.)[^\s)]+)\)|(?:https?:\/\/|www\.)[^\s<>"']+/gi;
+    var linkLayer = document.getElementById("notes-body-links");
+    var openLink = document.getElementById("notes-link-open");
+    var openHost = openLink.querySelector(".notes-link-host");
+
+    function findLinks(text) {
+      var links = [];
+      var match;
+      LINK.lastIndex = 0;
+      while ((match = LINK.exec(text))) {
+        var raw = match[0];
+        var url = match[2];
+        if (!url) {
+          // Leave out punctuation that ends a sentence, and a ")" that has no "(" in the address.
+          raw = raw.replace(/[.,;:!?'"]+$/, "");
+          while (raw.slice(-1) === ")" && raw.split("(").length < raw.split(")").length) raw = raw.slice(0, -1);
+          url = raw;
+        }
+        if (/^www\./i.test(url)) url = "https://" + url;
+        links.push({ start: match.index, end: match.index + raw.length, url: url });
+        LINK.lastIndex = match.index + raw.length;
+      }
+      return links;
+    }
+    function escapeText(text) {
+      return text.replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; });
+    }
+    var links = [];
+    function matchTextBox() {
+      var style = getComputedStyle(body);
+      ["fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "wordSpacing",
+       "tabSize", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "textIndent"].forEach(function (name) {
+        linkLayer.style[name] = style[name];
+      });
+    }
+    function drawLinks() {
+      var text = body.value;
+      links = findLinks(text);
+      var html = "";
+      var at = 0;
+      links.forEach(function (link, index) {
+        html += escapeText(text.slice(at, link.start)) +
+          '<span class="notes-link" data-index="' + index + '">' + escapeText(text.slice(link.start, link.end)) + "</span>";
+        at = link.end;
+      });
+      // A trailing space keeps a final empty line the same height as in the text box.
+      linkLayer.innerHTML = html + escapeText(text.slice(at)) + " ";
+      linkLayer.style.width = body.clientWidth + "px";
+      linkLayer.scrollTop = body.scrollTop;
+    }
+    function linkAt(position) {
+      for (var i = 0; i < links.length; i++) {
+        if (position >= links[i].start && position <= links[i].end) return i;
+      }
+      return -1;
+    }
+    function hostOf(url) {
+      try { return new URL(url).host; } catch (error) { return url; }
+    }
+    function showOpenButton() {
+      var index = body.selectionStart === body.selectionEnd && document.activeElement === body
+        ? linkAt(body.selectionStart) : -1;
+      if (index < 0) { openLink.hidden = true; return; }
+      var span = linkLayer.querySelector('[data-index="' + index + '"]');
+      if (!span) { openLink.hidden = true; return; }
+      openLink.href = links[index].url;
+      openLink.title = links[index].url;
+      openHost.textContent = hostOf(links[index].url);
+      openLink.hidden = false;
+      var top = span.offsetTop + span.offsetHeight - body.scrollTop + 4;
+      var left = Math.min(span.offsetLeft, body.clientWidth - openLink.offsetWidth);
+      openLink.style.top = Math.max(0, top) + "px";
+      openLink.style.left = Math.max(0, left) + "px";
+    }
+    matchTextBox();
+    drawLinks();
+    body.addEventListener("input", function () { drawLinks(); showOpenButton(); });
+    body.addEventListener("scroll", function () { linkLayer.scrollTop = body.scrollTop; showOpenButton(); });
+    window.addEventListener("resize", function () { matchTextBox(); drawLinks(); });
+    document.addEventListener("selectionchange", showOpenButton);
+    body.addEventListener("blur", function () {
+      // Wait so a tap on the Open button still lands.
+      setTimeout(function () { if (document.activeElement !== body) openLink.hidden = true; }, 200);
+    });
+    body.addEventListener("click", function (event) {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      var index = linkAt(body.selectionStart);
+      if (index >= 0) window.open(links[index].url, "_blank", "noopener");
+    });
+
+    function insertLink() {
+      var start = body.selectionStart;
+      var end = body.selectionEnd;
+      var selected = body.value.slice(start, end).trim();
+      var url = window.prompt(selected ? "Link “" + selected + "” to this address:" : "Link address:", "https://");
+      if (!url || !(url = url.trim()) || url === "https://") return;
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = "https://" + url;
+      if (!/^https?:\/\//i.test(url)) { window.alert("Only http:// and https:// links are supported."); return; }
+      var text = selected ? "[" + selected.replace(/[\[\]]/g, "") + "](" + url + ")" : url;
+      body.focus();
+      body.setRangeText(text, start, end, "end");
+      body.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    document.getElementById("notes-insert-link").addEventListener("click", insertLink);
+
     document.addEventListener("keydown", function (event) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         if (form.dataset.autosave) { save(); } else if (form.reportValidity()) { form.submit(); }
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        insertLink();
       }
     });
 
