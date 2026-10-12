@@ -21,12 +21,110 @@
     <section class="heading">
       <div>
         <h1>Update log</h1>
-        <p class="page-description">Patch notes for this file manager.</p>
+        <p class="page-description">Ask for a change or report a problem, follow its progress, and read the patch notes.</p>
       </div>
     </section>
 
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <section class="requests" id="requests" aria-labelledby="requests-heading">
+      <div class="requests-head">
+        <div>
+          <h2 id="requests-heading">Requests</h2>
+          <p>{{ counts.open }} waiting · {{ counts.in_progress }} in progress · {{ counts.done }} done</p>
+        </div>
+      </div>
+
+      <details class="request-new" {% if form or not total %}open{% endif %}>
+        <summary>New request</summary>
+        <form class="request-form" action="{{ url_for('add_request') }}" method="post">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <fieldset class="request-kinds">
+            <legend>What is it?</legend>
+            {% for value, label in kinds.items() %}
+              <label class="request-kind">
+                <input type="radio" name="kind" value="{{ value }}"
+                       {% if (form.kind if form else 'feature') == value %}checked{% endif %}>
+                {{ label }}
+              </label>
+            {% endfor %}
+          </fieldset>
+          <label for="request-title">Title</label>
+          <input id="request-title" name="title" type="text" maxlength="120" required
+                 placeholder="For example: Show file sizes in MB" value="{{ form.title if form else '' }}">
+          <label for="request-details">Details <span class="optional">(optional)</span></label>
+          <textarea id="request-details" name="details" rows="3" maxlength="4000"
+                    placeholder="What should happen? For a problem: what did you do, and what went wrong?">{{ form.details if form else '' }}</textarea>
+          <label for="request-by">Your name <span class="optional">(optional)</span></label>
+          <input id="request-by" name="requested_by" type="text" maxlength="60" value="{{ form.requested_by if form else '' }}">
+          <div class="request-actions"><button type="submit">Send request</button></div>
+        </form>
+      </details>
+
+      {% if total %}
+        <nav class="request-filters" aria-label="Filter requests">
+          <a href="{{ url_for('updates', q=query or None, _anchor='requests') }}"
+             {% if not shown_status %}aria-current="true"{% endif %}>All {{ total }}</a>
+          {% for value, label in statuses.items() %}
+            <a href="{{ url_for('updates', status=value, q=query or None, _anchor='requests') }}"
+               {% if shown_status == value %}aria-current="true"{% endif %}>{{ label }} {{ counts[value] }}</a>
+          {% endfor %}
+        </nav>
+      {% endif %}
+
+      <ul class="request-list">
+        {% for item in requests %}
+          <li class="request-item is-{{ item.status }}">
+            <div class="request-main">
+              <div class="request-title-row">
+                <span class="request-status">{{ statuses[item.status] }}</span>
+                <span class="request-kind-tag">{{ 'Problem' if item.kind == 'problem' else 'Feature' }}</span>
+                <h3>{{ item.title }}</h3>
+              </div>
+              {% if item.details %}<p class="request-details">{{ item.details }}</p>{% endif %}
+              <p class="request-meta">
+                {% if item.requested_by %}From {{ item.requested_by }} · {% endif %}
+                Asked {{ item.created_at[:10] }}
+                {% if item.status == 'done' %}
+                  · Done {{ item.updated_at[:10] }}{% if item.done_version %} in
+                  <a href="{{ url_for('updates', q=item.done_version) }}">version {{ item.done_version }}</a>{% endif %}
+                {% endif %}
+              </p>
+            </div>
+            <div class="request-controls">
+              <form action="{{ url_for('request_status', request_id=item.id) }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="shown_status" value="{{ shown_status }}">
+                <label class="visually-hidden" for="status-{{ item.id }}">Status of {{ item.title }}</label>
+                <select id="status-{{ item.id }}" name="status" onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
+                  {% for value, label in statuses.items() %}
+                    <option value="{{ value }}" {% if item.status == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+                <noscript><button class="secondary" type="submit">Save</button></noscript>
+              </form>
+              <form action="{{ url_for('delete_request', request_id=item.id) }}" method="post"
+                    onsubmit="return confirm('Delete this request?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="shown_status" value="{{ shown_status }}">
+                <button class="request-delete" type="submit" title="Delete request" aria-label="Delete request {{ item.title }}">✕</button>
+              </form>
+            </div>
+          </li>
+        {% else %}
+          <li class="empty">{% if total %}No requests match.{% else %}No requests yet. Ask for the first one above.{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <h2 class="patch-heading">Patch notes</h2>
+
     <form class="update-search" action="{{ url_for('updates') }}" method="get" role="search">
-      <label for="update-search">Search updates</label>
+      <label for="update-search">Search requests and updates</label>
       <div class="inline-form">
         <input id="update-search" name="q" type="search" value="{{ query }}"
                placeholder="Version, date, or keyword" maxlength="100">

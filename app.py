@@ -119,6 +119,288 @@ TELEGRAM_TOKEN = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
 TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 
+# Patch notes, newest first. Add an entry for every change.
+UPDATE_LOG = [
+    {
+        "version": "1.27.0",
+        "date": "2026-10-12",
+        "changes": [
+            "The Update log page now takes requests: ask for a new feature or report a problem, with an optional name.",
+            "Every request shows its status (Waiting, In progress, Done), and the list can be filtered by status.",
+            "When a request is marked Done, it records the app version that has the change, with a link to its patch notes.",
+            "Search on this page finds requests as well as patch notes.",
+        ],
+    },
+    {
+        "version": "1.26.1",
+        "date": "2026-10-12",
+        "changes": [
+            "Deleting or renaming a file that is already gone (a double click, Reload, or a change from another device) no longer shows a Not Found page: you go back to the folder with a short note.",
+            "The Delete button turns off after the first click, and Back or Reload after a delete no longer sends it again.",
+        ],
+    },
+    {
+        "version": "1.26.0",
+        "date": "2026-10-12",
+        "changes": [
+            "PDF to Word keeps charts: bar, line and pie charts drawn in the PDF come out as pictures with their labels, instead of scattered numbers.",
+            "Bullet lists stay bullet lists, instead of being squeezed into narrow table columns.",
+            "Linked text (such as underlined links) no longer disappears from the Word file.",
+            "Tables keep their real column widths.",
+            "Scanned Thai: fewer stray spaces inside words (ขั บ → ขับ), tick boxes with broken outlines come back as ☐, and nearby lines are no longer joined by mistake. The sample form now reads 96.6% right.",
+        ],
+    },
+    {
+        "version": "1.25.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Much more accurate PDF to Word for scanned Thai documents: a scanned driving licence form went from about 62% to 96% of characters right.",
+            "Thai tone marks and upper vowels are no longer lost (เรียน, ชั่วคราว, อื่น ๆ come out whole), and the junk lines they used to leave are gone.",
+            "Dotted fill-in lines on forms are no longer read as long strings of numbers; they come back as dotted lines you can type on.",
+            "Tick boxes and circles on forms come back as ☐ and ○.",
+            "Words standing alone between fill-in lines (such as สัญชาติ) are found, and English inside Thai text stays correct.",
+            "Uses Tesseract's most accurate Thai and English models.",
+        ],
+    },
+    {
+        "version": "1.24.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Faster and steadier server: if Redis is slow or down, pages no longer hang, and Notes read straight from the database instead.",
+            "Redis now has a 64 MB memory limit, writes to disk once instead of twice, and makes room by dropping the oldest expiring data first.",
+            "Docker checks the app's health every 30 seconds (database and Redis) and restarts anything that stops answering.",
+            "Container logs are capped at 30 MB each, so they can't fill the disk.",
+        ],
+    },
+    {
+        "version": "1.23.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Notes can hold links: web addresses (https://… or www.…) are underlined as you type.",
+            "Put the cursor on a link and an Open button appears; on a computer, ⌘-click or Ctrl-click opens it right away.",
+            "New Insert link button (⌘K): select some text first to turn it into a named link, written as [text](address).",
+            "Notes are still saved as plain text, so nothing changes for existing notes.",
+        ],
+    },
+    {
+        "version": "1.22.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Code in chat replies can be downloaded as a zip: each code block becomes a file, named the way the AI labels it (for example app.py).",
+            "The Chat page shows a Download code button under replies that contain code, and each code block shows its file name.",
+            "In Telegram, replies with code also come with the zip file, ready to save.",
+            "The AI is asked to label every code file with its name, so the zip keeps folders like templates/index.html.",
+        ],
+    },
+    {
+        "version": "1.21.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Settings now shows whether the Telegram bot is connected, and as which bot.",
+            "If another program is using the same bot token (for example the Claude Code Telegram plugin), Settings says so and explains how to fix it.",
+            "Telegram chats use the AI chosen on the Settings page, including Local AI.",
+        ],
+    },
+    {
+        "version": "1.20.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Fixed Chat and the Telegram bot with Local AI: the ai.esm-solution.com firewall (Cloudflare) was blocking the app's requests, which showed up as a rejected API key.",
+            "If a firewall blocks the app again, the chat now says so instead of blaming the API key.",
+        ],
+    },
+    {
+        "version": "1.19.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Local AI at https://ai.esm-solution.com/api/v1 is now the default AI provider for Chat and the Telegram bot.",
+            "Settings has a Models list for the Local AI server: add one model ID per line to make it available.",
+            "Pick the model to use from that list; it starts with qwen3/qwen3.6-35b and qwen3/qwen3.8-27b.",
+        ],
+    },
+    {
+        "version": "1.18.0",
+        "date": "2026-10-12",
+        "changes": [
+            "Chat and the Telegram bot can now use a local AI instead of Claude: pick the AI provider on the Settings page.",
+            "Local AI works with any OpenAI-compatible server (Open WebUI, vLLM, LM Studio, Ollama). It starts set to https://ai.esm-solution.com/api/v1 with the qwen3/qwen3.6-35b model.",
+            "Set the server address, API key, and model on the Settings page; changes apply right away.",
+            "Replies stream in as they are written, and the model's hidden thinking (<think>) is left out of the reply.",
+        ],
+    },
+    {
+        "version": "1.17.0",
+        "date": "2026-10-09",
+        "changes": [
+            "PDF to Word now keeps Thai text at the right size and in bold in Word (Thai uses Word's complex-script settings, which were missing).",
+            "Thai fonts get the names Word knows, such as TH Sarabun New, and Thai lines no longer clip their tone marks.",
+            "Scanned PDFs are read with Thai + English text recognition (OCR) and rebuilt as editable paragraphs, headings, and table rows.",
+            "English inside Thai sentences is read correctly, and broken Thai from older PDFs (split sara am, shifted tone marks) is repaired.",
+            "Choose whether scanned pages are recognized automatically, always, or never; the result says what was done.",
+            "Word to PDF lays out documents that use TH Sarabun, Angsana, Cordia, or Tahoma with matching Thai fonts.",
+        ],
+    },
+    {
+        "version": "1.16.0",
+        "date": "2026-10-09",
+        "changes": [
+            "Added Edit PDF, an Acrobat-style editor opened from the Convert page.",
+            "Click any line of text in a PDF to change it; add text, pictures, and a drawn signature; draw, add shapes, highlight, and comment.",
+            "Whiteout covers content, and Redact permanently removes text, pictures, and drawings under the box.",
+            "Rotate, reorder, duplicate, delete, and insert blank pages; add a watermark and page numbers.",
+            "Undo and redo, zoom, drag-and-drop pictures onto a page, and automatic saving so a reload keeps your edits for 12 hours.",
+            "Download the edited PDF or save a copy straight into Files. Works on phones and tablets too.",
+        ],
+    },
+    {
+        "version": "1.15.0",
+        "date": "2026-10-09",
+        "changes": [
+            "Added Merge PDFs to the Convert page: combine up to 50 PDFs into one, with a bookmark for each file.",
+            "Drag the chosen files into a different order, or use the arrow buttons on phones and tablets; remove files one by one.",
+            "Dropping or choosing more files now adds them to the list instead of replacing it.",
+            "Dropping a file outside a drop area no longer opens it in the browser and leaves the app.",
+        ],
+    },
+    {
+        "version": "1.14.1",
+        "date": "2026-10-09",
+        "changes": [
+            "Moved the note Save button to the top toolbar, between the full screen and delete buttons.",
+            "The button is always in reach, even in long notes and with the phone keyboard open.",
+        ],
+    },
+    {
+        "version": "1.14.0",
+        "date": "2026-10-09",
+        "changes": [
+            "The app can now be opened at http://netappz.local from phones, tablets, and computers on the same network.",
+            "The app also listens on port 80, so the address no longer needs :5000. The old address still works.",
+            "The netappz.local name follows the server's IP address if it changes.",
+        ],
+    },
+    {
+        "version": "1.13.0",
+        "date": "2026-10-08",
+        "changes": [
+            "Added a Settings page for the Anthropic API key, chat model, effort, extra instructions, and the Telegram bot.",
+            "Saved settings apply right away, without editing .env or restarting; secrets are never shown in full.",
+            "Fixed the Telegram bot stopping as soon as it started checking for messages.",
+        ],
+    },
+    {
+        "version": "1.12.0",
+        "date": "2026-10-08",
+        "changes": [
+            "Added a Chat page for talking with Claude, with replies that appear as they are written.",
+            "Added an optional Telegram bot that shares the same conversations, so you can chat from anywhere.",
+            "Only Telegram accounts you allow can use the bot; /new starts a fresh conversation.",
+        ],
+    },
+    {
+        "version": "1.11.0",
+        "date": "2026-10-08",
+        "changes": [
+            "Added a Convert page with Word to PDF, PDF to Word, Image to PDF, and PDF to Image tools.",
+            "Image to PDF combines several images into one PDF and supports iPhone HEIC photos.",
+            "PDF to Image saves PNG or JPG pages, as a ZIP when the PDF has more than one page.",
+        ],
+    },
+    {
+        "version": "1.10.0",
+        "date": "2026-10-08",
+        "changes": [
+            "Notes now fill the whole screen on phones, tablets, laptops, and large displays.",
+            "Added a sidebar button to hide the note list and a full-screen button where the browser supports it.",
+            "Notes follow the device's light or dark appearance and stay clear of notches and home bars.",
+            "Larger tap targets on touch screens and a compact layout for phones in landscape.",
+        ],
+    },
+    {
+        "version": "1.9.0",
+        "date": "2026-10-08",
+        "changes": [
+            "Redesigned Notes to look like macOS Notes, with a note list beside a full-height editor.",
+            "Notes save automatically while you type; Command-S or Ctrl-S also saves.",
+            "Added note search, a compose button for new notes, and a phone layout with a back button.",
+        ],
+    },
+    {
+        "version": "1.8.0",
+        "date": "2026-10-08",
+        "changes": [
+            "Added a search box to the update log to filter by version, date, or keyword.",
+        ],
+    },
+    {
+        "version": "1.7.0",
+        "date": "2026-10-08",
+        "changes": [
+            "Notes are now stored in PostgreSQL when DATABASE_URL is set; SQLite is still used otherwise.",
+            "Sessions are kept in Redis when REDIS_URL is set, so they survive app restarts.",
+            "The notes list is cached in Redis and refreshed whenever a note changes.",
+            "Docker Compose now starts PostgreSQL and Redis alongside the app.",
+        ],
+    },
+    {
+        "version": "1.6.0",
+        "date": "2026-10-08",
+        "changes": [
+            "Added Docker support with a Dockerfile and Docker Compose setup.",
+            "The app now runs on the gunicorn production server inside Docker.",
+            "Shared files and notes are kept in mounted folders between container restarts.",
+        ],
+    },
+    {
+        "version": "1.5.0",
+        "date": "2026-10-07",
+        "changes": [
+            "Added a basic notes page with saved, editable notes.",
+        ],
+    },
+    {
+        "version": "1.4.0",
+        "date": "2026-10-07",
+        "changes": [
+            "Added a notes page with persistent create, edit, and delete actions.",
+        ],
+    },
+    {
+        "version": "1.3.0",
+        "date": "2026-10-07",
+        "changes": [
+            "Improved the layout and touch controls for phones, tablets, and desktop screens.",
+        ],
+    },
+    {
+        "version": "1.2.0",
+        "date": "2026-10-07",
+        "changes": [
+            "Added rename actions for files and folders.",
+            "Added confirmed deletion for files and folders.",
+        ],
+    },
+    {
+        "version": "1.1.0",
+        "date": "2026-10-07",
+        "changes": [
+            "Removed sign-in so devices on the network can open the file manager directly.",
+        ],
+    },
+    {
+        "version": "1.0.0",
+        "date": "2026-10-07",
+        "changes": [
+            "Added LAN file browsing, folder creation, and file or folder uploads.",
+            "Added file downloads and ZIP downloads for folders.",
+        ],
+    },
+]
+APP_VERSION = UPDATE_LOG[0]["version"]
+REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
+REQUEST_STATUSES = {"open": "Waiting", "in_progress": "In progress", "done": "Done"}
+
+
 def verify_telegram_token(token):
     """Return the bot's @username, or raise ValueError when Telegram rejects the token."""
     from telegram_bot import Telegram
@@ -371,6 +653,21 @@ def create_app(test_config=None):
         connection.execute(
             "CREATE TABLE IF NOT EXISTS app_settings (name TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS user_requests (
+                {id_column},
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                requested_by TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                done_version TEXT NOT NULL DEFAULT '',
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
     class SettingsStore:
         """Values saved on the Settings page, shared with the Telegram bot through the database."""
@@ -401,6 +698,55 @@ def create_app(test_config=None):
                             ),
                             (name, value),
                         )
+
+    class RequestStore:
+        """Requests from the people who use the app (features, problems) and how far along they are."""
+
+        columns = (
+            "id, kind, title, details, requested_by, status, done_version, "
+            f"{timestamp_select.format('created_at')}, {timestamp_select.format('updated_at')}"
+        )
+
+        def all(self):
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    f"SELECT {self.columns} FROM user_requests ORDER BY "
+                    "CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, updated_at DESC, id DESC"
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def get(self, request_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(f"SELECT {self.columns} FROM user_requests WHERE id = ?"), (request_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def add(self, kind, title, details, requested_by):
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("INSERT INTO user_requests (kind, title, details, requested_by) VALUES (?, ?, ?, ?)")
+                    + returning_id,
+                    (kind, title, details, requested_by),
+                )
+                return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def set_status(self, request_id, status, done_version=""):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql(
+                        "UPDATE user_requests SET status = ?, done_version = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ?"
+                    ),
+                    (status, done_version, request_id),
+                )
+
+        def delete(self, request_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM user_requests WHERE id = ?"), (request_id,))
+
+    request_store = RequestStore()
+    app.extensions["requests"] = request_store
 
     settings_store = SettingsStore()
     app.extensions["settings"] = settings_store
@@ -523,272 +869,7 @@ def create_app(test_config=None):
 
     @app.get("/updates")
     def updates():
-        entries = [
-            {
-                "version": "1.26.1",
-                "date": "2026-10-12",
-                "changes": [
-                    "Deleting or renaming a file that is already gone (a double click, Reload, or a change from another device) no longer shows a Not Found page: you go back to the folder with a short note.",
-                    "The Delete button turns off after the first click, and Back or Reload after a delete no longer sends it again.",
-                ],
-            },
-            {
-                "version": "1.26.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "PDF to Word keeps charts: bar, line and pie charts drawn in the PDF come out as pictures with their labels, instead of scattered numbers.",
-                    "Bullet lists stay bullet lists, instead of being squeezed into narrow table columns.",
-                    "Linked text (such as underlined links) no longer disappears from the Word file.",
-                    "Tables keep their real column widths.",
-                    "Scanned Thai: fewer stray spaces inside words (ขั บ → ขับ), tick boxes with broken outlines come back as ☐, and nearby lines are no longer joined by mistake. The sample form now reads 96.6% right.",
-                ],
-            },
-            {
-                "version": "1.25.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "Much more accurate PDF to Word for scanned Thai documents: a scanned driving licence form went from about 62% to 96% of characters right.",
-                    "Thai tone marks and upper vowels are no longer lost (เรียน, ชั่วคราว, อื่น ๆ come out whole), and the junk lines they used to leave are gone.",
-                    "Dotted fill-in lines on forms are no longer read as long strings of numbers; they come back as dotted lines you can type on.",
-                    "Tick boxes and circles on forms come back as ☐ and ○.",
-                    "Words standing alone between fill-in lines (such as สัญชาติ) are found, and English inside Thai text stays correct.",
-                    "Uses Tesseract's most accurate Thai and English models.",
-                ],
-            },
-            {
-                "version": "1.24.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "Faster and steadier server: if Redis is slow or down, pages no longer hang, and Notes read straight from the database instead.",
-                    "Redis now has a 64 MB memory limit, writes to disk once instead of twice, and makes room by dropping the oldest expiring data first.",
-                    "Docker checks the app's health every 30 seconds (database and Redis) and restarts anything that stops answering.",
-                    "Container logs are capped at 30 MB each, so they can't fill the disk.",
-                ],
-            },
-            {
-                "version": "1.23.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "Notes can hold links: web addresses (https://… or www.…) are underlined as you type.",
-                    "Put the cursor on a link and an Open button appears; on a computer, ⌘-click or Ctrl-click opens it right away.",
-                    "New Insert link button (⌘K): select some text first to turn it into a named link, written as [text](address).",
-                    "Notes are still saved as plain text, so nothing changes for existing notes.",
-                ],
-            },
-            {
-                "version": "1.22.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "Code in chat replies can be downloaded as a zip: each code block becomes a file, named the way the AI labels it (for example app.py).",
-                    "The Chat page shows a Download code button under replies that contain code, and each code block shows its file name.",
-                    "In Telegram, replies with code also come with the zip file, ready to save.",
-                    "The AI is asked to label every code file with its name, so the zip keeps folders like templates/index.html.",
-                ],
-            },
-            {
-                "version": "1.21.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "Settings now shows whether the Telegram bot is connected, and as which bot.",
-                    "If another program is using the same bot token (for example the Claude Code Telegram plugin), Settings says so and explains how to fix it.",
-                    "Telegram chats use the AI chosen on the Settings page, including Local AI.",
-                ],
-            },
-            {
-                "version": "1.20.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "Fixed Chat and the Telegram bot with Local AI: the ai.esm-solution.com firewall (Cloudflare) was blocking the app's requests, which showed up as a rejected API key.",
-                    "If a firewall blocks the app again, the chat now says so instead of blaming the API key.",
-                ],
-            },
-            {
-                "version": "1.19.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "Local AI at https://ai.esm-solution.com/api/v1 is now the default AI provider for Chat and the Telegram bot.",
-                    "Settings has a Models list for the Local AI server: add one model ID per line to make it available.",
-                    "Pick the model to use from that list; it starts with qwen3/qwen3.6-35b and qwen3/qwen3.8-27b.",
-                ],
-            },
-            {
-                "version": "1.18.0",
-                "date": "2026-10-12",
-                "changes": [
-                    "Chat and the Telegram bot can now use a local AI instead of Claude: pick the AI provider on the Settings page.",
-                    "Local AI works with any OpenAI-compatible server (Open WebUI, vLLM, LM Studio, Ollama). It starts set to https://ai.esm-solution.com/api/v1 with the qwen3/qwen3.6-35b model.",
-                    "Set the server address, API key, and model on the Settings page; changes apply right away.",
-                    "Replies stream in as they are written, and the model's hidden thinking (<think>) is left out of the reply.",
-                ],
-            },
-            {
-                "version": "1.17.0",
-                "date": "2026-10-09",
-                "changes": [
-                    "PDF to Word now keeps Thai text at the right size and in bold in Word (Thai uses Word's complex-script settings, which were missing).",
-                    "Thai fonts get the names Word knows, such as TH Sarabun New, and Thai lines no longer clip their tone marks.",
-                    "Scanned PDFs are read with Thai + English text recognition (OCR) and rebuilt as editable paragraphs, headings, and table rows.",
-                    "English inside Thai sentences is read correctly, and broken Thai from older PDFs (split sara am, shifted tone marks) is repaired.",
-                    "Choose whether scanned pages are recognized automatically, always, or never; the result says what was done.",
-                    "Word to PDF lays out documents that use TH Sarabun, Angsana, Cordia, or Tahoma with matching Thai fonts.",
-                ],
-            },
-            {
-                "version": "1.16.0",
-                "date": "2026-10-09",
-                "changes": [
-                    "Added Edit PDF, an Acrobat-style editor opened from the Convert page.",
-                    "Click any line of text in a PDF to change it; add text, pictures, and a drawn signature; draw, add shapes, highlight, and comment.",
-                    "Whiteout covers content, and Redact permanently removes text, pictures, and drawings under the box.",
-                    "Rotate, reorder, duplicate, delete, and insert blank pages; add a watermark and page numbers.",
-                    "Undo and redo, zoom, drag-and-drop pictures onto a page, and automatic saving so a reload keeps your edits for 12 hours.",
-                    "Download the edited PDF or save a copy straight into Files. Works on phones and tablets too.",
-                ],
-            },
-            {
-                "version": "1.15.0",
-                "date": "2026-10-09",
-                "changes": [
-                    "Added Merge PDFs to the Convert page: combine up to 50 PDFs into one, with a bookmark for each file.",
-                    "Drag the chosen files into a different order, or use the arrow buttons on phones and tablets; remove files one by one.",
-                    "Dropping or choosing more files now adds them to the list instead of replacing it.",
-                    "Dropping a file outside a drop area no longer opens it in the browser and leaves the app.",
-                ],
-            },
-            {
-                "version": "1.14.1",
-                "date": "2026-10-09",
-                "changes": [
-                    "Moved the note Save button to the top toolbar, between the full screen and delete buttons.",
-                    "The button is always in reach, even in long notes and with the phone keyboard open.",
-                ],
-            },
-            {
-                "version": "1.14.0",
-                "date": "2026-10-09",
-                "changes": [
-                    "The app can now be opened at http://netappz.local from phones, tablets, and computers on the same network.",
-                    "The app also listens on port 80, so the address no longer needs :5000. The old address still works.",
-                    "The netappz.local name follows the server's IP address if it changes.",
-                ],
-            },
-            {
-                "version": "1.13.0",
-                "date": "2026-10-08",
-                "changes": [
-                    "Added a Settings page for the Anthropic API key, chat model, effort, extra instructions, and the Telegram bot.",
-                    "Saved settings apply right away, without editing .env or restarting; secrets are never shown in full.",
-                    "Fixed the Telegram bot stopping as soon as it started checking for messages.",
-                ],
-            },
-            {
-                "version": "1.12.0",
-                "date": "2026-10-08",
-                "changes": [
-                    "Added a Chat page for talking with Claude, with replies that appear as they are written.",
-                    "Added an optional Telegram bot that shares the same conversations, so you can chat from anywhere.",
-                    "Only Telegram accounts you allow can use the bot; /new starts a fresh conversation.",
-                ],
-            },
-            {
-                "version": "1.11.0",
-                "date": "2026-10-08",
-                "changes": [
-                    "Added a Convert page with Word to PDF, PDF to Word, Image to PDF, and PDF to Image tools.",
-                    "Image to PDF combines several images into one PDF and supports iPhone HEIC photos.",
-                    "PDF to Image saves PNG or JPG pages, as a ZIP when the PDF has more than one page.",
-                ],
-            },
-            {
-                "version": "1.10.0",
-                "date": "2026-10-08",
-                "changes": [
-                    "Notes now fill the whole screen on phones, tablets, laptops, and large displays.",
-                    "Added a sidebar button to hide the note list and a full-screen button where the browser supports it.",
-                    "Notes follow the device's light or dark appearance and stay clear of notches and home bars.",
-                    "Larger tap targets on touch screens and a compact layout for phones in landscape.",
-                ],
-            },
-            {
-                "version": "1.9.0",
-                "date": "2026-10-08",
-                "changes": [
-                    "Redesigned Notes to look like macOS Notes, with a note list beside a full-height editor.",
-                    "Notes save automatically while you type; Command-S or Ctrl-S also saves.",
-                    "Added note search, a compose button for new notes, and a phone layout with a back button.",
-                ],
-            },
-            {
-                "version": "1.8.0",
-                "date": "2026-10-08",
-                "changes": [
-                    "Added a search box to the update log to filter by version, date, or keyword.",
-                ],
-            },
-            {
-                "version": "1.7.0",
-                "date": "2026-10-08",
-                "changes": [
-                    "Notes are now stored in PostgreSQL when DATABASE_URL is set; SQLite is still used otherwise.",
-                    "Sessions are kept in Redis when REDIS_URL is set, so they survive app restarts.",
-                    "The notes list is cached in Redis and refreshed whenever a note changes.",
-                    "Docker Compose now starts PostgreSQL and Redis alongside the app.",
-                ],
-            },
-            {
-                "version": "1.6.0",
-                "date": "2026-10-08",
-                "changes": [
-                    "Added Docker support with a Dockerfile and Docker Compose setup.",
-                    "The app now runs on the gunicorn production server inside Docker.",
-                    "Shared files and notes are kept in mounted folders between container restarts.",
-                ],
-            },
-            {
-                "version": "1.5.0",
-                "date": "2026-10-07",
-                "changes": [
-                    "Added a basic notes page with saved, editable notes.",
-                ],
-            },
-            {
-                "version": "1.4.0",
-                "date": "2026-10-07",
-                "changes": [
-                    "Added a notes page with persistent create, edit, and delete actions.",
-                ],
-            },
-            {
-                "version": "1.3.0",
-                "date": "2026-10-07",
-                "changes": [
-                    "Improved the layout and touch controls for phones, tablets, and desktop screens.",
-                ],
-            },
-            {
-                "version": "1.2.0",
-                "date": "2026-10-07",
-                "changes": [
-                    "Added rename actions for files and folders.",
-                    "Added confirmed deletion for files and folders.",
-                ],
-            },
-            {
-                "version": "1.1.0",
-                "date": "2026-10-07",
-                "changes": [
-                    "Removed sign-in so devices on the network can open the file manager directly.",
-                ],
-            },
-            {
-                "version": "1.0.0",
-                "date": "2026-10-07",
-                "changes": [
-                    "Added LAN file browsing, folder creation, and file or folder uploads.",
-                    "Added file downloads and ZIP downloads for folders.",
-                ],
-            },
-        ]
+        entries = UPDATE_LOG
         query = request.args.get("q", "").strip()[:100]
         if query:
             needle = query.lower()
@@ -801,7 +882,60 @@ def create_app(test_config=None):
                 if changes:
                     matches.append({**entry, "changes": changes})
             entries = matches
-        return render_template("updates.html", entries=entries, query=query)
+        requests_all = request_store.all()
+        counts = {status: sum(1 for r in requests_all if r["status"] == status) for status in REQUEST_STATUSES}
+        shown_status = request.args.get("status", "")
+        shown_status = shown_status if shown_status in REQUEST_STATUSES else ""
+        shown = [r for r in requests_all if not shown_status or r["status"] == shown_status]
+        if query:
+            needle = query.lower()
+            shown = [r for r in shown if needle in r["title"].lower() or needle in r["details"].lower()
+                     or needle in r["requested_by"].lower() or needle == r["done_version"]]
+        return render_template(
+            "updates.html", entries=entries, query=query, requests=shown, counts=counts,
+            total=len(requests_all), shown_status=shown_status, statuses=REQUEST_STATUSES,
+            kinds=REQUEST_KINDS, form=session.pop("request_form", None),
+        )
+
+    @app.post("/updates/requests")
+    def add_request():
+        kind = request.form.get("kind", "feature")
+        title = " ".join(request.form.get("title", "").split())
+        details = request.form.get("details", "").strip().replace("\r\n", "\n")
+        requested_by = " ".join(request.form.get("requested_by", "").split())
+        error = None
+        if kind not in REQUEST_KINDS:
+            error = "Choose what kind of request this is."
+        elif not title:
+            error = "Give the request a short title."
+        elif len(title) > 120 or len(details) > 4000 or len(requested_by) > 60:
+            error = "Keep the title under 120 characters, details under 4,000, and the name under 60."
+        if error:
+            flash(error, "error")
+            session["request_form"] = {"kind": kind, "title": title, "details": details, "requested_by": requested_by}
+            return redirect(url_for("updates", _anchor="requests"), code=303)
+        request_store.add(kind, title, details, requested_by)
+        flash("Thanks! Your request was added. Its status shows here as it's worked on.", "success")
+        return redirect(url_for("updates", _anchor="requests"), code=303)
+
+    @app.post("/updates/requests/<int:request_id>/status")
+    def request_status(request_id):
+        item = request_store.get(request_id)
+        status = request.form.get("status", "")
+        if item is None or status not in REQUEST_STATUSES:
+            flash("That request no longer exists." if item is None else "Choose a status.", "error")
+            return redirect(url_for("updates", _anchor="requests"), code=303)
+        # Done requests remember the app version that has the change, to find it in the log below.
+        request_store.set_status(request_id, status, APP_VERSION if status == "done" else "")
+        flash(f"“{item['title']}” is now {REQUEST_STATUSES[status].lower()}.", "success")
+        return redirect(url_for("updates", status=request.form.get("shown_status") or None, _anchor="requests"), code=303)
+
+    @app.post("/updates/requests/<int:request_id>/delete")
+    def delete_request(request_id):
+        if request_store.get(request_id) is not None:
+            request_store.delete(request_id)
+            flash("Request deleted.", "success")
+        return redirect(url_for("updates", status=request.form.get("shown_status") or None, _anchor="requests"), code=303)
 
     @app.get("/notes")
     def notes():

@@ -1072,6 +1072,56 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"status": "ok"})
 
+    def test_user_requests_can_be_added_tracked_and_closed(self):
+        import app as app_module
+
+        token = self._csrf()
+        page = self.client.get("/updates").get_data(as_text=True)
+        self.assertIn("No requests yet", page)
+
+        # A request needs a title; what was typed stays in the form.
+        response = self.client.post("/updates/requests", data={
+            "_csrf_token": token, "kind": "feature", "title": " ", "details": "Keep me",
+        })
+        self.assertEqual(response.status_code, 303)
+        page = self.client.get("/updates").get_data(as_text=True)
+        self.assertIn("Give the request a short title.", page)
+        self.assertIn("Keep me", page)
+
+        for kind, title in (("feature", "แสดงขนาดไฟล์เป็น MB"), ("problem", "Delete shows Not Found")):
+            response = self.client.post("/updates/requests", data={
+                "_csrf_token": token, "kind": kind, "title": title, "details": "Details", "requested_by": "Karn",
+            })
+            self.assertEqual(response.status_code, 303)
+        store = self.app.extensions["requests"]
+        items = {item["title"]: item for item in store.all()}
+        self.assertEqual(items["Delete shows Not Found"]["kind"], "problem")
+        self.assertEqual(items["แสดงขนาดไฟล์เป็น MB"]["status"], "open")
+
+        # Marking a request done records the app version that has the change.
+        done_id = items["Delete shows Not Found"]["id"]
+        self.client.post(f"/updates/requests/{done_id}/status", data={"_csrf_token": token, "status": "done"})
+        done = store.get(done_id)
+        self.assertEqual((done["status"], done["done_version"]), ("done", app_module.APP_VERSION))
+        page = self.client.get("/updates?status=done").get_data(as_text=True)
+        self.assertIn("Delete shows Not Found", page)
+        self.assertNotIn("แสดงขนาดไฟล์เป็น MB", page)
+        self.assertIn(f"version {app_module.APP_VERSION}", page)
+        self.assertIn("1 waiting · 0 in progress · 1 done", page)
+
+        # Reopening clears the version; search finds requests too.
+        self.client.post(f"/updates/requests/{done_id}/status", data={"_csrf_token": token, "status": "open"})
+        self.assertEqual(store.get(done_id)["done_version"], "")
+        self.assertIn("แสดงขนาดไฟล์เป็น MB", self.client.get("/updates?q=MB").get_data(as_text=True))
+        self.assertEqual(
+            self.client.post(f"/updates/requests/{done_id}/status", data={"_csrf_token": token, "status": "nope"}).status_code,
+            303,
+        )
+        self.assertEqual(store.get(done_id)["status"], "open")
+
+        self.client.post(f"/updates/requests/{done_id}/delete", data={"_csrf_token": token})
+        self.assertIsNone(store.get(done_id))
+
 
 if __name__ == "__main__":
     unittest.main()
