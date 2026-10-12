@@ -145,7 +145,12 @@
       var parts = escapeHtml(source).split(/```/);
       return parts.map(function (part, index) {
         if (index % 2 === 1) {
-          return "<pre><code>" + part.replace(/^[\w+-]*\n/, "") + "</code></pre>";
+          var info = /^[^\n]*\n/.exec(part);
+          var words = info ? info[0].trim().split(/\s+/) : [];
+          var name = words.map(function (w) { return w.split("=").pop(); })
+            .filter(function (w) { return /[./]/.test(w); }).pop();
+          var label = name ? '<span class="chat-code-name">' + name + "</span>" : "";
+          return label + "<pre><code>" + (info ? part.slice(info[0].length) : part) + "</code></pre>";
         }
         var html = "";
         var list = null;
@@ -172,8 +177,24 @@
       if (bubble.dataset.markdown === "true") { bubble.innerHTML = renderMarkdown(text); }
       else { bubble.textContent = text; }
     }
+    // Replies with code get a button that downloads every code block as a file in a zip.
+    var CODE_BLOCK = /^```[^\n`]*\n[\s\S]*?\S[\s\S]*?^```/m;
+    function addCodeDownload(wrapper, id, text) {
+      if (!id || !CODE_BLOCK.test(text) || wrapper.querySelector(".chat-download")) return;
+      var count = text.split(/^```[^\n`]*\n/m).length - 1;
+      var link = document.createElement("a");
+      link.className = "chat-download";
+      link.href = "/chat/message/" + id + "/code.zip";
+      link.setAttribute("download", "");
+      link.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M5.5 8.5 10 13l4.5-4.5M4 16h12"/></svg>';
+      link.appendChild(document.createTextNode("Download code (.zip" + (count > 1 ? ", " + count + " files" : "") + ")"));
+      var after = wrapper.querySelector(".chat-bubble");
+      after.parentNode.insertBefore(link, after.nextSibling);
+    }
     document.querySelectorAll('.chat-bubble[data-markdown="true"]').forEach(function (bubble) {
-      render(bubble, bubble.textContent);
+      var text = bubble.textContent;
+      render(bubble, text);
+      addCodeDownload(bubble.parentNode, bubble.parentNode.dataset.id, text);
     });
 
     var form = document.getElementById("chat-form");
@@ -208,6 +229,7 @@
         wrapper.appendChild(tag);
       }
       thread.appendChild(wrapper);
+      if (role === "assistant") addCodeDownload(wrapper, id, text);
       empty.hidden = true;
       scrollToEnd();
       return { wrapper: wrapper, bubble: bubble };
@@ -271,6 +293,7 @@
               if (item.message_id) {
                 reply.wrapper.dataset.id = item.message_id;
                 lastId = Math.max(lastId, item.message_id);
+                addCodeDownload(reply.wrapper, item.message_id, replyText);
               }
             } else if (item.type === "error") {
               throw new Error(item.error);

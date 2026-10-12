@@ -448,6 +448,13 @@ select {
   background: var(--notes-field); font-size: 13.5px; line-height: 1.5;
 }
 .chat-bubble pre code { padding: 0; background: none; }
+.chat-bubble .chat-code-name { display: block; margin: 0 0 4px; color: var(--notes-muted); font: 600 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.chat-download {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 6px 12px;
+  border: 1px solid var(--notes-line); border-radius: 999px; color: var(--notes-text); font-size: 13.5px; text-decoration: none;
+}
+.chat-download:hover { border-color: var(--notes-accent); color: var(--notes-accent); }
+.chat-download svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .chat-bubble a { color: var(--notes-accent); }
 .chat-source { color: var(--notes-muted); font-size: 12px; }
 .chat-message.is-thinking .chat-bubble::before {

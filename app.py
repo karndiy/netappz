@@ -302,6 +302,13 @@ def create_app(test_config=None):
                 ).fetchall()
             return [dict(row) for row in rows]
 
+        def message(self, message_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT id, conversation_id, role, content FROM chat_messages WHERE id = ?"), (message_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
         def add(self, conversation_id, role, content, source):
             with notes_connection() as connection:
                 cursor = connection.execute(
@@ -480,6 +487,16 @@ def create_app(test_config=None):
     @app.get("/updates")
     def updates():
         entries = [
+            {
+                "version": "1.22.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "Code in chat replies can be downloaded as a zip: each code block becomes a file, named the way the AI labels it (for example app.py).",
+                    "The Chat page shows a Download code button under replies that contain code, and each code block shows its file name.",
+                    "In Telegram, replies with code also come with the zip file, ready to save.",
+                    "The AI is asked to label every code file with its name, so the zip keeps folders like templates/index.html.",
+                ],
+            },
             {
                 "version": "1.21.0",
                 "date": "2026-10-12",
@@ -1014,6 +1031,19 @@ def create_app(test_config=None):
             abort(404)
         after_id = request.args.get("after", default=0, type=int)
         return jsonify(messages=chat_store.messages(conversation_id, after_id))
+
+    @app.get("/chat/message/<int:message_id>/code.zip")
+    def chat_code_zip(message_id):
+        message = chat_store.message(message_id)
+        files = chat.code_files(message["content"]) if message and message["role"] == "assistant" else []
+        if not files:
+            abort(404)
+        return send_file(
+            io.BytesIO(chat.code_zip(files)),
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"chat-{message['conversation_id']}-code-{message_id}.zip",
+        )
 
     @app.post("/chat/<int:conversation_id>/delete")
     def chat_delete(conversation_id):

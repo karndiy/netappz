@@ -4,8 +4,11 @@ Replies come from Claude (Anthropic) or from a local, OpenAI-compatible server s
 Open WebUI, vLLM, or Ollama, picked on the Settings page.
 """
 
+import io
 import json
 import os
+import posixpath
+import re
 import urllib.error
 import urllib.request
 
@@ -30,12 +33,79 @@ They talk to you from two places that share the same conversation history: a cha
 on their phone. Reply in the language they write in (often Thai or English). Be friendly, direct, and concise, \
 and go into detail when the question needs it.
 
-You cannot see or change the files, notes, or conversions in the app; if asked, explain how they can do it themselves."""
+You cannot see or change the files, notes, or conversions in the app; if asked, explain how they can do it themselves.
+
+When you write code, put each file in its own fenced code block and write the file name after the language \
+on the opening fence, for example ```python app.py or ```html templates/index.html. The app offers these blocks \
+as a zip file to download, using those names."""
 
 TELEGRAM_FORMAT_NOTE = (
     "This reply will be shown in Telegram as plain text. Do not use Markdown formatting "
-    "such as headings, bold, tables, or code fences; use short paragraphs and simple dashes for lists."
+    "such as headings, bold, or tables; use short paragraphs and simple dashes for lists. "
+    "Code is the exception: keep code in fenced blocks with file names, because it is also sent as a zip file."
 )
+
+# Code blocks in replies become files in a downloadable zip.
+CODE_BLOCK = re.compile(r"^```[ \t]*([^\n`]*)\n(.*?)^```[ \t]*$", re.S | re.M)
+FILE_NAME = re.compile(r"^[\w.@+-]+(/[\w.@+-]+)*$")
+NAME_COMMENT = re.compile(r"^\s*(?:#|//|--|;|/\*|<!--)\s*(?:file(?:name)?\s*:\s*)?([\w./@+-]+\.\w+)\s*(?:\*/|-->)?\s*$", re.I)
+EXTENSIONS = {
+    "python": "py", "py": "py", "javascript": "js", "js": "js", "jsx": "jsx", "typescript": "ts", "ts": "ts",
+    "tsx": "tsx", "html": "html", "css": "css", "scss": "scss", "json": "json", "yaml": "yml", "yml": "yml",
+    "toml": "toml", "ini": "ini", "xml": "xml", "sql": "sql", "bash": "sh", "sh": "sh", "shell": "sh",
+    "zsh": "sh", "powershell": "ps1", "ps1": "ps1", "bat": "bat", "c": "c", "cpp": "cpp", "c++": "cpp",
+    "h": "h", "csharp": "cs", "cs": "cs", "java": "java", "kotlin": "kt", "go": "go", "rust": "rs",
+    "php": "php", "ruby": "rb", "swift": "swift", "dart": "dart", "lua": "lua", "r": "r", "vue": "vue",
+    "markdown": "md", "md": "md", "dockerfile": "Dockerfile", "makefile": "Makefile", "text": "txt", "txt": "txt",
+}
+
+
+def safe_file_name(name):
+    """A relative path that stays inside the zip, or "" when the name can't be used."""
+    name = posixpath.normpath(name.strip().strip("'\"").replace("\\", "/")).lstrip("/")
+    if not name or name.startswith("..") or not FILE_NAME.fullmatch(name) or len(name) > 200:
+        return ""
+    return name
+
+
+def code_files(text):
+    """[(file name, code)] for each fenced code block in a reply."""
+    files, used = [], set()
+    for number, match in enumerate(CODE_BLOCK.finditer(text or ""), 1):
+        info, code = match.group(1).split(), match.group(2)
+        if not code.strip():
+            continue
+        language = info[0].lower() if info else ""
+        name = ""
+        for word in info:
+            word = word.split("=", 1)[1] if "=" in word else word
+            if ("." in word or "/" in word) and safe_file_name(word):
+                name = safe_file_name(word)
+        lines = code.split("\n", 1)
+        if not name and (comment := NAME_COMMENT.match(lines[0])):
+            name = safe_file_name(comment.group(1))
+        if not name and language in ("dockerfile", "makefile"):
+            name = EXTENSIONS[language]
+        if not name:
+            name = f"snippet-{number}.{EXTENSIONS.get(language, 'txt')}"
+        stem, dot, extension = name.rpartition(".") if "." in posixpath.basename(name) else (name, "", "")
+        candidate, copy = name, 2
+        while candidate in used:
+            candidate = f"{stem}-{copy}{dot}{extension}"
+            copy += 1
+        used.add(candidate)
+        files.append((candidate, code))
+    return files
+
+
+def code_zip(files):
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, code in files:
+            archive.writestr(name, code)
+    return buffer.getvalue()
 
 
 class ChatError(Exception):

@@ -12,6 +12,7 @@ Settings are re-read while the bot runs, so changes apply without a restart.
 
 import json
 import logging
+import secrets
 import threading
 import time
 import urllib.error
@@ -37,6 +38,29 @@ class Telegram:
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(request, timeout=http_timeout) as response:
+            payload = json.load(response)
+        if not payload.get("ok"):
+            raise RuntimeError(payload.get("description", "Telegram API error"))
+        return payload["result"]
+
+    def send_document(self, chat_id, filename, data, caption=""):
+        """Upload a file (multipart/form-data, as Telegram requires for uploads)."""
+        boundary = secrets.token_hex(16)
+        fields = [("chat_id", str(chat_id))] + ([("caption", caption)] if caption else [])
+        body = b"".join(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode()
+            for name, value in fields
+        )
+        body += (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{filename}"\r\n'
+            "Content-Type: application/zip\r\n\r\n"
+        ).encode() + data + f"\r\n--{boundary}--\r\n".encode()
+        request = urllib.request.Request(
+            API.format(token=self.token, method="sendDocument"),
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
             payload = json.load(response)
         if not payload.get("ok"):
             raise RuntimeError(payload.get("description", "Telegram API error"))
@@ -139,8 +163,21 @@ def handle(telegram, store, message, allowed):
     finally:
         stop.set()
     if reply:
-        store.add(conversation_id, "assistant", reply, "telegram")
+        message_id = store.add(conversation_id, "assistant", reply, "telegram")
         telegram.send(chat_id, reply)
+        send_code_zip(telegram, chat_id, reply, f"chat-{conversation_id}-code-{message_id}.zip")
+
+
+def send_code_zip(telegram, chat_id, reply, filename):
+    files = chat.code_files(reply)
+    if not files:
+        return
+    names = ", ".join(name for name, _ in files[:10]) + (" …" if len(files) > 10 else "")
+    try:
+        telegram.send_document(chat_id, filename, chat.code_zip(files), caption=f"Code files: {names}"[:1024])
+    except Exception:
+        log.exception("Could not send the code zip to Telegram")
+        telegram.send(chat_id, "(Could not attach the code as a zip file. Open the Chat page in Network Files to download it.)")
 
 
 def main():

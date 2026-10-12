@@ -905,6 +905,50 @@ class FileManagerTests(unittest.TestCase):
             telegram_bot.StatusReporter(settings)("running", "Connected as @netappz_bot.")
             self.assertIn("Connected as @netappz_bot.", self.client.get("/settings").get_data(as_text=True))
 
+    CODE_REPLY = (
+        "Here you go:\n\n```python app.py\nprint('hi')\n```\n\n"
+        "```html\n<!-- templates/index.html -->\n<h1>Hi</h1>\n```\n\n"
+        "```bash\npip install flask\n```\n\n```python ../../etc/passwd\nx = 1\n```\n\n"
+        "```python app.py\nprint('again')\n```\n"
+    )
+
+    def test_code_blocks_become_named_files(self):
+        files = chat.code_files(self.CODE_REPLY)
+        self.assertEqual(
+            [name for name, _ in files],
+            ["app.py", "templates/index.html", "snippet-3.sh", "snippet-4.py", "app-2.py"],
+        )
+        self.assertEqual(files[0][1], "print('hi')\n")
+        self.assertEqual(chat.code_files("No code here, just `inline`."), [])
+
+    def test_chat_reply_code_downloads_as_zip(self):
+        store = self.app.extensions["chat"]
+        conversation_id = store.create()
+        message_id = store.add(conversation_id, "assistant", self.CODE_REPLY, "web")
+        response = self.client.get(f"/chat/message/{message_id}/code.zip")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/zip")
+        archive = zipfile.ZipFile(io.BytesIO(response.data))
+        self.assertIn("templates/index.html", archive.namelist())
+        self.assertEqual(archive.read("app.py"), b"print('hi')\n")
+
+        plain_id = store.add(conversation_id, "assistant", "No code.", "web")
+        self.assertEqual(self.client.get(f"/chat/message/{plain_id}/code.zip").status_code, 404)
+        user_id = store.add(conversation_id, "user", self.CODE_REPLY, "web")
+        self.assertEqual(self.client.get(f"/chat/message/{user_id}/code.zip").status_code, 404)
+
+    def test_telegram_reply_with_code_sends_zip(self):
+        store = self.app.extensions["chat"]
+        telegram = mock.Mock()
+        message = {"chat": {"id": 5}, "from": {"id": 111}, "text": "write code"}
+        with mock.patch.object(chat, "complete_reply", return_value=self.CODE_REPLY):
+            telegram_bot.handle(telegram, store, message, allowed={111})
+        chat_id, filename, data = telegram.send_document.call_args[0]
+        self.assertEqual(chat_id, 5)
+        self.assertTrue(filename.endswith(".zip"))
+        self.assertIn("app.py", zipfile.ZipFile(io.BytesIO(data)).namelist())
+        self.assertIn("app.py", telegram.send_document.call_args.kwargs["caption"])
+
 
 if __name__ == "__main__":
     unittest.main()
