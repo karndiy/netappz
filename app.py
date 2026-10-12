@@ -84,9 +84,14 @@ SETTING_GROUPS = [
                 "help": "Open WebUI: Settings → Account → API keys. Leave empty if the server needs no key.",
             },
             {
-                "name": "LOCAL_AI_MODEL", "label": "Model", "default": chat.DEFAULT_LOCAL_MODEL,
-                "choices": [chat.DEFAULT_LOCAL_MODEL],
-                "help": "The model ID as the server lists it.",
+                "name": "LOCAL_AI_MODELS", "label": "Models", "multiline": True, "rows": 3,
+                "default": "\n".join(chat.DEFAULT_LOCAL_MODELS),
+                "help": "One model ID per line, as the server lists it. Add a line to make another model available.",
+            },
+            {
+                "name": "LOCAL_AI_MODEL", "label": "Model to use", "default": chat.DEFAULT_LOCAL_MODEL,
+                "options": [],  # Filled from the Models list.
+                "help": "Chat and the Telegram bot reply with this model. Save after adding a model to pick it here.",
             },
         ],
     },
@@ -106,7 +111,7 @@ SETTING_GROUPS = [
     },
 ]
 SETTING_FIELDS = {field["name"]: field for group in SETTING_GROUPS for field in group["fields"]}
-MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@\[\]-]{0,99}")
+MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}")
 LOCAL_URL = re.compile(r"https?://[^\s/]+(/\S*)?")
 TELEGRAM_TOKEN = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
 TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
@@ -473,6 +478,15 @@ def create_app(test_config=None):
     @app.get("/updates")
     def updates():
         entries = [
+            {
+                "version": "1.19.0",
+                "date": "2026-10-12",
+                "changes": [
+                    "Local AI at https://ai.esm-solution.com/api/v1 is now the default AI provider for Chat and the Telegram bot.",
+                    "Settings has a Models list for the Local AI server: add one model ID per line to make it available.",
+                    "Pick the model to use from that list; it starts with qwen3/qwen3.6-35b and qwen3/qwen3.8-27b.",
+                ],
+            },
             {
                 "version": "1.18.0",
                 "date": "2026-10-12",
@@ -1010,6 +1024,12 @@ def create_app(test_config=None):
                     "has_env": bool(environment),
                     "error": (errors or {}).get(name),
                 }
+                if name == "LOCAL_AI_MODEL":
+                    models = chat.parse_models((values or {}).get("LOCAL_AI_MODELS", "")) or chat.local_models()
+                    chosen = (values or {}).get(name, current)
+                    if chosen and chosen not in models:
+                        models.append(chosen)
+                    item["options"] = [(model, model) for model in models]
                 if field.get("secret"):
                     # Never send secrets back to the browser; show only the last characters.
                     item["hint"] = f"…{current[-4:]}" if len(current) >= 12 else ""
@@ -1035,6 +1055,8 @@ def create_app(test_config=None):
                 value = request.form.get(name, "").strip().replace("\r\n", "\n")
                 if name == "TELEGRAM_ALLOWED_USERS":
                     value = ",".join(part for part in re.split(r"[\s,]+", value) if part)
+                elif name == "LOCAL_AI_MODELS":
+                    value = "\n".join(chat.parse_models(value))
                 fallback = os.environ.get(name, "").strip() or field.get("default", "")
                 if value == fallback:
                     # Matches what the server would use anyway, so don't pin it.
@@ -1050,6 +1072,12 @@ def create_app(test_config=None):
                 errors[name] = "Choose low, medium, or high."
             elif name == "CHAT_PROVIDER" and value not in {key for key, _ in field["options"]}:
                 errors[name] = "Choose Claude or Local AI."
+            elif name == "LOCAL_AI_MODELS" and not all(MODEL_ID.fullmatch(model) for model in value.splitlines()):
+                errors[name] = "Each line must be one model ID, such as qwen3/qwen3.6-35b."
+            elif name == "LOCAL_AI_MODEL" and value not in (
+                chat.parse_models(request.form.get("LOCAL_AI_MODELS", "")) or chat.DEFAULT_LOCAL_MODELS
+            ):
+                errors[name] = "Choose a model from the Models list."
             elif name == "LOCAL_AI_URL" and not LOCAL_URL.fullmatch(value):
                 errors[name] = "Enter an address that starts with http:// or https://."
             elif name == "LOCAL_AI_API_KEY" and any(c.isspace() for c in value):

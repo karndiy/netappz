@@ -72,7 +72,8 @@
                   {% endfor %}
                 </select>
               {% elif field.multiline %}
-                <textarea id="{{ field_id }}" name="{{ field.name }}" rows="4" maxlength="4000"
+                <textarea id="{{ field_id }}" name="{{ field.name }}" rows="{{ field.rows or 4 }}" maxlength="4000"
+                          spellcheck="{{ 'false' if field.name == 'LOCAL_AI_MODELS' else 'true' }}"
                           aria-describedby="{{ field_id }}-help">{{ field.value }}</textarea>
               {% else %}
                 <input id="{{ field_id }}" name="{{ field.name }}" type="text" value="{{ field.value }}"

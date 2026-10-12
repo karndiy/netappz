@@ -11,9 +11,10 @@ import urllib.request
 
 import anthropic
 
-DEFAULT_PROVIDER = "anthropic"
+DEFAULT_PROVIDER = "local"
 DEFAULT_LOCAL_URL = "https://ai.esm-solution.com/api/v1"
-DEFAULT_LOCAL_MODEL = "qwen3/qwen3.6-35b"
+DEFAULT_LOCAL_MODELS = ["qwen3/qwen3.6-35b", "qwen3/qwen3.8-27b"]
+DEFAULT_LOCAL_MODEL = DEFAULT_LOCAL_MODELS[0]
 LOCAL_TIMEOUT = 300
 DEFAULT_MODEL = "claude-opus-5-5"
 # Claude Opus 5.5 defaults to "medium"; set it explicitly so it is easy to tune.
@@ -58,6 +59,21 @@ def setting(name, default=""):
 
 def provider():
     return "local" if setting("CHAT_PROVIDER", DEFAULT_PROVIDER) == "local" else "anthropic"
+
+
+def parse_models(text):
+    """Model IDs from one-per-line (or comma-separated) text, without duplicates."""
+    models = []
+    for part in text.replace(",", "\n").splitlines():
+        part = part.strip()
+        if part and part not in models:
+            models.append(part)
+    return models
+
+
+def local_models():
+    """The models listed on the Settings page for the Local AI server."""
+    return parse_models(setting("LOCAL_AI_MODELS")) or list(DEFAULT_LOCAL_MODELS)
 
 
 def is_configured():

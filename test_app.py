@@ -772,7 +772,8 @@ class FileManagerTests(unittest.TestCase):
             self.assertNotIn("TELEGRAM_ALLOWED_USERS", settings)
 
             self.client.post("/settings", data={
-                "_csrf_token": token, "CHAT_EFFORT": "high", "clear_ANTHROPIC_API_KEY": "1",
+                "_csrf_token": token, "CHAT_PROVIDER": "anthropic", "CHAT_EFFORT": "high",
+                "clear_ANTHROPIC_API_KEY": "1",
             })
             self.assertFalse(chat.is_configured())
 
@@ -865,6 +866,27 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(chat.provider(), "local")
         self.assertTrue(chat.is_configured())
         self.assertEqual(chat.assistant_name(), chat.DEFAULT_LOCAL_MODEL)
+
+    def test_settings_add_local_model_and_use_it(self):
+        token = self._csrf()
+        page = self.client.get("/settings").get_data(as_text=True)
+        self.assertIn('<option value="qwen3/qwen3.8-27b"', page)
+        response = self.client.post("/settings", data={
+            "_csrf_token": token, "CHAT_EFFORT": "medium", "LOCAL_AI_MODEL": "qwen3/qwen3.8-27b",
+            "LOCAL_AI_MODELS": "qwen3/qwen3.6-35b\r\nqwen3/qwen3.8-27b\r\ngemma4:12b\r\n",
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(chat.local_models(), ["qwen3/qwen3.6-35b", "qwen3/qwen3.8-27b", "gemma4:12b"])
+        self.assertEqual(chat.assistant_name(), "qwen3/qwen3.8-27b")
+        self.assertIn('<option value="gemma4:12b"', self.client.get("/settings").get_data(as_text=True))
+
+        # The model to use must be in the list.
+        response = self.client.post("/settings", data={
+            "_csrf_token": token, "CHAT_EFFORT": "medium", "LOCAL_AI_MODEL": "gemma4:12b",
+            "LOCAL_AI_MODELS": "qwen3/qwen3.6-35b",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Choose a model from the Models list.", response.get_data(as_text=True))
 
 
 if __name__ == "__main__":
