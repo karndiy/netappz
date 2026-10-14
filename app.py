@@ -164,6 +164,15 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
     {
+        "version": "1.42.0",
+        "date": "2026-10-14",
+        "changes": [
+            "Missions can have a start date and an end date (request: dates for missions). Both are optional, and people proposing a mission can suggest them too.",
+            "Before the start date a mission shows as Upcoming with how many days until it starts; work can be submitted from the start date. After the end date it moves to Closed missions as Ended.",
+            "Open missions show their dates and how long is left, such as \"3 days left\" or \"Last day today\". Administrators can change a mission's dates at any time with Change dates.",
+        ],
+    },
+    {
         "version": "1.41.0",
         "date": "2026-10-14",
         "changes": [
@@ -1266,8 +1275,11 @@ def create_app(test_config=None):
             connection.execute("ALTER TABLE missions ADD COLUMN reward INTEGER NOT NULL DEFAULT 0")
         # Proposed missions (1.40.0): anyone can propose one; an administrator approves or declines it.
         existing = table_columns(connection, "missions")
+        # Mission dates (1.42.0): optional first and last day (YYYY-MM-DD, quest time zone) to submit work.
         for column, definition in (("approval", "TEXT NOT NULL DEFAULT 'approved'"),
-                                   ("approval_note", "TEXT NOT NULL DEFAULT ''")):
+                                   ("approval_note", "TEXT NOT NULL DEFAULT ''"),
+                                   ("starts_on", "TEXT NOT NULL DEFAULT ''"),
+                                   ("ends_on", "TEXT NOT NULL DEFAULT ''")):
             if column not in existing:
                 connection.execute(f"ALTER TABLE missions ADD COLUMN {column} {definition}")
         # Wallet (1.37.0): every change to someone's points is a row; the balance is their sum.
@@ -1429,7 +1441,7 @@ def create_app(test_config=None):
 
         mission_columns = (
             "missions.id, missions.title, missions.details, missions.created_by, missions.is_open, missions.reward, "
-            "missions.approval, missions.approval_note, "
+            "missions.approval, missions.approval_note, missions.starts_on, missions.ends_on, "
             f"users.username AS creator, {time_as('missions.created_at')}"
         )
         submission_columns = (
@@ -1466,14 +1478,19 @@ def create_app(test_config=None):
                 ).fetchone()
             return dict(row) if row else None
 
-        def add(self, title, details, user_id, reward=0, approval="approved"):
+        def add(self, title, details, user_id, reward=0, approval="approved", starts_on="", ends_on=""):
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO missions (title, details, created_by, reward, approval) VALUES (?, ?, ?, ?, ?)")
-                    + returning_id,
-                    (title, details, user_id, reward, approval),
+                    sql("INSERT INTO missions (title, details, created_by, reward, approval, starts_on, ends_on) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)") + returning_id,
+                    (title, details, user_id, reward, approval, starts_on, ends_on),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def set_dates(self, mission_id, starts_on, ends_on):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE missions SET starts_on = ?, ends_on = ? WHERE id = ?"),
+                                   (starts_on, ends_on, mission_id))
 
         def decide(self, mission_id, approval, note, reward):
             """An administrator's answer to a proposed mission."""
@@ -2645,10 +2662,13 @@ def create_app(test_config=None):
         # Proposals are seen only by the person who proposed them and by administrators.
         everything = [m for m in mission_store.all()
                       if m["approval"] == "approved" or user["is_admin"] or m["created_by"] == user["id"]]
+        today = quest_day()[0]
         for mission in everything:
+            mission.update(mission_phase(mission, today))
             mine = [item for item in mission["submissions"] if item["user_id"] == user["id"]]
             mission["mine"] = mine
-            mission["can_submit"] = mission["approval"] == "approved" and bool(mission["is_open"]) and not any(
+            mission["can_submit"] = (mission["approval"] == "approved" and bool(mission["is_open"])
+                                     and mission["phase"] == "running") and not any(
                 item["status"] in ("pending", "approved") for item in mine)
             mission["approved"] = sum(1 for item in mission["submissions"] if item["status"] == "approved")
         live = [m for m in everything if m["approval"] == "approved"]
@@ -2656,12 +2676,60 @@ def create_app(test_config=None):
                    for item in mission["submissions"] if item["status"] == "pending"] if user["is_admin"] else []
         quests = quest_context(user)
         return render_template(
-            "missions.html", **quests, missions=[m for m in live if m["is_open"]],
-            closed=[m for m in live if not m["is_open"]], waiting=waiting,
+            "missions.html", **quests, missions=[m for m in live if m["is_open"] and m["phase"] != "ended"],
+            closed=[m for m in live if not m["is_open"] or m["phase"] == "ended"], waiting=waiting,
             proposals=[m for m in everything if m["approval"] == "proposed"],
             declined=[m for m in everything if m["approval"] == "declined" and m["created_by"] == user["id"]],
             statuses=MISSION_STATUSES, approvals=MISSION_APPROVALS, form=session.pop("mission_form", None),
         )
+
+    def mission_dates():
+        """(starts_on, ends_on, error) from the form; each date is optional, as YYYY-MM-DD."""
+        dates = []
+        for name in ("starts_on", "ends_on"):
+            value = request.form.get(name, "").strip()
+            if value:
+                try:
+                    value = datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
+                except ValueError:
+                    return "", "", "Enter dates as YYYY-MM-DD."
+            dates.append(value)
+        if dates[0] and dates[1] and dates[1] < dates[0]:
+            return "", "", "The end date can't be before the start date."
+        return dates[0], dates[1], None
+
+    def mission_phase(mission, today):
+        """Whether a mission's dates have begun: upcoming, running or ended, with a short label."""
+        starts, ends = mission["starts_on"], mission["ends_on"]
+        days = lambda value: (datetime.strptime(value, "%Y-%m-%d") - datetime.strptime(today, "%Y-%m-%d")).days
+        if starts and today < starts:
+            left = days(starts)
+            return {"phase": "upcoming", "phase_label": "Starts tomorrow" if left == 1 else f"Starts in {left} days"}
+        if ends and today > ends:
+            return {"phase": "ended", "phase_label": "Ended"}
+        if ends:
+            left = days(ends)
+            return {"phase": "running", "phase_label": "Last day today" if left == 0
+                    else "Ends tomorrow" if left == 1 else f"{left} days left"}
+        return {"phase": "running", "phase_label": ""}
+
+    @app.template_filter("mission_date")
+    def mission_date(value):
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%-d %b %Y") if value else ""
+
+    @app.post("/missions/<int:mission_id>/dates")
+    def mission_set_dates(mission_id):
+        admin_required()
+        mission = mission_store.mission(mission_id)
+        starts_on, ends_on, error = mission_dates()
+        if mission is None:
+            flash("That mission no longer exists.", "error")
+        elif error:
+            flash(error, "error")
+        else:
+            mission_store.set_dates(mission_id, starts_on, ends_on)
+            flash(f"Dates saved for “{mission['title']}”.", "success")
+        return redirect(url_for("missions", _anchor=f"mission-{mission_id}"), code=303)
 
     @app.post("/missions")
     def create_mission():
@@ -2669,6 +2737,7 @@ def create_app(test_config=None):
         title = " ".join(request.form.get("title", "").split())
         details = mission_text("details")
         reward = wallet_amount(request.form.get("reward", ""), allow_zero=True)
+        starts_on, ends_on, date_error = mission_dates()
         error = None
         if not title:
             error = "Give the mission a short title."
@@ -2676,19 +2745,23 @@ def create_app(test_config=None):
             error = "Keep the title under 120 characters and the details under 4,000."
         elif reward is None:
             error = f"The reward is a whole number of points from 0 to {WALLET_MAX:,}."
+        elif date_error:
+            error = date_error
         if error:
             flash(error, "error")
             session["mission_form"] = {"title": title[:120], "details": details[:MISSION_TEXT_LIMIT],
-                                       "reward": request.form.get("reward", "")[:12]}
+                                       "reward": request.form.get("reward", "")[:12],
+                                       "starts_on": request.form.get("starts_on", "")[:10],
+                                       "ends_on": request.form.get("ends_on", "")[:10]}
             return redirect(url_for("missions"), code=303)
         if not g.user["is_admin"]:
-            mission_id = mission_store.add(title, details, g.user["id"], reward, approval="proposed")
+            mission_id = mission_store.add(title, details, g.user["id"], reward, "proposed", starts_on, ends_on)
             notification_store.add(user_store.admin_ids(), g.user["id"], "mission",
                                    f"{g.user['username']} proposed a mission: “{title}”",
                                    url_for("missions", _anchor="mission-proposals"))
             flash("Mission proposed. An administrator will approve it or decline it with a note.", "success")
             return redirect(url_for("missions", _anchor=f"mission-{mission_id}"), code=303)
-        mission_store.add(title, details, g.user["id"], reward)
+        mission_store.add(title, details, g.user["id"], reward, "approved", starts_on, ends_on)
         announce_mission(title, g.user["id"])
         flash("Mission added. Everyone can now submit their work for it.", "success")
         return redirect(url_for("missions"), code=303)
@@ -2768,6 +2841,10 @@ def create_app(test_config=None):
             error = "This mission hasn't been approved yet."
         elif not mission["is_open"]:
             error = "This mission is closed, so no new work can be submitted."
+        elif mission_phase(mission, quest_day()[0])["phase"] == "upcoming":
+            error = f"This mission starts on {mission_date(mission['starts_on'])}."
+        elif mission_phase(mission, quest_day()[0])["phase"] == "ended":
+            error = f"This mission ended on {mission_date(mission['ends_on'])}."
         elif mission_store.active_submission(mission_id, g.user["id"]):
             error = "You've already submitted work for this mission."
         elif not body:

@@ -1481,6 +1481,47 @@ class FileManagerTests(unittest.TestCase):
         self.client.post(f"/missions/{lunch['id']}/delete", data={"_csrf_token": token})
         self.assertIsNone(store.mission(lunch["id"]))
 
+    def test_missions_run_between_their_dates(self):
+        from datetime import datetime, timedelta, timezone
+        token = self._csrf()
+        store = self.app.extensions["missions"]
+        member_id = self.app.extensions["users"].add("member", "member-password")
+        today = (datetime.now(timezone.utc) + timedelta(hours=7)).date()
+        day = lambda offset: (today + timedelta(days=offset)).isoformat()
+
+        def add(title, starts, ends):
+            self.client.post("/missions", data={"_csrf_token": token, "title": title, "starts_on": starts, "ends_on": ends})
+            return next((m for m in store.all() if m["title"] == title), None)
+
+        self.assertIsNone(add("Backwards", day(3), day(1)))
+        self.assertIn("be before the start date", self.client.get("/missions").get_data(as_text=True))
+        self.assertIsNone(add("Bad date", "14/10/2026", ""))
+        later, past, now = add("Later", day(2), day(9)), add("Past", day(-5), day(-1)), add("Now", day(-1), day(0))
+        self.assertEqual((later["starts_on"], later["ends_on"]), (day(2), day(9)))
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn("Starts in 2 days", page)
+        self.assertIn("Last day today", page)
+        self.assertIn("Ended", page)
+        for mission in (later, past, now):
+            self.client.post(f"/missions/{mission['id']}/submit", data={"_csrf_token": token, "body": "Did it"})
+        submitted = {m["title"]: len(m["submissions"]) for m in store.all()}
+        self.assertEqual((submitted["Later"], submitted["Past"], submitted["Now"]), (0, 0, 1))
+        self.assertEqual(self.client.post(f"/missions/{later['id']}/dates", data={
+            "_csrf_token": token, "starts_on": day(0), "ends_on": ""}).status_code, 403)
+
+        # An administrator can move the dates; no dates means it runs until it's closed.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post(f"/missions/{later['id']}/dates", data={"_csrf_token": token, "starts_on": "", "ends_on": ""})
+        self.assertEqual(store.mission(later["id"])["starts_on"], "")
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.client.post(f"/missions/{later['id']}/submit", data={"_csrf_token": token, "body": "Now I can"})
+        self.assertEqual(len(next(m for m in store.all() if m["title"] == "Later")["submissions"]), 1)
+
     def test_daily_quests_count_actions_and_pay_after_approval(self):
         token = self._csrf()
         quests = self.app.extensions["quests"]

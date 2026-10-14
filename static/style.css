@@ -1312,3 +1312,18 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .quest-subhead { margin: 22px 0 0; font-size: 16px; }
 .quest-approval { display: flex; align-items: center; gap: 8px; font-weight: 400; }
 .quest-approval input { width: auto; }
+
+/* Mission dates */
+.mission-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.mission-when { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 6px 0 0; font-size: 13.5px; }
+.mission-when strong { padding: 1px 8px; border-radius: 999px; background: var(--mac-accent-tint); color: var(--mac-accent); font-size: 12.5px; font-weight: 600; }
+.mission-phase.is-upcoming { background: var(--mac-purple-tint); color: var(--mac-purple-text); }
+.mission-phase.is-ended, .mission-phase.is-closed { background: var(--mac-fill); color: var(--mac-muted); }
+.mission-change-dates { margin-top: 8px; font-size: 13.5px; }
+.mission-change-dates summary { color: var(--mac-accent); cursor: pointer; }
+.mission-change-dates form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.mission-change-dates input { min-height: 34px; padding: 4px 8px; border: 1px solid var(--mac-border); border-radius: 6px; font: inherit; }
+.mission-wait { margin: 10px 0 0; color: var(--mac-muted); font-size: 13.5px; }
+@media (max-width: 560px) {
+  .mission-dates { grid-template-columns: 1fr; }
+}

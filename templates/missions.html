@@ -217,7 +217,8 @@
                   {% if mission.reward %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(mission.reward) }} points suggested</span>{% endif %}
                 </div>
                 {% if mission.details %}<p class="request-details">{{ mission.details }}</p>{% endif %}
-                <p class="request-meta">Proposed by {{ mission.creator or 'a deleted account' }} · {{ mission.created_at[:10] }}</p>
+                <p class="request-meta">Proposed by {{ mission.creator or 'a deleted account' }} · {{ mission.created_at[:10] }}
+                  {% if mission.starts_on or mission.ends_on %} · 📅 {{ mission.starts_on | mission_date or 'Now' }} – {{ mission.ends_on | mission_date or 'no end date' }}{% endif %}</p>
                 {% if mission.approval_note %}<p class="request-note">{{ mission.approval_note }}</p>{% endif %}
               </div>
               {% if current_user.is_admin and mission.approval == 'proposed' %}
@@ -255,6 +256,16 @@
           <label for="mission-details">Details <span class="optional">(optional)</span></label>
           <textarea id="mission-details" name="details" rows="3" maxlength="4000"
                     placeholder="What needs doing, and what should people send as proof?">{{ form.details if form else '' }}</textarea>
+          <div class="mission-dates">
+            <div>
+              <label for="mission-starts">Start date <span class="optional">(optional)</span></label>
+              <input id="mission-starts" name="starts_on" type="date" value="{{ form.starts_on if form else '' }}">
+            </div>
+            <div>
+              <label for="mission-ends">End date <span class="optional">(optional)</span></label>
+              <input id="mission-ends" name="ends_on" type="date" value="{{ form.ends_on if form else '' }}">
+            </div>
+          </div>
           <label for="mission-reward">Reward in points <span class="optional">(optional: paid into the wallet when work is approved{% if not current_user.is_admin %}; an administrator decides the final amount{% endif %})</span></label>
           <input id="mission-reward" name="reward" type="text" inputmode="numeric" maxlength="12"
                  placeholder="0" value="{{ form.reward if form else '' }}">
@@ -269,7 +280,8 @@
           <div class="request-item">
             <div class="request-main">
               <div class="request-title-row">
-                <span class="request-status">{{ 'Open' if mission.is_open else 'Closed' }}</span>
+                <span class="request-status mission-phase is-{{ 'closed' if not mission.is_open else mission.phase }}">{{
+                  'Closed' if not mission.is_open else {'upcoming': 'Upcoming', 'running': 'Open', 'ended': 'Ended'}[mission.phase] }}</span>
                 <h3>{{ mission.title }}</h3>
                 {% if mission.reward %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(mission.reward) }} points</span>{% endif %}
               </div>
@@ -278,6 +290,24 @@
                 {% if mission.creator %}Set by {{ mission.creator }} · {% endif %}{{ mission.created_at[:10] }}
                 · {{ mission.approved }} approved
               </p>
+              {% if mission.starts_on or mission.ends_on %}
+                <p class="mission-when">📅 {{ mission.starts_on | mission_date or 'Now' }} – {{ mission.ends_on | mission_date or 'no end date' }}
+                  {% if mission.phase_label and mission.is_open %}<strong>{{ mission.phase_label }}</strong>{% endif %}</p>
+              {% endif %}
+              {% if current_user.is_admin %}
+                <details class="mission-change-dates">
+                  <summary>Change dates</summary>
+                  <form action="{{ url_for('mission_set_dates', mission_id=mission.id) }}" method="post">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <label class="visually-hidden" for="starts-{{ mission.id }}">Start date</label>
+                    <input id="starts-{{ mission.id }}" name="starts_on" type="date" value="{{ mission.starts_on }}">
+                    <span aria-hidden="true">–</span>
+                    <label class="visually-hidden" for="ends-{{ mission.id }}">End date</label>
+                    <input id="ends-{{ mission.id }}" name="ends_on" type="date" value="{{ mission.ends_on }}">
+                    <button class="secondary" type="submit">Save dates</button>
+                  </form>
+                </details>
+              {% endif %}
             </div>
             {% if current_user.is_admin %}
               <div class="request-controls">
@@ -302,6 +332,9 @@
             </ul>
           {% endif %}
 
+          {% if mission.is_open and mission.phase == 'upcoming' and not current_user.is_admin %}
+            <p class="mission-wait">You can submit work from {{ mission.starts_on | mission_date }}.</p>
+          {% endif %}
           {% if mission.can_submit %}
             <form class="request-form mission-submit" action="{{ url_for('mission_submit', mission_id=mission.id) }}" method="post">
               <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
