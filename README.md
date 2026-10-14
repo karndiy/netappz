@@ -2,7 +2,7 @@
 
 A responsive Flask file manager for desktop PCs, tablets, and phones. No sign-in or password is required. Anyone who can reach it can browse, upload, download, rename, and delete shared files and folders. It supports browsing folders, creating folders, uploading files or a selected folder, downloading individual files, and downloading folders as ZIP archives.
 
-Open **Notes** from the app header, or visit `/notes`, to create, edit, and delete basic text notes. Notes are stored in a SQLite database under Flask's `instance/` folder by default; set `NOTES_DATABASE` to choose another location. Notes are shared with any device that can access this no-login app.
+Open **Notes** from the app header, or visit `/notes`, to create, edit, and delete basic text notes. Notes are stored in a SQLite database under Flask's `instance/` folder by default; set `NOTES_DATABASE` to choose another location. Each person's notes are private to them. Administrators see what people add, change and delete (note titles only) in **Settings → Activity log**.
 
 Open **Update log** from the app header, or visit `/updates`, to review the included patch notes. This is a changelog page; it does not automatically check for or install new versions.
 
@@ -87,7 +87,7 @@ Then open `http://<computer-LAN-IP>:5000`. Shared files persist in `./shared` on
 
 ## Chat with Claude (web and Telegram)
 
-Open **Chat** from the app header, or visit `/chat`, to talk with Claude. Conversations are stored in the database and shared with an optional Telegram bot, so you can continue the same chat from your phone anywhere with internet.
+Open **Chat** from the app header, or visit `/chat`, to talk with Claude. Each person's conversations are private to them. The optional Telegram bot has no sign-in, so its conversations belong to the first administrator and show on their Chat page, where they can be continued from a phone anywhere with internet. Messages people send (the first 300 characters) appear in **Settings → Activity log** for administrators.
 
 You can do steps 2 to 4 on the **Settings** page instead of editing `.env`.
 

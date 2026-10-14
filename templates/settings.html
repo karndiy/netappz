@@ -376,6 +376,52 @@
             </dl>
           </section>
 
+        {% elif section.key == "activity" %}
+          {# --------------------------------------------------- activity #}
+          <section class="settings-card" aria-labelledby="activity-heading">
+            <div class="settings-card-head">
+              <h2 id="activity-heading">Notes and Chat activity</h2>
+              <p>Each person's notes and chats are private to them; this log records what they do, with the note title or the start of the chat message. Entries are kept for {{ keep_days }} days.</p>
+            </div>
+            <form class="activity-filters" action="{{ url_for('settings_section', section='activity') }}" method="get">
+              <label class="visually-hidden" for="activity-user">Person</label>
+              <select id="activity-user" name="user">
+                <option value="">Everyone</option>
+                {% for name in people %}<option value="{{ name }}" {% if filters.username == name %}selected{% endif %}>{{ name }}</option>{% endfor %}
+              </select>
+              <label class="visually-hidden" for="activity-area">Area</label>
+              <select id="activity-area" name="area">
+                <option value="">Notes and Chat</option>
+                {% for key, label in areas.items() %}<option value="{{ key }}" {% if filters.area == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+              </select>
+              <label class="visually-hidden" for="activity-q">Search</label>
+              <input id="activity-q" name="q" type="search" placeholder="Search" value="{{ filters.query }}">
+              <button class="secondary" type="submit">Filter</button>
+              {% if filters.username or filters.area or filters.query %}
+                <a href="{{ url_for('settings_section', section='activity') }}">Clear</a>
+              {% endif %}
+            </form>
+            <ul class="activity-list">
+              {% for entry in entries %}
+                <li>
+                  <time datetime="{{ entry.created_at | note_iso }}" title="{{ entry.created_at | note_long_date }}">{{ entry.created_at[:16] }}</time>
+                  <div>
+                    <p><strong>{{ entry.username or "Deleted account" }}</strong> {{ entry.action }}
+                      {% if entry.area == "notes" %}a note{% endif %}
+                      <span class="activity-area">{{ areas.get(entry.area, entry.area) }}</span></p>
+                    {% if entry.detail %}<p class="activity-detail">{{ entry.detail }}</p>{% endif %}
+                  </div>
+                </li>
+              {% else %}
+                <li class="empty">{% if filters.username or filters.area or filters.query %}Nothing matches these filters.{% else %}No activity yet.{% endif %}</li>
+              {% endfor %}
+            </ul>
+            {% if more %}
+              <a class="button secondary activity-more"
+                 href="{{ url_for('settings_section', section='activity', user=filters.username or None, area=filters.area or None, q=filters.query or None, before=entries[-1].id) }}">Older</a>
+            {% endif %}
+          </section>
+
         {% elif section.key == "system" %}
           {# ----------------------------------------------------- system #}
           {% set bad = checks | rejectattr("status", "equalto", "ok") | list %}

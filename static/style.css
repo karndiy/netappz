@@ -791,6 +791,21 @@ img.avatar { background: #eaecf0; }
 .settings-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 .settings-card > small { margin-top: 8px; }
 .settings-card .settings-actions { margin-top: 18px; }
+/* Activity log */
+.activity-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.activity-filters select, .activity-filters input { min-height: 36px; padding: 4px 8px; border: 1px solid #d0d5dd; border-radius: 6px; background: #fff; font-size: 14px; }
+.activity-filters input { flex: 1; min-width: 140px; }
+.activity-list { margin: 14px 0 0; padding: 0; list-style: none; }
+.activity-list li { display: flex; gap: 14px; padding: 10px 0; border-top: 1px solid #eaecf0; font-size: 14px; }
+.activity-list time { flex: none; width: 118px; color: #667085; font-size: 13px; font-variant-numeric: tabular-nums; }
+.activity-list li div { min-width: 0; }
+.activity-list p { margin: 0; }
+.activity-detail { margin-top: 3px !important; color: #475467; font-size: 13px; overflow-wrap: anywhere; }
+.activity-area { margin-left: 4px; padding: 1px 7px; border-radius: 999px; background: #f2f4f7; color: #475467; font-size: 12px; }
+.activity-more { margin-top: 12px; }
+@media (max-width: 560px) {
+  .activity-list li { flex-direction: column; gap: 2px; }
+}
 /* System & backups */
 .system-checks, .backup-list { margin: 14px 0 0; padding: 0; list-style: none; }
 .system-check, .backup-list li { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid #eaecf0; font-size: 14px; }

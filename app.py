@@ -12,7 +12,7 @@ import threading
 import time
 import zipfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -135,6 +135,8 @@ SETTINGS_SECTIONS = [
      "description": "Chat with the AI from your phone through a Telegram bot."},
     {"key": "server", "title": "Server", "icon": "🖥️", "admin": True,
      "description": "Storage, database and version. Changed in the server's files."},
+    {"key": "activity", "title": "Activity log", "icon": "📜", "admin": True,
+     "description": "What people do in Notes and Chat: notes written, changed and deleted, and chat messages."},
     {"key": "system", "title": "System & backups", "icon": "🩺", "admin": True,
      "description": "Automatic checks of the database, Redis, disk and backups, and the database backups."},
 ]
@@ -157,6 +159,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.34.0",
+        "date": "2026-10-14",
+        "changes": [
+            "Notes and Chat are now private: each person sees only their own notes and chats (request: separate notes and chat for each user). Notes and chats from before this update, which everyone shared, now belong to the first administrator.",
+            "New Settings category for administrators, Activity log: who added, changed or deleted a note (with its title), and who sent a chat message (with the start of the message) or deleted a chat. Filter by person, by Notes or Chat, or search. Entries are kept for a year.",
+            "The Notes and Chat pages say that only you can see your notes and chats, and what administrators can see in the log.",
+            "Telegram bot chats belong to the first administrator and appear on their Chat page. Deleting an account also deletes that person's notes and chats.",
+        ],
+    },
     {
         "version": "1.33.0",
         "date": "2026-10-14",
@@ -506,6 +518,10 @@ APP_VERSION = UPDATE_LOG[0]["version"]
 BACKUP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.dump")
 SYSTEM_STATUSES = {"ok": "OK", "warning": "Warning", "problem": "Problem"}
 SYSTEM_CHECK_STATE = "_system_checks"  # app_settings row: the last automatic check
+# Settings → Activity log: what people do in Notes and Chat.
+ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat"}
+ACTIVITY_DETAIL = 300  # characters of a note title or chat message kept in the log
+ACTIVITY_KEEP_DAYS = 365
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
@@ -639,10 +655,15 @@ def create_app(test_config=None):
             """
         )
 
+        # Private notes (1.34.0): each note belongs to the person who wrote it.
+        if "user_id" not in table_columns(connection, "notes"):
+            connection.execute("ALTER TABLE notes ADD COLUMN user_id INTEGER")
+        connection.execute("CREATE INDEX IF NOT EXISTS notes_user ON notes (user_id)")
+
     notes_query = (
         "SELECT id, title, content, "
         f"{timestamp_select.format('created_at')}, {timestamp_select.format('updated_at')} "
-        "FROM notes ORDER BY notes.updated_at DESC, id DESC"
+        "FROM notes WHERE user_id = ? ORDER BY notes.updated_at DESC, id DESC"
     )
 
     # Redis keeps sessions server-side and caches the notes list when configured.
@@ -663,30 +684,32 @@ def create_app(test_config=None):
         Session(app)
     cache_errors = (redis.RedisError,) if cache is not None else ()
 
-    notes_cache_key = "notes:list"
+    def notes_cache_key(user_id):
+        return f"notes:list:{user_id}"
 
-    def load_notes():
+    def load_notes(user_id):
+        """One person's notes, newest first."""
         # The notes cache is optional: on any Redis error, read the database directly.
         if cache is not None:
             try:
-                cached = cache.get(notes_cache_key)
+                cached = cache.get(notes_cache_key(user_id))
                 if cached is not None:
                     return json.loads(cached)
             except cache_errors as error:
                 app.logger.warning("Notes cache unavailable: %s", error)
         with notes_connection() as connection:
-            rows = [dict(row) for row in connection.execute(notes_query).fetchall()]
+            rows = [dict(row) for row in connection.execute(sql(notes_query), (user_id,)).fetchall()]
         if cache is not None:
             try:
-                cache.set(notes_cache_key, json.dumps(rows), ex=300)
+                cache.set(notes_cache_key(user_id), json.dumps(rows), ex=300)
             except cache_errors:
                 pass
         return rows
 
-    def invalidate_notes():
+    def invalidate_notes(user_id):
         if cache is not None:
             try:
-                cache.delete(notes_cache_key)
+                cache.delete(notes_cache_key(user_id))
             except cache_errors as error:
                 app.logger.warning("Could not clear the notes cache: %s", error)
 
@@ -714,41 +737,135 @@ def create_app(test_config=None):
             )
             """
         )
+        # Private chats (1.34.0): each conversation belongs to one person.
+        if "user_id" not in table_columns(connection, "chat_conversations"):
+            connection.execute("ALTER TABLE chat_conversations ADD COLUMN user_id INTEGER")
+        connection.execute("CREATE INDEX IF NOT EXISTS chat_conversations_user ON chat_conversations (user_id)")
+        # What people do in Notes and Chat, for administrators (Settings → Activity log).
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS activity_log (
+                {id_column},
+                user_id INTEGER,
+                username TEXT NOT NULL DEFAULT '',
+                area TEXT NOT NULL,
+                action TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS activity_log_created ON activity_log (created_at)")
+
+    class ActivityLog:
+        """Who did what in Notes and Chat. The username is copied so entries outlive deleted accounts."""
+
+        def add(self, user_id, area, action, detail=""):
+            detail = " ".join(detail.split())
+            detail = detail if len(detail) <= ACTIVITY_DETAIL else detail[:ACTIVITY_DETAIL - 1] + "…"
+            with notes_connection() as connection:
+                connection.execute(
+                    sql(
+                        "INSERT INTO activity_log (user_id, username, area, action, detail) "
+                        "VALUES (?, COALESCE((SELECT username FROM users WHERE id = ?), ''), ?, ?, ?)"
+                    ),
+                    (user_id, user_id, area, action, detail),
+                )
+
+        def search(self, username="", area="", query="", before_id=None, limit=100):
+            conditions, params = [], []
+            if username:
+                conditions.append("username = ?")
+                params.append(username)
+            if area:
+                conditions.append("area = ?")
+                params.append(area)
+            if query:
+                conditions.append("(LOWER(detail) LIKE ? OR LOWER(action) LIKE ?)")
+                params += [f"%{query.lower()}%"] * 2
+            if before_id:
+                conditions.append("id < ?")
+                params.append(before_id)
+            where = f"WHERE {' AND '.join(conditions)} " if conditions else ""
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(
+                        f"SELECT id, username, area, action, detail, {timestamp_select.format('created_at')} "
+                        f"FROM activity_log {where}ORDER BY id DESC LIMIT ?"
+                    ),
+                    (*params, limit),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def usernames(self):
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    "SELECT DISTINCT username FROM activity_log WHERE username <> '' ORDER BY username"
+                ).fetchall()
+            return [row["username"] for row in rows]
+
+        def count_since(self, hours):
+            since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT COUNT(*) AS n FROM activity_log WHERE created_at >= ?"), (since,)
+                ).fetchone()
+            return row["n"]
+
+        def prune(self, days=ACTIVITY_KEEP_DAYS):
+            before = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM activity_log WHERE created_at < ?"), (before,))
+
+    activity_log = ActivityLog()
+    app.extensions["activity"] = activity_log
 
     class ChatStore:
-        """Conversations shared by the web chat page and the Telegram bot."""
+        """Each person's conversations, from the web chat page and (for the bot's owner) Telegram."""
 
         conversation_columns = (
             f"id, title, {timestamp_select.format('created_at')}, {timestamp_select.format('updated_at')}"
         )
 
-        def conversations(self):
+        def conversations(self, user_id):
             with notes_connection() as connection:
                 rows = connection.execute(
-                    f"SELECT {self.conversation_columns} FROM chat_conversations "
-                    "ORDER BY chat_conversations.updated_at DESC, id DESC"
+                    sql(
+                        f"SELECT {self.conversation_columns} FROM chat_conversations WHERE user_id = ? "
+                        "ORDER BY chat_conversations.updated_at DESC, id DESC"
+                    ),
+                    (user_id,),
                 ).fetchall()
             return [dict(row) for row in rows]
 
-        def conversation(self, conversation_id):
+        def conversation(self, conversation_id, user_id):
+            """The conversation if it belongs to this person, else None."""
             with notes_connection() as connection:
                 row = connection.execute(
-                    sql(f"SELECT {self.conversation_columns} FROM chat_conversations WHERE id = ?"),
-                    (conversation_id,),
+                    sql(f"SELECT {self.conversation_columns} FROM chat_conversations WHERE id = ? AND user_id = ?"),
+                    (conversation_id, user_id),
                 ).fetchone()
             return dict(row) if row else None
 
-        def latest_id(self):
-            conversations = self.conversations()
+        def latest_id(self, user_id):
+            conversations = self.conversations(user_id)
             return conversations[0]["id"] if conversations else None
 
-        def create(self, title="New chat"):
+        def create(self, user_id, title="New chat"):
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO chat_conversations (title) VALUES (?)") + returning_id,
-                    (title,),
+                    sql("INSERT INTO chat_conversations (title, user_id) VALUES (?, ?)") + returning_id,
+                    (title, user_id),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def telegram_owner(self):
+            """The Telegram bot has no sign-in, so its chats belong to the first administrator."""
+            with notes_connection() as connection:
+                row = connection.execute(
+                    "SELECT MIN(id) AS id FROM users WHERE is_admin = 1 AND is_active = 1"
+                ).fetchone()
+            return row["id"] if row else None
 
         def messages(self, conversation_id, after_id=0):
             with notes_connection() as connection:
@@ -762,10 +879,15 @@ def create_app(test_config=None):
                 ).fetchall()
             return [dict(row) for row in rows]
 
-        def message(self, message_id):
+        def message(self, message_id, user_id):
             with notes_connection() as connection:
                 row = connection.execute(
-                    sql("SELECT id, conversation_id, role, content FROM chat_messages WHERE id = ?"), (message_id,)
+                    sql(
+                        "SELECT chat_messages.id, conversation_id, role, content FROM chat_messages "
+                        "JOIN chat_conversations ON chat_conversations.id = chat_messages.conversation_id "
+                        "WHERE chat_messages.id = ? AND chat_conversations.user_id = ?"
+                    ),
+                    (message_id, user_id),
                 ).fetchone()
             return dict(row) if row else None
 
@@ -795,15 +917,27 @@ def create_app(test_config=None):
                     )
             return message_id
 
-        def delete(self, conversation_id):
+        def delete(self, conversation_id, user_id):
+            if self.conversation(conversation_id, user_id) is None:
+                return False
             with notes_connection() as connection:
                 connection.execute(
                     sql("DELETE FROM chat_messages WHERE conversation_id = ?"), (conversation_id,)
                 )
-                cursor = connection.execute(
-                    sql("DELETE FROM chat_conversations WHERE id = ?"), (conversation_id,)
+                connection.execute(sql("DELETE FROM chat_conversations WHERE id = ?"), (conversation_id,))
+            return True
+
+        def delete_user_content(self, user_id):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql(
+                        "DELETE FROM chat_messages WHERE conversation_id IN "
+                        "(SELECT id FROM chat_conversations WHERE user_id = ?)"
+                    ),
+                    (user_id,),
                 )
-            return cursor.rowcount > 0
+                connection.execute(sql("DELETE FROM chat_conversations WHERE user_id = ?"), (user_id,))
+                connection.execute(sql("DELETE FROM notes WHERE user_id = ?"), (user_id,))
 
     chat_store = ChatStore()
     app.extensions["chat"] = chat_store
@@ -853,6 +987,11 @@ def create_app(test_config=None):
                                    ("bio", "TEXT NOT NULL DEFAULT ''"), ("prefs", "TEXT NOT NULL DEFAULT '{}'")):
             if column not in existing:
                 connection.execute(f"ALTER TABLE users ADD COLUMN {column} {definition}")
+        # Notes and chats from before 1.34.0 were shared by everyone; give them to the first administrator.
+        owner = connection.execute("SELECT MIN(id) AS id FROM users WHERE is_admin = 1").fetchone()["id"]
+        if owner is not None:
+            for table in ("notes", "chat_conversations"):
+                connection.execute(sql(f"UPDATE {table} SET user_id = ? WHERE user_id IS NULL"), (owner,))
         connection.execute(
             f"""
             CREATE TABLE IF NOT EXISTS feed_posts (
@@ -1687,6 +1826,8 @@ def create_app(test_config=None):
             flash("Keep at least one administrator.", "error")
         else:
             feed_store.delete_user_content(user_id)
+            chat_store.delete_user_content(user_id)
+            invalidate_notes(user_id)
             remove_avatar(user["avatar"])
             user_store.delete(user_id)
             flash(f"Deleted {user['username']}.", "success")
@@ -2250,7 +2391,7 @@ def create_app(test_config=None):
 
     @app.get("/notes")
     def notes():
-        all_notes = load_notes()
+        all_notes = load_notes(g.user["id"])
         query = request.args.get("q", "").strip()[:100]
         shown = all_notes
         if query:
@@ -2293,11 +2434,12 @@ def create_app(test_config=None):
         else:
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO notes (title, content) VALUES (?, ?)") + returning_id,
-                    (title, content),
+                    sql("INSERT INTO notes (title, content, user_id) VALUES (?, ?, ?)") + returning_id,
+                    (title, content, g.user["id"]),
                 )
                 note_id = cursor.fetchone()["id"] if returning_id else cursor.lastrowid
-            invalidate_notes()
+            invalidate_notes(g.user["id"])
+            activity_log.add(g.user["id"], "notes", "created", title)
             flash("Note saved.", "success")
             return redirect(url_for("notes", id=note_id))
         return redirect(url_for("notes", new=1))
@@ -2317,24 +2459,29 @@ def create_app(test_config=None):
                         """
                         UPDATE notes
                         SET title = ?, content = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
+                        WHERE id = ? AND user_id = ?
                         """
                     ),
-                    (title, content, note_id),
+                    (title, content, note_id, g.user["id"]),
                 )
             if cursor.rowcount == 0:
                 abort(404)
-            invalidate_notes()
+            invalidate_notes(g.user["id"])
+            activity_log.add(g.user["id"], "notes", "edited", title)
             flash("Note updated.", "success")
         return redirect(url_for("notes", id=note_id))
 
     @app.post("/notes/<int:note_id>/delete")
     def delete_note(note_id):
         with notes_connection() as connection:
-            cursor = connection.execute(sql("DELETE FROM notes WHERE id = ?"), (note_id,))
-        if cursor.rowcount == 0:
-            abort(404)
-        invalidate_notes()
+            row = connection.execute(
+                sql("SELECT title FROM notes WHERE id = ? AND user_id = ?"), (note_id, g.user["id"])
+            ).fetchone()
+            if row is None:
+                abort(404)
+            connection.execute(sql("DELETE FROM notes WHERE id = ?"), (note_id,))
+        invalidate_notes(g.user["id"])
+        activity_log.add(g.user["id"], "notes", "deleted", row["title"])
         flash("Note deleted.", "success")
         return redirect(url_for("notes"))
 
@@ -2506,12 +2653,12 @@ def create_app(test_config=None):
 
     @app.get("/chat")
     def chat_page():
-        conversations = chat_store.conversations()
+        conversations = chat_store.conversations(g.user["id"])
         conversation_id = request.args.get("id", type=int)
         starting_new = request.args.get("new") == "1"
         selected = None
         if conversation_id is not None:
-            selected = chat_store.conversation(conversation_id)
+            selected = chat_store.conversation(conversation_id, g.user["id"])
             if selected is None:
                 abort(404)
         elif conversations and not starting_new:
@@ -2537,9 +2684,10 @@ def create_app(test_config=None):
         if len(text) > 20000:
             return jsonify(error="Messages can be at most 20,000 characters."), 400
         conversation_id = request.form.get("conversation_id", type=int)
-        if conversation_id is None or chat_store.conversation(conversation_id) is None:
-            conversation_id = chat_store.create()
+        if conversation_id is None or chat_store.conversation(conversation_id, g.user["id"]) is None:
+            conversation_id = chat_store.create(g.user["id"])
         user_message_id = chat_store.add(conversation_id, "user", text, "web")
+        activity_log.add(g.user["id"], "chat", "sent a message", text)
         history = chat_store.messages(conversation_id)
 
         def events():
@@ -2571,14 +2719,14 @@ def create_app(test_config=None):
 
     @app.get("/chat/<int:conversation_id>/messages")
     def chat_messages(conversation_id):
-        if chat_store.conversation(conversation_id) is None:
+        if chat_store.conversation(conversation_id, g.user["id"]) is None:
             abort(404)
         after_id = request.args.get("after", default=0, type=int)
         return jsonify(messages=chat_store.messages(conversation_id, after_id))
 
     @app.get("/chat/message/<int:message_id>/code.zip")
     def chat_code_zip(message_id):
-        message = chat_store.message(message_id)
+        message = chat_store.message(message_id, g.user["id"])
         files = chat.code_files(message["content"]) if message and message["role"] == "assistant" else []
         if not files:
             abort(404)
@@ -2591,8 +2739,10 @@ def create_app(test_config=None):
 
     @app.post("/chat/<int:conversation_id>/delete")
     def chat_delete(conversation_id):
-        if not chat_store.delete(conversation_id):
+        conversation = chat_store.conversation(conversation_id, g.user["id"])
+        if conversation is None or not chat_store.delete(conversation_id, g.user["id"]):
             abort(404)
+        activity_log.add(g.user["id"], "chat", "deleted a chat", conversation["title"])
         flash("Chat deleted.", "success")
         return redirect(url_for("chat_page"))
 
@@ -2839,6 +2989,7 @@ def create_app(test_config=None):
     def check_and_alert():
         """Runs the checks and tells administrators about each one that changed since the last run."""
         checks = run_system_checks()
+        activity_log.prune()  # The check runs regularly, so old activity is cleared here too.
         try:
             previous = json.loads(settings_store.get(SYSTEM_CHECK_STATE) or "{}").get("status", {})
         except ValueError:
@@ -2916,6 +3067,7 @@ def create_app(test_config=None):
                     telegram_status(settings_store.all())["state"], "Not connected"),
                 "server": f"Version {APP_VERSION}",
                 "system": system_summary(),
+                "activity": f"{activity_log.count_since(24)} in the last 24 hours",
             })
         return summary, waiting
 
@@ -2935,6 +3087,16 @@ def create_app(test_config=None):
                     "post_counts": feed_store.post_counts()}
         if section == "server":
             return {"server": server_info()}
+        if section == "activity":
+            filters = {"username": request.args.get("user", "")[:60], "area": request.args.get("area", ""),
+                       "query": request.args.get("q", "").strip()[:100]}
+            if filters["area"] not in ACTIVITY_AREAS:
+                filters["area"] = ""
+            page_size = 100
+            entries = activity_log.search(**filters, before_id=request.args.get("before", type=int),
+                                          limit=page_size + 1)
+            return {"entries": entries[:page_size], "more": len(entries) > page_size, "filters": filters,
+                    "areas": ACTIVITY_AREAS, "people": activity_log.usernames(), "keep_days": ACTIVITY_KEEP_DAYS}
         if section == "system":
             return {"checks": run_system_checks(), "statuses": SYSTEM_STATUSES, "backups": backup_files(),
                     "schedule": backup_schedule(), "backup_ready": backup_dir is not None,

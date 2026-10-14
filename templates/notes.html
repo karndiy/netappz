@@ -44,7 +44,7 @@
         </a>
       </div>
 
-      <p class="notes-count">{{ total }} note{{ '' if total == 1 else 's' }}</p>
+      <p class="notes-count">{{ total }} note{{ '' if total == 1 else 's' }} · only you can see them. Administrators see a log of note titles added, changed and deleted.</p>
 
       <ul class="notes-list" id="notes-list">
         {% for note in notes %}

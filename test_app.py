@@ -840,21 +840,24 @@ class FileManagerTests(unittest.TestCase):
 
         telegram_bot.handle(telegram, store, message, allowed={111})
         self.assertIn("999", telegram.send.call_args[0][1])
-        self.assertEqual(store.conversations(), [])
+        self.assertEqual(store.conversations(self.admin_id), [])
 
+        # Telegram chats belong to the first administrator and are logged.
         message["from"]["id"] = 111
+        activity = self.app.extensions["activity"]
         with mock.patch.object(chat, "complete_reply", return_value="Hi from Claude") as complete:
-            telegram_bot.handle(telegram, store, message, allowed={111})
+            telegram_bot.handle(telegram, store, message, allowed={111}, activity=activity)
         self.assertTrue(complete.call_args.kwargs["for_telegram"])
         telegram.send.assert_called_with(5, "Hi from Claude")
-        conversation_id = store.latest_id()
+        conversation_id = store.latest_id(self.admin_id)
+        self.assertEqual(activity.search()[0]["action"], "sent a message from Telegram")
         self.assertEqual(
             [(m["role"], m["source"]) for m in store.messages(conversation_id)],
             [("user", "telegram"), ("assistant", "telegram")],
         )
 
         telegram_bot.handle(telegram, store, {**message, "text": "/new"}, allowed={111})
-        self.assertNotEqual(store.latest_id(), conversation_id)
+        self.assertNotEqual(store.latest_id(self.admin_id), conversation_id)
 
     def test_settings_page_saves_values_and_hides_secrets(self):
         token = self._csrf()
@@ -1042,7 +1045,7 @@ class FileManagerTests(unittest.TestCase):
 
     def test_chat_reply_code_downloads_as_zip(self):
         store = self.app.extensions["chat"]
-        conversation_id = store.create()
+        conversation_id = store.create(self.admin_id)
         message_id = store.add(conversation_id, "assistant", self.CODE_REPLY, "web")
         response = self.client.get(f"/chat/message/{message_id}/code.zip")
         self.assertEqual(response.status_code, 200)
@@ -1078,6 +1081,60 @@ class FileManagerTests(unittest.TestCase):
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"status": "ok"})
+
+    def test_notes_and_chats_are_private_and_logged(self):
+        token = self._csrf()
+        users = self.app.extensions["users"]
+        member_id = users.add("member", "member-password")
+        self.client.post("/notes/create", data={"_csrf_token": token, "title": "Admin plan", "content": "Secret"})
+
+        # Another person sees none of the administrator's notes or chats, and can't open or change them.
+        store = self.app.extensions["chat"]
+        admin_chat = store.create(self.admin_id)
+        store.add(admin_chat, "user", "Admin question", "web")
+        with sqlite3.connect(self.app.config["NOTES_DATABASE"]) as db:
+            note_id = db.execute("SELECT id FROM notes WHERE title = 'Admin plan'").fetchone()[0]
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        page = self.client.get("/notes").get_data(as_text=True)
+        self.assertNotIn("Admin plan", page)
+        self.assertIn("only you can see them", page)
+        self.assertNotIn("Secret", self.client.get(f"/notes?id={note_id}").get_data(as_text=True))
+        self.assertEqual(self.client.post(f"/notes/{note_id}/edit", data={
+            "_csrf_token": token, "title": "Taken", "content": "Over"}).status_code, 404)
+        self.assertEqual(self.client.post(f"/notes/{note_id}/delete", data={"_csrf_token": token}).status_code, 404)
+        self.assertNotIn("Admin question", self.client.get("/chat").get_data(as_text=True))
+        self.assertEqual(self.client.get(f"/chat?id={admin_chat}").status_code, 404)
+        self.assertEqual(self.client.get(f"/chat/{admin_chat}/messages").status_code, 404)
+        self.assertEqual(self.client.post(f"/chat/{admin_chat}/delete", data={"_csrf_token": token}).status_code, 404)
+        self.client.post("/notes/create", data={"_csrf_token": token, "title": "Member list", "content": "Mine"})
+        self.assertIn("Member list", self.client.get("/notes").get_data(as_text=True))
+        self.assertEqual(self.client.get(f"/notes?id={note_id}").status_code, 404)
+        self.assertEqual(self.client.get("/settings/activity").status_code, 403)
+
+        # The administrator's notes are untouched, and the log shows who did what.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        page = self.client.get("/notes").get_data(as_text=True)
+        self.assertIn("Admin plan", page)
+        self.assertNotIn("Member list", page)
+        page = self.client.get("/settings/activity").get_data(as_text=True)
+        self.assertIn("Member list", page)
+        self.assertIn("Admin plan", page)
+        page = self.client.get("/settings/activity?user=member").get_data(as_text=True)
+        self.assertIn("Member list", page)
+        self.assertNotIn("Admin plan", page)
+        self.assertIn("Nothing matches",
+                      self.client.get("/settings/activity?area=chat&q=zzz").get_data(as_text=True))
+
+        # Deleting the account removes its notes and chats but keeps its log entries.
+        member_chat = store.create(member_id)
+        self.client.post(f"/settings/users/{member_id}/delete", data={"_csrf_token": token})
+        self.assertEqual(store.conversations(member_id), [])
+        self.assertIsNone(store.conversation(member_chat, member_id))
+        with sqlite3.connect(self.app.config["NOTES_DATABASE"]) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM notes WHERE title = 'Member list'").fetchone()[0], 0)
+        self.assertIn("member", self.app.extensions["activity"].usernames())
 
     def test_system_checks_and_backups_in_settings(self):
         import os

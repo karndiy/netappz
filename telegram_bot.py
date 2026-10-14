@@ -117,7 +117,7 @@ def keep_typing(telegram, chat_id, stop):
         stop.wait(4)
 
 
-def handle(telegram, store, message, allowed):
+def handle(telegram, store, message, allowed, activity=None):
     chat_id = message["chat"]["id"]
     user_id = message.get("from", {}).get("id")
     text = (message.get("text") or "").strip()
@@ -139,17 +139,24 @@ def handle(telegram, store, message, allowed):
         telegram.send(
             chat_id,
             "Hi! Send me a message to chat with the AI.\n\n"
-            "This chat is shared with the Chat page in Network Files.\n"
+            "This chat appears on the Chat page in Network Files for the first administrator.\n"
             "/new starts a new conversation.",
         )
         return
+    # The bot has no sign-in, so its chats belong to the first administrator.
+    owner = store.telegram_owner()
+    if owner is None:
+        telegram.send(chat_id, "Network Files has no administrator yet. Open the app to set it up first.")
+        return
     if command == "/new":
-        store.create()
+        store.create(owner)
         telegram.send(chat_id, "Started a new conversation.")
         return
 
-    conversation_id = store.latest_id() or store.create()
+    conversation_id = store.latest_id(owner) or store.create(owner)
     store.add(conversation_id, "user", text, "telegram")
+    if activity is not None:
+        activity.add(owner, "chat", "sent a message from Telegram", text)
     history = store.messages(conversation_id)
 
     stop = threading.Event()
@@ -231,7 +238,7 @@ def main():
             if not message:
                 continue
             try:
-                handle(telegram, store, message, allowed)
+                handle(telegram, store, message, allowed, app.extensions["activity"])
             except Exception:
                 log.exception("Could not handle Telegram message")
 
