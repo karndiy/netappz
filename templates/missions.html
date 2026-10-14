@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Missions · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('feed') }}">Feed</a>
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      <a class="topbar-link" href="{{ url_for('missions') }}" aria-current="page">Missions</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+      {% include "_account_nav.html" %}
+    </nav>
+  </header>
+  <main class="container">
+    <section class="heading">
+      <div>
+        <h1>Missions</h1>
+        <p class="page-description">
+          {% if current_user.is_admin %}Set tasks for everyone, then approve the work they submit or send it back with a note.
+          {% else %}Tasks set by an administrator. Submit what you did, and an administrator approves it or sends it back with a note.{% endif %}
+        </p>
+      </div>
+    </section>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    {% macro submission_row(item, mission_id) %}
+      <li class="request-item mission-submission is-{{ item.status }}">
+        <div class="request-main">
+          <div class="request-title-row">
+            <span class="request-status">{{ statuses[item.status] }}</span>
+            <h3>{{ item.author }}</h3>
+          </div>
+          <p class="request-details">{{ item.body }}</p>
+          <p class="request-meta">
+            Submitted {{ item.created_at[:16] }} UTC
+            {% if item.status != 'pending' and item.reviewer %} · {{ statuses[item.status] }} by {{ item.reviewer }} {{ item.updated_at[:10] }}{% endif %}
+          </p>
+          {% if item.review_note %}<p class="request-note">{{ item.review_note }}</p>{% endif %}
+        </div>
+        <div class="request-controls">
+          {% if current_user.is_admin or (item.user_id == current_user.id and item.status != 'approved') %}
+            <form action="{{ url_for('mission_submission_delete', submission_id=item.id) }}" method="post"
+                  onsubmit="return confirm('Remove this submission?');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button class="request-delete" type="submit" title="Remove submission"
+                      aria-label="Remove {{ item.author }}'s submission">✕</button>
+            </form>
+          {% endif %}
+        </div>
+      </li>
+    {% endmacro %}
+
+    {% if current_user.is_admin %}
+      <section class="requests" id="mission-review" aria-labelledby="mission-review-heading">
+        <div class="requests-head">
+          <h2 id="mission-review-heading">Waiting for approval</h2>
+          <p>{{ waiting | length }} submission{{ '' if waiting | length == 1 else 's' }} to check</p>
+        </div>
+        <ul class="request-list">
+          {% for item in waiting %}
+            <li class="request-item is-pending">
+              <div class="request-main">
+                <div class="request-title-row">
+                  <span class="request-kind-tag">{{ item.mission_title }}</span>
+                  <h3>{{ item.author }}</h3>
+                </div>
+                <p class="request-details">{{ item.body }}</p>
+                <p class="request-meta">Submitted {{ item.created_at[:16] }} UTC</p>
+              </div>
+              <form class="mission-review-form" action="{{ url_for('mission_review', submission_id=item.id) }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <label class="visually-hidden" for="review-note-{{ item.id }}">Note for {{ item.author }}</label>
+                <input id="review-note-{{ item.id }}" name="note" type="text" maxlength="1000"
+                       placeholder="Note (needed to send back)">
+                <button type="submit" name="decision" value="approved">Approve</button>
+                <button class="secondary" type="submit" name="decision" value="returned">Send back</button>
+              </form>
+            </li>
+          {% else %}
+            <li class="empty">Nothing to check right now.</li>
+          {% endfor %}
+        </ul>
+      </section>
+
+      <details class="request-new mission-new" {% if form or not (missions or closed) %}open{% endif %}>
+        <summary>New mission</summary>
+        <form class="request-form" action="{{ url_for('create_mission') }}" method="post">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <label for="mission-title">Title</label>
+          <input id="mission-title" name="title" type="text" maxlength="120" required
+                 placeholder="For example: Tidy the Projects folder" value="{{ form.title if form else '' }}">
+          <label for="mission-details">Details <span class="optional">(optional)</span></label>
+          <textarea id="mission-details" name="details" rows="3" maxlength="4000"
+                    placeholder="What needs doing, and what should people send as proof?">{{ form.details if form else '' }}</textarea>
+          <div class="request-actions"><button type="submit">Add mission</button></div>
+        </form>
+      </details>
+    {% endif %}
+
+    {% for group, heading in ((missions, 'Open missions'), (closed, 'Closed missions')) if group or heading == 'Open missions' %}
+      <h2 class="patch-heading mission-heading">{{ heading }}</h2>
+      {% for mission in group %}
+        <article class="requests mission" id="mission-{{ mission.id }}">
+          <div class="request-item">
+            <div class="request-main">
+              <div class="request-title-row">
+                <span class="request-status">{{ 'Open' if mission.is_open else 'Closed' }}</span>
+                <h3>{{ mission.title }}</h3>
+              </div>
+              {% if mission.details %}<p class="request-details">{{ mission.details }}</p>{% endif %}
+              <p class="request-meta">
+                {% if mission.creator %}Set by {{ mission.creator }} · {% endif %}{{ mission.created_at[:10] }}
+                · {{ mission.approved }} approved
+              </p>
+            </div>
+            {% if current_user.is_admin %}
+              <div class="request-controls">
+                <form action="{{ url_for('mission_open', mission_id=mission.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="open" value="{{ 0 if mission.is_open else 1 }}">
+                  <button class="secondary" type="submit">{{ 'Close' if mission.is_open else 'Reopen' }}</button>
+                </form>
+                <form action="{{ url_for('mission_delete', mission_id=mission.id) }}" method="post"
+                      onsubmit="return confirm('Delete this mission and all the work submitted for it?');">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <button class="request-delete" type="submit" title="Delete mission" aria-label="Delete mission {{ mission.title }}">✕</button>
+                </form>
+              </div>
+            {% endif %}
+          </div>
+
+          {% set shown = mission.submissions if current_user.is_admin else mission.mine %}
+          {% if shown %}
+            <ul class="request-list mission-submissions" aria-label="{{ 'Submissions' if current_user.is_admin else 'Your submissions' }}">
+              {% for item in shown %}{{ submission_row(item, mission.id) }}{% endfor %}
+            </ul>
+          {% endif %}
+
+          {% if mission.can_submit %}
+            <form class="request-form mission-submit" action="{{ url_for('mission_submit', mission_id=mission.id) }}" method="post">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <label for="mission-body-{{ mission.id }}">{{ 'Submit again' if mission.mine else 'Submit your work' }}</label>
+              <textarea id="mission-body-{{ mission.id }}" name="body" rows="3" maxlength="4000" required
+                        placeholder="What did you do? Add links or file names that show it."></textarea>
+              <div class="request-actions"><button type="submit">Submit for approval</button></div>
+            </form>
+          {% endif %}
+        </article>
+      {% else %}
+        <p class="empty">{% if current_user.is_admin %}No open missions. Add one above.{% else %}No missions right now.{% endif %}</p>
+      {% endfor %}
+    {% endfor %}
+  </main>
+</body>
+</html>

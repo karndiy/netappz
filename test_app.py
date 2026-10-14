@@ -1304,6 +1304,98 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(runner.invoke(args=["claude-next"]).output, "")
         self.assertEqual(store.get(request_id)["status"], "open")
 
+    def test_missions_are_set_submitted_and_approved(self):
+        token = self._csrf()
+        store = self.app.extensions["missions"]
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        member_id = users.add("member", "member-password")
+        other_id = users.add("other", "other-password")
+
+        # Only administrators set missions; a title is needed.
+        self.client.post("/missions", data={"_csrf_token": token, "title": " ", "details": "Keep me"})
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn("Give the mission a short title.", page)
+        self.assertIn("Keep me", page)
+        response = self.client.post("/missions", data={"_csrf_token": token, "title": "Tidy Projects",
+                                                       "details": "Move old files to Archive"})
+        self.assertEqual(response.status_code, 303)
+        mission_id = store.all()[0]["id"]
+        self.assertIn("Tidy Projects", notifications.for_user(member_id)[0]["message"])
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertEqual(self.client.post("/missions", data={"_csrf_token": token, "title": "Mine"}).status_code, 403)
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn("Move old files to Archive", page)
+        self.assertNotIn("Waiting for approval</h2>", page)
+
+        # A member submits once; a second submission waits for the first to be reviewed.
+        self.client.post(f"/missions/{mission_id}/submit", data={"_csrf_token": token, "body": " "})
+        self.assertEqual(store.all()[0]["submissions"], [])
+        self.client.post(f"/missions/{mission_id}/submit", data={"_csrf_token": token, "body": "Moved 40 files"})
+        self.client.post(f"/missions/{mission_id}/submit", data={"_csrf_token": token, "body": "Again"})
+        submissions = store.all()[0]["submissions"]
+        self.assertEqual([(s["body"], s["status"]) for s in submissions], [("Moved 40 files", "pending")])
+        self.assertIn("member submitted work", notifications.for_user(self.admin_id)[0]["message"])
+        submission_id = submissions[0]["id"]
+
+        # Members can't review, and others don't see someone else's work.
+        self.assertEqual(self.client.post(f"/missions/submissions/{submission_id}/review",
+                                          data={"_csrf_token": token, "decision": "approved"}).status_code, 403)
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = other_id
+        self.assertNotIn("Moved 40 files", self.client.get("/missions").get_data(as_text=True))
+        self.assertEqual(self.client.post(f"/missions/submissions/{submission_id}/delete",
+                                          data={"_csrf_token": token}).status_code, 403)
+
+        # Sending back needs a note; then the member can submit again and it's approved.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.assertIn("Moved 40 files", self.client.get("/missions").get_data(as_text=True))
+        self.client.post(f"/missions/submissions/{submission_id}/review",
+                         data={"_csrf_token": token, "decision": "returned"})
+        self.assertEqual(store.submission(submission_id)["status"], "pending")
+        self.client.post(f"/missions/submissions/{submission_id}/review",
+                         data={"_csrf_token": token, "decision": "returned", "note": "Archive the PDFs too"})
+        self.assertEqual(store.submission(submission_id)["status"], "returned")
+        self.assertIn("Archive the PDFs too", notifications.for_user(member_id)[0]["message"])
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertIn("Archive the PDFs too", self.client.get("/missions").get_data(as_text=True))
+        self.client.post(f"/missions/{mission_id}/submit", data={"_csrf_token": token, "body": "PDFs done"})
+        second_id = store.all()[0]["submissions"][-1]["id"]
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post(f"/missions/submissions/{second_id}/review",
+                         data={"_csrf_token": token, "decision": "approved"})
+        item = store.submission(second_id)
+        self.assertEqual((item["status"], item["reviewer"]), ("approved", "admin"))
+        self.assertIn("1 approved", self.client.get("/missions").get_data(as_text=True))
+
+        # Approved work can't be withdrawn by the member; a closed mission takes no new work.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertEqual(self.client.post(f"/missions/submissions/{second_id}/delete",
+                                          data={"_csrf_token": token}).status_code, 403)
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post(f"/missions/{mission_id}/open", data={"_csrf_token": token, "open": "0"})
+        self.assertFalse(store.mission(mission_id)["is_open"])
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = other_id
+        self.client.post(f"/missions/{mission_id}/submit", data={"_csrf_token": token, "body": "Late"})
+        self.assertEqual(len(store.all()[0]["submissions"]), 2)
+
+        # Deleting an account removes its work; deleting a mission removes everything submitted for it.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post(f"/settings/users/{member_id}/delete", data={"_csrf_token": token})
+        self.assertEqual(store.all()[0]["submissions"], [])
+        self.client.post(f"/missions/{mission_id}/delete", data={"_csrf_token": token})
+        self.assertEqual(store.all(), [])
+
     def test_user_requests_can_be_added_tracked_and_closed(self):
         import app as app_module
 
@@ -1611,7 +1703,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(notifications.for_user(bee_id), [])
         self.client.post("/feed/posts", data={"_csrf_token": token, "body": "@bee come too"})
         self.assertEqual([a["kind"] for a in notifications.for_user(bee_id)], ["mention"])
-        self.assertIn("3 of 5 kinds on", bee.get("/settings").get_data(as_text=True))
+        self.assertIn("3 of 6 kinds on", bee.get("/settings").get_data(as_text=True))
 
         # Only the author edits a post; the reply has the new text ready to show.
         post_id = self.app.extensions["feed"].posts(self.admin_id)[0]["id"]

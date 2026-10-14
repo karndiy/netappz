@@ -148,6 +148,7 @@ NOTIFY_KINDS = {
     "like": "Likes on your posts",
     "post": "New posts from other people",
     "request": "News about requests on the Update log",
+    "mission": "New missions, and news about mission work",
 }
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}")
 LOCAL_URL = re.compile(r"https?://[^\s/]+(/\S*)?")
@@ -159,6 +160,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.36.0",
+        "date": "2026-10-14",
+        "changes": [
+            "New Missions page (request #11: a mission system with tasks submitted and approved by the administrator). Administrators set missions with a title and details, and everyone is notified.",
+            "Anyone can submit their work for an open mission. Administrators see it under Waiting for approval and approve it or send it back with a note; the person is notified either way and can submit again after a send-back.",
+            "People see only their own submissions; administrators see everyone's. Work can be withdrawn until it's approved, and administrators can close, reopen or delete a mission.",
+            "Mission alerts can be turned off under Notifications in Settings like the other kinds.",
+        ],
+    },
     {
         "version": "1.35.0",
         "date": "2026-10-14",
@@ -537,6 +548,8 @@ CONVERT_TOOL_NAMES = {"word2pdf": "Word to PDF", "pdf2word": "PDF to Word", "ima
 CONVERT_LOG_SHOWN = 50
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
+MISSION_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "returned": "Sent back"}
+MISSION_TEXT_LIMIT = 4000
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
 # Photos and videos on the Feed. HEIC photos from iPhones are turned into JPEG.
 FEED_IMAGES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
@@ -1133,7 +1146,36 @@ def create_app(test_config=None):
             )
             """
         )
+        # Missions (1.36.0): tasks administrators set, the work people hand in, and its approval.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS missions (
+                {id_column},
+                title TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                created_by INTEGER,
+                is_open INTEGER NOT NULL DEFAULT 1,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS mission_submissions (
+                {id_column},
+                mission_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                review_note TEXT NOT NULL DEFAULT '',
+                reviewed_by INTEGER,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         for statement in (
+            "CREATE INDEX IF NOT EXISTS mission_submissions_mission ON mission_submissions (mission_id, user_id)",
             "CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, is_read, id)",
             "CREATE INDEX IF NOT EXISTS feed_comments_post ON feed_comments (post_id, id)",
             "CREATE INDEX IF NOT EXISTS feed_media_post ON feed_media (post_id, position)",
@@ -1224,6 +1266,111 @@ def create_app(test_config=None):
         def delete(self, request_id):
             with notes_connection() as connection:
                 connection.execute(sql("DELETE FROM user_requests WHERE id = ?"), (request_id,))
+
+    class MissionStore:
+        """Missions administrators set, and the work people submit for an administrator to approve."""
+
+        mission_columns = (
+            "missions.id, missions.title, missions.details, missions.created_by, missions.is_open, "
+            f"users.username AS creator, {time_as('missions.created_at')}"
+        )
+        submission_columns = (
+            "mission_submissions.id, mission_submissions.mission_id, mission_submissions.user_id, "
+            "mission_submissions.body, mission_submissions.status, mission_submissions.review_note, "
+            "users.username AS author, users.avatar AS author_avatar, reviewers.username AS reviewer, "
+            f"{time_as('mission_submissions.created_at')}, {time_as('mission_submissions.updated_at', 'updated_at')}"
+        )
+
+        def all(self):
+            """Every mission, open ones first and newest first, each with its submissions (oldest first)."""
+            with notes_connection() as connection:
+                missions = [dict(row) for row in connection.execute(
+                    f"SELECT {self.mission_columns} FROM missions LEFT JOIN users ON users.id = missions.created_by "
+                    "ORDER BY missions.is_open DESC, missions.id DESC"
+                ).fetchall()]
+                submissions = connection.execute(
+                    f"SELECT {self.submission_columns} FROM mission_submissions "
+                    "JOIN users ON users.id = mission_submissions.user_id "
+                    "LEFT JOIN users reviewers ON reviewers.id = mission_submissions.reviewed_by "
+                    "ORDER BY mission_submissions.id"
+                ).fetchall()
+            by_id = {mission["id"]: {**mission, "submissions": []} for mission in missions}
+            for row in submissions:
+                if row["mission_id"] in by_id:
+                    by_id[row["mission_id"]]["submissions"].append(dict(row))
+            return list(by_id.values())
+
+        def mission(self, mission_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(f"SELECT {self.mission_columns} FROM missions LEFT JOIN users ON users.id = missions.created_by "
+                        "WHERE missions.id = ?"), (mission_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def add(self, title, details, user_id):
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("INSERT INTO missions (title, details, created_by) VALUES (?, ?, ?)") + returning_id,
+                    (title, details, user_id),
+                )
+                return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def set_open(self, mission_id, is_open):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE missions SET is_open = ? WHERE id = ?"), (1 if is_open else 0, mission_id))
+
+        def delete(self, mission_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM mission_submissions WHERE mission_id = ?"), (mission_id,))
+                connection.execute(sql("DELETE FROM missions WHERE id = ?"), (mission_id,))
+
+        def submission(self, submission_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(f"SELECT {self.submission_columns} FROM mission_submissions "
+                        "JOIN users ON users.id = mission_submissions.user_id "
+                        "LEFT JOIN users reviewers ON reviewers.id = mission_submissions.reviewed_by "
+                        "WHERE mission_submissions.id = ?"), (submission_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def active_submission(self, mission_id, user_id):
+            """This person's submission that is waiting or approved, which blocks handing in another."""
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT id, status FROM mission_submissions WHERE mission_id = ? AND user_id = ? "
+                        "AND status IN ('pending', 'approved')"), (mission_id, user_id)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def submit(self, mission_id, user_id, body):
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("INSERT INTO mission_submissions (mission_id, user_id, body) VALUES (?, ?, ?)") + returning_id,
+                    (mission_id, user_id, body),
+                )
+                return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def review(self, submission_id, status, note, reviewer_id):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("UPDATE mission_submissions SET status = ?, review_note = ?, reviewed_by = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?"),
+                    (status, note, reviewer_id, submission_id),
+                )
+
+        def delete_submission(self, submission_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM mission_submissions WHERE id = ?"), (submission_id,))
+
+        def delete_user_content(self, user_id):
+            """When an account is deleted, its submitted work goes; its missions stay for everyone else."""
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM mission_submissions WHERE user_id = ?"), (user_id,))
+                connection.execute(sql("UPDATE mission_submissions SET reviewed_by = NULL WHERE reviewed_by = ?"),
+                                   (user_id,))
+                connection.execute(sql("UPDATE missions SET created_by = NULL WHERE created_by = ?"), (user_id,))
 
     class UserStore:
         """Accounts for signing in. Passwords are stored only as salted hashes."""
@@ -1579,6 +1726,9 @@ def create_app(test_config=None):
     request_store = RequestStore()
     app.extensions["requests"] = request_store
 
+    mission_store = MissionStore()
+    app.extensions["missions"] = mission_store
+
     settings_store = SettingsStore()
     app.extensions["settings"] = settings_store
     chat.use_settings(settings_store.get)
@@ -1911,6 +2061,7 @@ def create_app(test_config=None):
         else:
             feed_store.delete_user_content(user_id)
             chat_store.delete_user_content(user_id)
+            mission_store.delete_user_content(user_id)
             invalidate_notes(user_id)
             remove_avatar(user["avatar"])
             user_store.delete(user_id)
@@ -2085,6 +2236,131 @@ def create_app(test_config=None):
             request_store.delete(request_id)
             flash("Request deleted.", "success")
         return redirect(url_for("updates", status=request.form.get("shown_status") or None, _anchor="requests"), code=303)
+
+    # --------------------------------------------------------------- missions
+
+    def mission_text(name, limit=MISSION_TEXT_LIMIT):
+        return request.form.get(name, "").strip().replace("\r\n", "\n")[:limit + 1]
+
+    @app.get("/missions")
+    def missions():
+        user = g.user
+        everything = mission_store.all()
+        for mission in everything:
+            mine = [item for item in mission["submissions"] if item["user_id"] == user["id"]]
+            mission["mine"] = mine
+            mission["can_submit"] = bool(mission["is_open"]) and not any(
+                item["status"] in ("pending", "approved") for item in mine)
+            mission["approved"] = sum(1 for item in mission["submissions"] if item["status"] == "approved")
+        waiting = [{**item, "mission_title": mission["title"]} for mission in everything
+                   for item in mission["submissions"] if item["status"] == "pending"] if user["is_admin"] else []
+        return render_template(
+            "missions.html", missions=[m for m in everything if m["is_open"]],
+            closed=[m for m in everything if not m["is_open"]], waiting=waiting,
+            statuses=MISSION_STATUSES, form=session.pop("mission_form", None),
+        )
+
+    @app.post("/missions")
+    def create_mission():
+        admin_required()
+        title = " ".join(request.form.get("title", "").split())
+        details = mission_text("details")
+        error = None
+        if not title:
+            error = "Give the mission a short title."
+        elif len(title) > 120 or len(details) > MISSION_TEXT_LIMIT:
+            error = "Keep the title under 120 characters and the details under 4,000."
+        if error:
+            flash(error, "error")
+            session["mission_form"] = {"title": title[:120], "details": details[:MISSION_TEXT_LIMIT]}
+            return redirect(url_for("missions"), code=303)
+        mission_store.add(title, details, g.user["id"])
+        everyone = [user["id"] for user in user_store.all() if user["is_active"]]
+        notification_store.add(everyone, g.user["id"], "mission",
+                               f"{g.user['username']} set a new mission: “{title}”", url_for("missions"))
+        flash("Mission added. Everyone can now submit their work for it.", "success")
+        return redirect(url_for("missions"), code=303)
+
+    @app.post("/missions/<int:mission_id>/open")
+    def mission_open(mission_id):
+        admin_required()
+        mission = mission_store.mission(mission_id)
+        if mission is None:
+            flash("That mission no longer exists.", "error")
+        else:
+            is_open = request.form.get("open") == "1"
+            mission_store.set_open(mission_id, is_open)
+            flash(f"“{mission['title']}” is {'open again' if is_open else 'closed: no new work can be submitted'}.",
+                  "success")
+        return redirect(url_for("missions"), code=303)
+
+    @app.post("/missions/<int:mission_id>/delete")
+    def mission_delete(mission_id):
+        admin_required()
+        if mission_store.mission(mission_id) is not None:
+            mission_store.delete(mission_id)
+            flash("Mission deleted, with the work submitted for it.", "success")
+        return redirect(url_for("missions"), code=303)
+
+    @app.post("/missions/<int:mission_id>/submit")
+    def mission_submit(mission_id):
+        mission = mission_store.mission(mission_id)
+        body = mission_text("body")
+        error = None
+        if mission is None:
+            error = "That mission no longer exists."
+        elif not mission["is_open"]:
+            error = "This mission is closed, so no new work can be submitted."
+        elif mission_store.active_submission(mission_id, g.user["id"]):
+            error = "You've already submitted work for this mission."
+        elif not body:
+            error = "Describe the work you did before submitting."
+        elif len(body) > MISSION_TEXT_LIMIT:
+            error = "Keep your submission under 4,000 characters."
+        if error:
+            flash(error, "error")
+            return redirect(url_for("missions", _anchor=f"mission-{mission_id}"), code=303)
+        mission_store.submit(mission_id, g.user["id"], body)
+        notification_store.add(user_store.admin_ids(), g.user["id"], "mission",
+                               f"{g.user['username']} submitted work for “{mission['title']}”",
+                               url_for("missions", _anchor="mission-review"))
+        flash("Submitted. An administrator will approve it or send it back with a note.", "success")
+        return redirect(url_for("missions", _anchor=f"mission-{mission_id}"), code=303)
+
+    @app.post("/missions/submissions/<int:submission_id>/review")
+    def mission_review(submission_id):
+        admin_required()
+        item = mission_store.submission(submission_id)
+        decision = request.form.get("decision", "")
+        note = mission_text("note", 1000)[:1000]
+        if item is None:
+            flash("That submission no longer exists.", "error")
+        elif decision not in ("approved", "returned"):
+            flash("Choose Approve or Send back.", "error")
+        elif decision == "returned" and not note:
+            flash("Say what to change when sending work back.", "error")
+        else:
+            mission = mission_store.mission(item["mission_id"])
+            mission_store.review(submission_id, decision, note, g.user["id"])
+            what = "approved" if decision == "approved" else "sent back"
+            notification_store.add([item["user_id"]], g.user["id"], "mission",
+                                   f"{g.user['username']} {what} your work for “{mission['title']}”"
+                                   + (f": {note}" if note else ""),
+                                   url_for("missions", _anchor=f"mission-{item['mission_id']}"))
+            flash(f"{item['author']}'s work {what}.", "success")
+        return redirect(url_for("missions", _anchor="mission-review"), code=303)
+
+    @app.post("/missions/submissions/<int:submission_id>/delete")
+    def mission_submission_delete(submission_id):
+        item = mission_store.submission(submission_id)
+        if item is None:
+            flash("That submission no longer exists.", "error")
+        elif not g.user["is_admin"] and (item["user_id"] != g.user["id"] or item["status"] == "approved"):
+            abort(403, "You can only withdraw your own work before it's approved.")
+        else:
+            mission_store.delete_submission(submission_id)
+            flash("Submission removed.", "success")
+        return redirect(url_for("missions", _anchor=f"mission-{item['mission_id']}" if item else None), code=303)
 
     # ------------------------------------------------------------------- feed
 

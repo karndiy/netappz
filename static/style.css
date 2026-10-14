@@ -1129,3 +1129,20 @@ body.is-locked { overflow: hidden; }
   .convert-log-list li { position: relative; padding-right: 64px; }
   .convert-log-delete { position: absolute; top: 6px; right: 0; }
 }
+/* Missions */
+.mission-heading { margin-top: 26px; }
+.mission { margin-top: 14px; scroll-margin-top: 16px; }
+.mission > .request-item:first-child { padding-top: 0; border-top: 0; }
+.mission-submissions { margin-top: 4px; }
+.mission-submission { padding-left: 14px; }
+.is-pending .request-status { background: #fffaeb; color: #b54708; }
+.is-approved .request-status { background: #ecfdf3; color: #027a48; }
+.is-returned .request-status { background: #fef3f2; color: #b42318; }
+.mission-submit { margin-top: 6px; padding: 12px 0 0; border-top: 1px solid #eaecf0; }
+.mission-new { margin-top: 18px; background: #fff; }
+.mission-review-form { display: flex; flex: none; flex-wrap: wrap; align-items: flex-start; gap: 6px; max-width: 360px; }
+.mission-review-form input { flex: 1 1 100%; min-height: 36px; padding: 6px 10px; border: 1px solid #d0d5dd; border-radius: 6px; font: inherit; font-size: 14px; }
+.mission-review-form button { min-height: 36px; padding: 4px 12px; font-size: 14px; }
+@media (max-width: 600px) {
+  .mission-review-form { max-width: none; }
+}

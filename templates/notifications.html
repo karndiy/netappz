@@ -14,6 +14,7 @@
       <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
       <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
       <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      <a class="topbar-link" href="{{ url_for('missions') }}">Missions</a>
       <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
       <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
       {% include "_account_nav.html" %}
@@ -56,7 +57,7 @@
     <ul class="alert-list">
       {% for item in items %}
         <li class="alert-item{% if not item.is_read %} is-unread{% endif %}">
-          <span class="alert-icon kind-{{ item.kind }}" aria-hidden="true">{{ {"comment": "💬", "like": "👍", "mention": "@", "post": "📝", "signup": "👤", "approved": "✅", "request": "📋", "system": "🩺"}.get(item.kind, "🔔") }}</span>
+          <span class="alert-icon kind-{{ item.kind }}" aria-hidden="true">{{ {"comment": "💬", "like": "👍", "mention": "@", "post": "📝", "signup": "👤", "approved": "✅", "request": "📋", "mission": "🎯", "system": "🩺"}.get(item.kind, "🔔") }}</span>
           <a class="alert-main" href="{{ url_for('notification_open', notification_id=item.id) }}">
             <span class="alert-message">{{ item.message }}</span>
             <time datetime="{{ item.created_at | note_iso }}" data-relative>{{ item.created_at | note_short_date }}</time>
