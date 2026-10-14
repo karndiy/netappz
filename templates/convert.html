@@ -157,6 +157,10 @@
         </article>
       {% endfor %}
     </section>
+
+    <section class="convert-log" id="log" aria-labelledby="log-heading" data-log-url="{{ url_for('convert_log_list') }}">
+      {% include "_convert_log.html" %}
+    </section>
   </main>
 
   <script>
@@ -185,6 +189,15 @@
     var canSetFiles = (function () {
       try { return typeof DataTransfer === "function" && !!new DataTransfer().items; } catch (error) { return false; }
     })();
+
+    // After each conversion, show the new entry in the log without leaving the page.
+    var logSection = document.getElementById("log");
+    function refreshLog() {
+      fetch(logSection.dataset.logUrl, { credentials: "same-origin" })
+        .then(function (response) { return response.ok ? response.text() : null; })
+        .then(function (html) { if (html) logSection.innerHTML = html; })
+        .catch(function () {});
+    }
 
     function formatSize(bytes) {
       if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
@@ -429,6 +442,7 @@
           .then(function () {
             button.disabled = false;
             form.classList.remove("is-busy");
+            refreshLog();
           });
       });
     });

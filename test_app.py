@@ -770,6 +770,66 @@ class FileManagerTests(unittest.TestCase):
         self.assertIn(b"Choose a file to convert", self.client.get("/convert").data)
         self.assertEqual(self.client.post("/convert/nope", data={"_csrf_token": token}).status_code, 404)
 
+    def test_convert_log_is_per_user_and_deletable(self):
+        token = self._csrf()
+        users = self.app.extensions["users"]
+        member_id = users.add("member", "member-password")
+        log = self.app.extensions["convert_log"]
+
+        # A successful and a failed conversion are both logged for the person who ran them.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        response = self.client.post(
+            "/convert/image2pdf",
+            data={"_csrf_token": token, "files": (io.BytesIO(self._png_bytes("red")), "รูปภาพ.png")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        response.close()
+        self.client.post(
+            "/convert/pdf2image",
+            data={"_csrf_token": token, "files": (io.BytesIO(b"not a pdf"), "fake.pdf")},
+            content_type="multipart/form-data",
+            headers={"X-Requested-With": "fetch"},
+        )
+        entries = log.entries(member_id)
+        self.assertEqual([entry["tool"] for entry in entries], ["pdf2image", "image2pdf"])
+        self.assertEqual(entries[0]["ok"], 0)
+        self.assertEqual(entries[1]["files"], "รูปภาพ.png")
+        self.assertEqual(entries[1]["result"], "รูปภาพ.pdf")
+        log.add(self.admin_id, "word2pdf", ["admin-report.docx"], "admin-report.pdf")
+        admin_entry = log.entries(self.admin_id)[0]["id"]
+
+        # People see only their own log and can't delete other people's entries.
+        page = self.client.get("/convert").get_data(as_text=True)
+        self.assertIn("Conversion log", page)
+        self.assertIn("รูปภาพ.png", page)
+        self.assertNotIn("admin-report", page)
+        self.assertIn("fake.pdf", self.client.get("/convert/log").get_data(as_text=True))
+        response = self.client.post(f"/convert/log/{admin_entry}/delete", data={"_csrf_token": token})
+        self.assertEqual(response.status_code, 404)
+        response = self.client.post(f"/convert/log/{entries[0]['id']}/delete", data={"_csrf_token": token})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(len(log.entries(member_id)), 1)
+        # Clearing as a member clears only their own log, even when asking for everyone's.
+        self.client.post("/convert/log/clear", data={"_csrf_token": token, "scope": "all"})
+        self.assertEqual(log.entries(member_id), [])
+        self.assertEqual(len(log.entries(self.admin_id)), 1)
+
+        # Administrators see everyone's conversions and can delete any of them.
+        log.add(member_id, "pdf2word", ["member-scan.pdf"], "member-scan.docx")
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        page = self.client.get("/convert").get_data(as_text=True)
+        self.assertIn("member-scan.pdf", page)
+        self.assertIn("admin-report.docx", page)
+        member_entry = log.entries(member_id)[0]["id"]
+        self.client.post(f"/convert/log/{member_entry}/delete", data={"_csrf_token": token})
+        self.assertEqual(log.entries(member_id), [])
+        self.client.post("/convert/log/clear", data={"_csrf_token": token, "scope": "all"})
+        self.assertEqual(log.entries(), [])
+        self.assertIn("No conversions yet", self.client.get("/convert").get_data(as_text=True))
+
 
     def _fake_reply(self, *chunks):
         def stream_reply(history, for_telegram=False):

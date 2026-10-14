@@ -160,6 +160,15 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
     {
+        "version": "1.35.0",
+        "date": "2026-10-14",
+        "changes": [
+            "The Convert page now has a Conversion log (request #10: a log for Convert files that users and administrators can delete from). It lists each conversion with the time, the tool, the file names and the result, or why it failed.",
+            "Each person sees only their own conversions and can delete single entries or clear their whole log. Administrators see everyone's conversions and can delete any entry or clear the log for everyone.",
+            "Only file names are kept, never the files, and entries are removed automatically after a year.",
+        ],
+    },
+    {
         "version": "1.34.0",
         "date": "2026-10-14",
         "changes": [
@@ -522,6 +531,10 @@ SYSTEM_CHECK_STATE = "_system_checks"  # app_settings row: the last automatic ch
 ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat"}
 ACTIVITY_DETAIL = 300  # characters of a note title or chat message kept in the log
 ACTIVITY_KEEP_DAYS = 365
+# Convert page: each person's conversion log. Administrators see and can delete everyone's.
+CONVERT_TOOL_NAMES = {"word2pdf": "Word to PDF", "pdf2word": "PDF to Word", "image2pdf": "Image to PDF",
+                      "pdf2image": "PDF to Image", "pdfmerge": "Merge PDFs"}
+CONVERT_LOG_SHOWN = 50
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
@@ -756,6 +769,22 @@ def create_app(test_config=None):
             """
         )
         connection.execute("CREATE INDEX IF NOT EXISTS activity_log_created ON activity_log (created_at)")
+        # Conversions on the Convert page (1.35.0): file names and results only, never the files.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS convert_log (
+                {id_column},
+                user_id INTEGER,
+                username TEXT NOT NULL DEFAULT '',
+                tool TEXT NOT NULL,
+                files TEXT NOT NULL DEFAULT '',
+                result TEXT NOT NULL DEFAULT '',
+                ok INTEGER NOT NULL DEFAULT 1,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS convert_log_user ON convert_log (user_id)")
 
     class ActivityLog:
         """Who did what in Notes and Chat. The username is copied so entries outlive deleted accounts."""
@@ -819,6 +848,61 @@ def create_app(test_config=None):
 
     activity_log = ActivityLog()
     app.extensions["activity"] = activity_log
+
+    class ConvertLog:
+        """Who converted what on the Convert page, and how it went. The files themselves are never kept."""
+
+        def add(self, user_id, tool, files, result, ok=True):
+            files = ", ".join(files)
+            files = files if len(files) <= ACTIVITY_DETAIL else files[:ACTIVITY_DETAIL - 1] + "…"
+            result = " ".join(result.split())[:ACTIVITY_DETAIL]
+            with notes_connection() as connection:
+                connection.execute(
+                    sql(
+                        "INSERT INTO convert_log (user_id, username, tool, files, result, ok) "
+                        "VALUES (?, COALESCE((SELECT username FROM users WHERE id = ?), ''), ?, ?, ?, ?)"
+                    ),
+                    (user_id, user_id, tool, files, result, 1 if ok else 0),
+                )
+
+        def entries(self, user_id=None, limit=CONVERT_LOG_SHOWN):
+            """Newest first: one person's entries, or everyone's when user_id is None."""
+            where, params = ("WHERE user_id = ? ", (user_id,)) if user_id is not None else ("", ())
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(
+                        f"SELECT id, user_id, username, tool, files, result, ok, "
+                        f"{timestamp_select.format('created_at')} FROM convert_log {where}ORDER BY id DESC LIMIT ?"
+                    ),
+                    (*params, limit),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def owner(self, entry_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT user_id FROM convert_log WHERE id = ?"), (entry_id,)
+                ).fetchone()
+            return None if row is None else row["user_id"]
+
+        def delete(self, entry_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM convert_log WHERE id = ?"), (entry_id,))
+
+        def clear(self, user_id=None):
+            with notes_connection() as connection:
+                if user_id is None:
+                    connection.execute("DELETE FROM convert_log")
+                else:
+                    connection.execute(sql("DELETE FROM convert_log WHERE user_id = ?"), (user_id,))
+
+        def prune(self, days=ACTIVITY_KEEP_DAYS):
+            before = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM convert_log WHERE created_at < ?"), (before,))
+
+    convert_log = ConvertLog()
+    app.extensions["convert_log"] = convert_log
 
     class ChatStore:
         """Each person's conversations, from the web chat page and (for the bot's owner) Telegram."""
@@ -2990,6 +3074,7 @@ def create_app(test_config=None):
         """Runs the checks and tells administrators about each one that changed since the last run."""
         checks = run_system_checks()
         activity_log.prune()  # The check runs regularly, so old activity is cleared here too.
+        convert_log.prune()
         try:
             previous = json.loads(settings_store.get(SYSTEM_CHECK_STATE) or "{}").get("status", {})
         except ValueError:
@@ -3212,9 +3297,36 @@ def create_app(test_config=None):
         flash("Profile saved.", "success")
         return redirect(url_for("settings_section", section="account"), code=303)
 
+    def convert_log_context():
+        everyone = bool(g.user["is_admin"])
+        return {"log_entries": convert_log.entries(None if everyone else g.user["id"]),
+                "log_everyone": everyone, "tool_names": CONVERT_TOOL_NAMES}
+
     @app.get("/convert")
     def convert_page():
-        return render_template("convert.html")
+        return render_template("convert.html", **convert_log_context())
+
+    @app.get("/convert/log")
+    def convert_log_list():
+        # The Convert page refreshes its log with this after each conversion.
+        return render_template("_convert_log.html", **convert_log_context())
+
+    @app.post("/convert/log/<int:entry_id>/delete")
+    def convert_log_delete(entry_id):
+        owner = convert_log.owner(entry_id)
+        if owner is None or not (owner == g.user["id"] or g.user["is_admin"]):
+            abort(404)
+        convert_log.delete(entry_id)
+        flash("Removed from the conversion log.", "success")
+        return redirect(url_for("convert_page", _anchor="log"), code=303)
+
+    @app.post("/convert/log/clear")
+    def convert_log_clear():
+        # Administrators can clear everyone's log; everyone else clears only their own.
+        everyone = g.user["is_admin"] and request.form.get("scope") == "all"
+        convert_log.clear(None if everyone else g.user["id"])
+        flash("Conversion log cleared.", "success")
+        return redirect(url_for("convert_page", _anchor="log"), code=303)
 
     @app.post("/convert/<tool>")
     def convert(tool):
@@ -3240,6 +3352,7 @@ def create_app(test_config=None):
                 return fail(f"“{download_stem(upload.filename)}” is not a supported file type here.")
 
         stem = download_stem(uploads[0].filename)
+        file_names = [download_stem(upload.filename) + Path(upload.filename).suffix.lower() for upload in uploads]
         note = ""
         with tempfile.TemporaryDirectory(prefix="convert-") as temp_dir:
             workdir = Path(temp_dir)
@@ -3274,12 +3387,14 @@ def create_app(test_config=None):
                     )
                     download_name = result.name
             except converters.ConversionError as error:
+                convert_log.add(g.user["id"], tool, file_names, str(error), ok=False)
                 return fail(str(error))
 
             output = tempfile.TemporaryFile()
             with result.open("rb") as handle:
                 shutil.copyfileobj(handle, output)
             output.seek(0)
+        convert_log.add(g.user["id"], tool, file_names, download_name + (f". {note}" if note else ""))
 
         response = send_file(
             output,

@@ -1,0 +1,34 @@
+<div class="convert-log-head">
+  <div>
+    <h2 id="log-heading">Conversion log</h2>
+    <p>{% if log_everyone %}Everyone's conversions, newest first. As an administrator you can remove any entry.{% else %}Your conversions, newest first. Only you and administrators can see them.{% endif %}
+      Only file names are kept, never the files.</p>
+  </div>
+  {% if log_entries %}
+    <form action="{{ url_for('convert_log_clear') }}" method="post"
+          onsubmit="return confirm('{{ 'Clear the conversion log for everyone?' if log_everyone else 'Clear your conversion log?' }}');">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      {% if log_everyone %}<input type="hidden" name="scope" value="all">{% endif %}
+      <button class="convert-link-button" type="submit">{{ 'Clear all' if log_everyone else 'Clear my log' }}</button>
+    </form>
+  {% endif %}
+</div>
+<ul class="activity-list convert-log-list">
+  {% for entry in log_entries %}
+    <li>
+      <time datetime="{{ entry.created_at | note_iso }}" title="{{ entry.created_at | note_long_date }}">{{ entry.created_at[:16] }}</time>
+      <div>
+        <p>{% if log_everyone %}<strong>{{ entry.username or "Deleted account" }}</strong> {% endif %}{{ entry.files }}
+          <span class="activity-area">{{ tool_names.get(entry.tool, entry.tool) }}</span>
+          {% if not entry.ok %}<span class="activity-area convert-log-failed">Failed</span>{% endif %}</p>
+        {% if entry.result %}<p class="activity-detail">{{ '→ ' if entry.ok }}{{ entry.result }}</p>{% endif %}
+      </div>
+      <form class="convert-log-delete" action="{{ url_for('convert_log_delete', entry_id=entry.id) }}" method="post">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <button class="convert-link-button" type="submit" aria-label="Remove this entry" title="Remove this entry">Delete</button>
+      </form>
+    </li>
+  {% else %}
+    <li class="empty">No conversions yet.</li>
+  {% endfor %}
+</ul>
