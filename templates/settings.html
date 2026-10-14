@@ -1,6 +1,6 @@
 {% from "_avatar.html" import avatar %}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,19 +8,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
-    <nav class="topbar-nav" aria-label="Main navigation">
-      <a class="topbar-link" href="{{ url_for('feed') }}">Feed</a>
-      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
-      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
-      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
-      <a class="topbar-link" href="{{ url_for('missions') }}">Missions</a>
-      <a class="topbar-link" href="{{ url_for('settings_page') }}" aria-current="page">Settings</a>
-      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
-      {% include "_account_nav.html" %}
-    </nav>
-  </header>
+  {% include "_sidebar.html" %}
 
   {% macro section_links(admin) %}
     {% for item in sections if item.admin == admin %}
@@ -58,7 +46,7 @@
             <h1>Settings</h1>
             <p class="page-description">
               {% if current_user.is_admin %}Your own settings come first; the administration settings below affect everyone.
-              {% else %}Your profile, password and notifications.{% endif %}
+              {% else %}Your profile, password, notifications and the app's look.{% endif %}
             </p>
           </div>
         </section>
@@ -179,12 +167,32 @@
               </li>
               <li>
                 <label class="settings-switch">
-                  <span>Show my points next to Wallet<small>Your wallet balance in small type in the top bar.</small></span>
+                  <span>Show my points next to Wallet<small>Your wallet balance in small type in the side menu.</small></span>
                   <input type="checkbox" role="switch" name="show_balance" value="1" {% if prefs.show_balance %}checked{% endif %}>
                   <span class="switch" aria-hidden="true"></span>
                 </label>
               </li>
             </ul>
+            <div class="settings-actions"><button type="submit">Save</button></div>
+          </form>
+
+        {% elif section.key == "appearance" %}
+          {# ------------------------------------------------- appearance #}
+          <form class="settings-card" action="{{ url_for('save_appearance') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <div class="settings-card-head">
+              <h2>Theme</h2>
+              <p>Applies to every page, on every device you sign in with.</p>
+            </div>
+            <div class="theme-choices" role="radiogroup" aria-label="Theme">
+              {% for key, label in themes.items() %}
+                <label class="theme-choice">
+                  <input type="radio" name="theme" value="{{ key }}" {% if prefs.theme == key %}checked{% endif %}>
+                  <span class="theme-preview is-{{ key }}" aria-hidden="true"><i></i><b></b></span>
+                  <span>{{ label }}</span>
+                </label>
+              {% endfor %}
+            </div>
             <div class="settings-actions"><button type="submit">Save</button></div>
           </form>
 

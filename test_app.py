@@ -1606,6 +1606,32 @@ class FileManagerTests(unittest.TestCase):
         self.client.post("/settings/notifications", data={"_csrf_token": token, "show_balance": "1"})
         self.assertIn("topbar-coins", self.client.get("/").get_data(as_text=True))
 
+    def test_side_menu_icons_and_light_dark_theme_setting(self):
+        token = self._csrf()
+        page = self.client.get("/notes").get_data(as_text=True)
+        self.assertIn('<header class="sidebar">', page)
+        self.assertNotIn('<header class="topbar">', page)
+        self.assertIn('class="sidebar-link" href="/notes" title="Notes" aria-current="page"', page)
+        self.assertIn('class="sidebar-link" href="/feed" title="Feed">', page)
+        self.assertIn('<html lang="en" data-theme="auto">', page)
+        self.assertIn('href="/settings/appearance"', self.client.get("/settings").get_data(as_text=True))
+        self.assertIn('name="theme" value="auto" checked',
+                      self.client.get("/settings/appearance").get_data(as_text=True))
+
+        response = self.client.post("/settings/appearance", data={"_csrf_token": token, "theme": "dark"})
+        self.assertEqual(response.status_code, 303)
+        self.assertIn('data-theme="dark"', self.client.get("/").get_data(as_text=True))
+        self.assertIn('name="theme" value="dark" checked',
+                      self.client.get("/settings/appearance").get_data(as_text=True))
+
+        # Saving notification choices keeps the theme; an unknown theme is refused.
+        self.client.post("/settings/notifications", data={"_csrf_token": token, "popups": "1"})
+        self.client.post("/settings/appearance", data={"_csrf_token": token, "theme": "purple"})
+        page = self.client.get("/settings/appearance").get_data(as_text=True)
+        self.assertIn('data-theme="dark"', page)
+        self.client.post("/settings/appearance", data={"_csrf_token": token, "theme": "light"})
+        self.assertIn('data-theme="light"', self.client.get("/wallet").get_data(as_text=True))
+
     def test_wallet_deposits_transfers_and_mission_rewards(self):
         token = self._csrf()
         wallet = self.app.extensions["wallet"]

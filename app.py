@@ -127,6 +127,8 @@ SETTINGS_SECTIONS = [
      "description": "Your profile photo, a few words about you, and your password."},
     {"key": "notifications", "title": "Notifications", "icon": "🔔", "admin": False,
      "description": "Choose what you're told about, whether alerts pop up, and whether the top bar shows your points."},
+    {"key": "appearance", "title": "Appearance", "icon": "🎨", "admin": False,
+     "description": "A light or dark look for every page."},
     {"key": "users", "title": "Users & sign-up", "icon": "👥", "admin": True,
      "description": "Add people, approve new accounts, and choose who can sign up."},
     {"key": "ai", "title": "Chat AI", "icon": "🤖", "admin": True,
@@ -143,6 +145,8 @@ SETTINGS_SECTIONS = [
      "description": "Automatic checks of the database, Redis, disk and backups, and the database backups."},
 ]
 SECTION_KEYS = {section["key"]: section for section in SETTINGS_SECTIONS}
+# Looks people can choose under Settings → Appearance; "auto" follows the device.
+THEMES = {"auto": "Match my device", "light": "Light", "dark": "Dark"}
 # Alerts people can turn off. Sign-up and approval alerts are always sent.
 NOTIFY_KINDS = {
     "mention": "Someone @mentions you in a post or comment",
@@ -163,6 +167,15 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.45.0",
+        "date": "2026-10-14",
+        "changes": [
+            "The menu moved to a bar down the left side of every page, with an icon and a short name for each part of the app (request #16: icon menu on the left, light / dark mode in Settings). On phones it runs across the top as icons.",
+            "Notifications, your profile, Wallet with your points, and Log out sit at the bottom of the side menu.",
+            "New Settings → Appearance: choose Light, Dark or Match my device. Your choice applies to every page wherever you sign in.",
+        ],
+    },
     {
         "version": "1.44.0",
         "date": "2026-10-14",
@@ -1854,13 +1867,22 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 connection.execute(sql("DELETE FROM users WHERE id = ?"), (user_id,))
 
-    def user_prefs(user):
+    def saved_prefs(user):
         try:
             prefs = json.loads(user.get("prefs") or "{}")
         except ValueError:
             prefs = {}
+        return prefs if isinstance(prefs, dict) else {}
+
+    def user_prefs(user):
+        prefs = saved_prefs(user)
         return {"mute": [k for k in prefs.get("mute", []) if k in NOTIFY_KINDS], "popups": prefs.get("popups", True),
-                "show_balance": prefs.get("show_balance", True)}
+                "show_balance": prefs.get("show_balance", True),
+                "theme": prefs.get("theme") if prefs.get("theme") in THEMES else "auto"}
+
+    def update_prefs(user, **changes):
+        """Save some choices without forgetting the others."""
+        user_store.set_prefs(user["id"], {**saved_prefs(user), **changes})
 
     class NotificationStore:
         """Alerts for each person (comments, likes, mentions, new members...), read or not yet read."""
@@ -2267,7 +2289,8 @@ def create_app(test_config=None):
                 alerts["announcements"] = announcement_store.active()
             except Exception:
                 app.logger.exception("Could not load announcements")
-        return {"current_user": user, "announcement_levels": ANNOUNCEMENT_LEVELS, **alerts}
+        theme = user_prefs(user)["theme"] if user else "auto"
+        return {"current_user": user, "announcement_levels": ANNOUNCEMENT_LEVELS, "theme": theme, **alerts}
 
     @app.before_request
     def require_login():
@@ -4197,6 +4220,7 @@ def create_app(test_config=None):
             "account": "Profile photo set" if g.user["avatar"] else "No profile photo yet",
             "notifications": (f"{len(NOTIFY_KINDS) - len(prefs['mute'])} of {len(NOTIFY_KINDS)} kinds on"
                               + ("" if prefs["popups"] else " · pop-ups off")),
+            "appearance": THEMES[prefs["theme"]],
         }
         if g.user["is_admin"]:
             summary.update({
@@ -4251,6 +4275,8 @@ def create_app(test_config=None):
                     "last_check": last_automatic_check(), "check_minutes": check_minutes}
         if section == "notifications":
             return {"prefs": user_prefs(g.user), "kinds": NOTIFY_KINDS}
+        if section == "appearance":
+            return {"prefs": user_prefs(g.user), "themes": THEMES}
         if section == "account":
             return {"stats": feed_store.stats(g.user["id"])}
         return {}
@@ -4371,12 +4397,20 @@ def create_app(test_config=None):
 
     @app.post("/settings/notifications")
     def save_notification_prefs():
-        prefs = {"mute": [kind for kind in NOTIFY_KINDS if not request.form.get(f"kind_{kind}")],
-                 "popups": bool(request.form.get("popups")),
-                 "show_balance": bool(request.form.get("show_balance"))}
-        user_store.set_prefs(g.user["id"], prefs)
+        update_prefs(g.user, mute=[kind for kind in NOTIFY_KINDS if not request.form.get(f"kind_{kind}")],
+                     popups=bool(request.form.get("popups")), show_balance=bool(request.form.get("show_balance")))
         flash("Notification choices saved.", "success")
         return redirect(url_for("settings_section", section="notifications"), code=303)
+
+    @app.post("/settings/appearance")
+    def save_appearance():
+        theme = request.form.get("theme", "")
+        if theme not in THEMES:
+            flash("Choose Light, Dark or Match my device.", "error")
+        else:
+            update_prefs(g.user, theme=theme)
+            flash(f"Appearance set to {THEMES[theme]}.", "success")
+        return redirect(url_for("settings_section", section="appearance"), code=303)
 
     @app.post("/settings/account/profile")
     def save_profile():

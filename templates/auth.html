@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,15 +7,13 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
-    {% if mode == "account" %}
-      <nav class="topbar-nav" aria-label="Main navigation">
-        <a class="topbar-link" href="{{ url_for('index') }}">Back to files</a>
-        {% include "_account_nav.html" %}
-      </nav>
-    {% endif %}
-  </header>
+  {% if mode == "account" %}
+    {% include "_sidebar.html" %}
+  {% else %}
+    <header class="topbar">
+      <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    </header>
+  {% endif %}
   <main class="auth-page">
     <section class="auth-card" aria-labelledby="auth-heading">
       {% with messages = get_flashed_messages(with_categories=true) %}
