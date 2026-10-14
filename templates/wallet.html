@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wallet · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">Network Files</a>
+    <nav class="topbar-nav" aria-label="Main navigation">
+      <a class="topbar-link" href="{{ url_for('feed') }}">Feed</a>
+      <a class="topbar-link" href="{{ url_for('notes') }}">Notes</a>
+      <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
+      <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
+      <a class="topbar-link" href="{{ url_for('missions') }}">Missions</a>
+      <a class="topbar-link" href="{{ url_for('wallet') }}" aria-current="page">Wallet</a>
+      <a class="topbar-link" href="{{ url_for('settings_page') }}">Settings</a>
+      <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
+      {% include "_account_nav.html" %}
+    </nav>
+  </header>
+  <main class="container">
+    <section class="heading">
+      <div>
+        <h1>Wallet</h1>
+        <p class="page-description">
+          Points you earn from approved missions or get from an administrator. Send them to other people whenever you like.
+        </p>
+      </div>
+    </section>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    {% macro entry_rows(entries, show_owner) %}
+      <ul class="request-list wallet-history">
+        {% for entry in entries %}
+          <li class="request-item wallet-entry">
+            <div class="request-main">
+              <div class="request-title-row">
+                <span class="request-kind-tag">{{ kinds.get(entry.kind, entry.kind) }}</span>
+                <h3>
+                  {% if show_owner %}{{ entry.owner or 'Deleted account' }} · {% endif %}
+                  {% if entry.kind == 'transfer_in' %}from {{ entry.other or 'a deleted account' }}
+                  {% elif entry.kind == 'transfer_out' %}to {{ entry.other or 'a deleted account' }}
+                  {% elif entry.kind == 'reward' %}{{ entry.note }}
+                  {% else %}{{ kinds.get(entry.kind, entry.kind) }}{% endif %}
+                </h3>
+              </div>
+              {% if entry.note and entry.kind != 'reward' %}<p class="request-details">{{ entry.note }}</p>{% endif %}
+              <p class="request-meta">{{ entry.created_at[:16] }} UTC</p>
+            </div>
+            <span class="wallet-amount {{ 'is-in' if entry.amount > 0 else 'is-out' }}">{{ "{:+,}".format(entry.amount) }}</span>
+          </li>
+        {% else %}
+          <li class="empty">Nothing yet.</li>
+        {% endfor %}
+      </ul>
+    {% endmacro %}
+
+    <section class="requests wallet-summary" aria-labelledby="wallet-balance-heading">
+      <h2 id="wallet-balance-heading" class="visually-hidden">Your balance</h2>
+      <p class="wallet-balance"><span>🪙</span> {{ "{:,}".format(balance) }} <small>points</small></p>
+      <details class="request-new" {% if not recipients %}hidden{% endif %}>
+        <summary>Send points</summary>
+        <form class="request-form" action="{{ url_for('wallet_transfer') }}" method="post">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <label for="transfer-to">To</label>
+          <select id="transfer-to" name="to" required>
+            <option value="">Choose a person</option>
+            {% for person in recipients %}<option value="{{ person.username }}">{{ person.username }}</option>{% endfor %}
+          </select>
+          <label for="transfer-amount">Points</label>
+          <input id="transfer-amount" name="amount" type="text" inputmode="numeric" maxlength="12" required placeholder="100">
+          <label for="transfer-note">Note <span class="optional">(optional)</span></label>
+          <input id="transfer-note" name="note" type="text" maxlength="200" placeholder="What it's for">
+          <div class="request-actions"><button type="submit">Send</button></div>
+        </form>
+      </details>
+    </section>
+
+    {% if current_user.is_admin %}
+      <section class="requests" id="wallet-everyone" aria-labelledby="wallet-everyone-heading">
+        <div class="requests-head">
+          <h2 id="wallet-everyone-heading">Everyone's balance</h2>
+          <p>Deposit points into someone's wallet, or take them back.</p>
+        </div>
+        <ul class="request-list">
+          {% for person in people %}
+            <li class="request-item">
+              <div class="request-main">
+                <div class="request-title-row"><h3>{{ person.username }}</h3></div>
+                <p class="request-meta">🪙 {{ "{:,}".format(person.balance) }} points</p>
+              </div>
+              <form class="mission-review-form" action="{{ url_for('wallet_deposit') }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="user_id" value="{{ person.id }}">
+                <label class="visually-hidden" for="deposit-amount-{{ person.id }}">Points for {{ person.username }}</label>
+                <input id="deposit-amount-{{ person.id }}" name="amount" type="text" inputmode="numeric" maxlength="12"
+                       required placeholder="Points">
+                <label class="visually-hidden" for="deposit-note-{{ person.id }}">Note for {{ person.username }}</label>
+                <input id="deposit-note-{{ person.id }}" name="note" type="text" maxlength="200" placeholder="Note (optional)">
+                <button type="submit" name="action" value="deposit">Deposit</button>
+                <button class="secondary" type="submit" name="action" value="take">Take back</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+
+    <section class="requests" aria-labelledby="wallet-history-heading">
+      <div class="requests-head"><h2 id="wallet-history-heading">Your history</h2></div>
+      {{ entry_rows(history, False) }}
+    </section>
+
+    {% if current_user.is_admin %}
+      <section class="requests" aria-labelledby="wallet-all-heading">
+        <div class="requests-head">
+          <h2 id="wallet-all-heading">Everyone's history</h2>
+          <p>The latest changes to anyone's wallet.</p>
+        </div>
+        {{ entry_rows(everyone, True) }}
+      </section>
+    {% endif %}
+  </main>
+</body>
+</html>

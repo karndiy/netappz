@@ -149,6 +149,7 @@ NOTIFY_KINDS = {
     "post": "New posts from other people",
     "request": "News about requests on the Update log",
     "mission": "New missions, and news about mission work",
+    "wallet": "Points you receive in your wallet",
 }
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}")
 LOCAL_URL = re.compile(r"https?://[^\s/]+(/\S*)?")
@@ -160,6 +161,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.37.0",
+        "date": "2026-10-14",
+        "changes": [
+            "New Wallet page with points (request #12: a reward wallet for depositing and transferring funds). Everyone sees their balance and a history of every change to it.",
+            "Administrators deposit points into anyone's wallet, or take them back, and see everyone's balance. Anyone can send points from their own wallet to another person, who is notified.",
+            "Missions can now have a reward: when an administrator approves someone's work, the reward goes straight into their wallet.",
+            "Wallet alerts can be turned off under Notifications in Settings like the other kinds.",
+        ],
+    },
     {
         "version": "1.36.0",
         "date": "2026-10-14",
@@ -550,6 +561,12 @@ REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 MISSION_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "returned": "Sent back"}
 MISSION_TEXT_LIMIT = 4000
+# Wallet: points people hold. Administrators deposit them, people transfer them, approved missions pay them.
+WALLET_KINDS = {"deposit": "Deposit", "withdraw": "Taken away", "transfer_in": "Received",
+                "transfer_out": "Sent", "reward": "Mission reward"}
+WALLET_MAX = 1_000_000  # the most points in one deposit, transfer or mission reward
+WALLET_NOTE = 200
+WALLET_SHOWN = 100
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
 # Photos and videos on the Feed. HEIC photos from iPhones are turned into JPEG.
 FEED_IMAGES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
@@ -1174,7 +1191,26 @@ def create_app(test_config=None):
             )
             """
         )
+        # Rewards (1.37.0): approved mission work pays points into the wallet.
+        if "reward" not in table_columns(connection, "missions"):
+            connection.execute("ALTER TABLE missions ADD COLUMN reward INTEGER NOT NULL DEFAULT 0")
+        # Wallet (1.37.0): every change to someone's points is a row; the balance is their sum.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS wallet_entries (
+                {id_column},
+                user_id INTEGER NOT NULL,
+                amount INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                other_id INTEGER,
+                note TEXT NOT NULL DEFAULT '',
+                created_by INTEGER,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         for statement in (
+            "CREATE INDEX IF NOT EXISTS wallet_entries_user ON wallet_entries (user_id, id)",
             "CREATE INDEX IF NOT EXISTS mission_submissions_mission ON mission_submissions (mission_id, user_id)",
             "CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, is_read, id)",
             "CREATE INDEX IF NOT EXISTS feed_comments_post ON feed_comments (post_id, id)",
@@ -1271,7 +1307,7 @@ def create_app(test_config=None):
         """Missions administrators set, and the work people submit for an administrator to approve."""
 
         mission_columns = (
-            "missions.id, missions.title, missions.details, missions.created_by, missions.is_open, "
+            "missions.id, missions.title, missions.details, missions.created_by, missions.is_open, missions.reward, "
             f"users.username AS creator, {time_as('missions.created_at')}"
         )
         submission_columns = (
@@ -1308,11 +1344,11 @@ def create_app(test_config=None):
                 ).fetchone()
             return dict(row) if row else None
 
-        def add(self, title, details, user_id):
+        def add(self, title, details, user_id, reward=0):
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO missions (title, details, created_by) VALUES (?, ?, ?)") + returning_id,
-                    (title, details, user_id),
+                    sql("INSERT INTO missions (title, details, created_by, reward) VALUES (?, ?, ?, ?)") + returning_id,
+                    (title, details, user_id, reward),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
 
@@ -1371,6 +1407,85 @@ def create_app(test_config=None):
                 connection.execute(sql("UPDATE mission_submissions SET reviewed_by = NULL WHERE reviewed_by = ?"),
                                    (user_id,))
                 connection.execute(sql("UPDATE missions SET created_by = NULL WHERE created_by = ?"), (user_id,))
+
+    class WalletStore:
+        """Each person's points: a row for every deposit, transfer and reward, so the history explains the balance."""
+
+        columns = (
+            "wallet_entries.id, wallet_entries.user_id, wallet_entries.amount, wallet_entries.kind, "
+            "wallet_entries.note, owners.username AS owner, others.username AS other, "
+            f"{time_as('wallet_entries.created_at')}"
+        )
+
+        def lock(self, connection):
+            """One change at a time, so two transfers can't both spend the same points."""
+            if database_url:
+                connection.execute("SELECT pg_advisory_xact_lock(4207302)")
+            else:
+                connection.execute("BEGIN IMMEDIATE")
+
+        def _balance(self, connection, user_id):
+            return connection.execute(
+                sql("SELECT COALESCE(SUM(amount), 0) AS total FROM wallet_entries WHERE user_id = ?"), (user_id,)
+            ).fetchone()["total"]
+
+        def balance(self, user_id):
+            with notes_connection() as connection:
+                return self._balance(connection, user_id)
+
+        def balances(self):
+            """{user id: points} for everyone who has had points."""
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    "SELECT user_id, SUM(amount) AS total FROM wallet_entries GROUP BY user_id"
+                ).fetchall()
+            return {row["user_id"]: row["total"] for row in rows}
+
+        def history(self, user_id=None, limit=WALLET_SHOWN):
+            """Newest first: one person's entries, or everyone's when user_id is None."""
+            where, values = ("WHERE wallet_entries.user_id = ? ", (user_id,)) if user_id is not None else ("", ())
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(f"SELECT {self.columns} FROM wallet_entries "
+                        "LEFT JOIN users owners ON owners.id = wallet_entries.user_id "
+                        "LEFT JOIN users others ON others.id = wallet_entries.other_id "
+                        f"{where}ORDER BY wallet_entries.id DESC LIMIT {int(limit)}"), values
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def _add(self, connection, user_id, amount, kind, note, created_by, other_id=None):
+            connection.execute(
+                sql("INSERT INTO wallet_entries (user_id, amount, kind, other_id, note, created_by) "
+                    "VALUES (?, ?, ?, ?, ?, ?)"),
+                (user_id, amount, kind, other_id, note, created_by),
+            )
+
+        def deposit(self, user_id, amount, note, admin_id):
+            """An administrator adds points (amount > 0) or takes them away (amount < 0, never below zero)."""
+            with notes_connection() as connection:
+                self.lock(connection)
+                if amount < 0 and self._balance(connection, user_id) + amount < 0:
+                    raise ValueError("They don't have that many points to take away.")
+                self._add(connection, user_id, amount, "deposit" if amount > 0 else "withdraw", note, admin_id)
+
+        def transfer(self, from_id, to_id, amount, note):
+            with notes_connection() as connection:
+                self.lock(connection)
+                if self._balance(connection, from_id) < amount:
+                    raise ValueError("You don't have enough points for that transfer.")
+                self._add(connection, from_id, -amount, "transfer_out", note, from_id, to_id)
+                self._add(connection, to_id, amount, "transfer_in", note, from_id, from_id)
+
+        def reward(self, user_id, amount, note, admin_id):
+            with notes_connection() as connection:
+                self._add(connection, user_id, amount, "reward", note, admin_id)
+
+        def delete_user_content(self, user_id):
+            """When an account is deleted, its points go; the other side of its transfers keeps theirs."""
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM wallet_entries WHERE user_id = ?"), (user_id,))
+                connection.execute(sql("UPDATE wallet_entries SET other_id = NULL WHERE other_id = ?"), (user_id,))
+                connection.execute(sql("UPDATE wallet_entries SET created_by = NULL WHERE created_by = ?"), (user_id,))
 
     class UserStore:
         """Accounts for signing in. Passwords are stored only as salted hashes."""
@@ -1729,6 +1844,9 @@ def create_app(test_config=None):
     mission_store = MissionStore()
     app.extensions["missions"] = mission_store
 
+    wallet_store = WalletStore()
+    app.extensions["wallet"] = wallet_store
+
     settings_store = SettingsStore()
     app.extensions["settings"] = settings_store
     chat.use_settings(settings_store.get)
@@ -2062,6 +2180,7 @@ def create_app(test_config=None):
             feed_store.delete_user_content(user_id)
             chat_store.delete_user_content(user_id)
             mission_store.delete_user_content(user_id)
+            wallet_store.delete_user_content(user_id)
             invalidate_notes(user_id)
             remove_avatar(user["avatar"])
             user_store.delete(user_id)
@@ -2265,16 +2384,20 @@ def create_app(test_config=None):
         admin_required()
         title = " ".join(request.form.get("title", "").split())
         details = mission_text("details")
+        reward = wallet_amount(request.form.get("reward", ""), allow_zero=True)
         error = None
         if not title:
             error = "Give the mission a short title."
         elif len(title) > 120 or len(details) > MISSION_TEXT_LIMIT:
             error = "Keep the title under 120 characters and the details under 4,000."
+        elif reward is None:
+            error = f"The reward is a whole number of points from 0 to {WALLET_MAX:,}."
         if error:
             flash(error, "error")
-            session["mission_form"] = {"title": title[:120], "details": details[:MISSION_TEXT_LIMIT]}
+            session["mission_form"] = {"title": title[:120], "details": details[:MISSION_TEXT_LIMIT],
+                                       "reward": request.form.get("reward", "")[:12]}
             return redirect(url_for("missions"), code=303)
-        mission_store.add(title, details, g.user["id"])
+        mission_store.add(title, details, g.user["id"], reward)
         everyone = [user["id"] for user in user_store.all() if user["is_active"]]
         notification_store.add(everyone, g.user["id"], "mission",
                                f"{g.user['username']} set a new mission: “{title}”", url_for("missions"))
@@ -2339,15 +2462,22 @@ def create_app(test_config=None):
             flash("Choose Approve or Send back.", "error")
         elif decision == "returned" and not note:
             flash("Say what to change when sending work back.", "error")
+        elif item["status"] == "approved":
+            flash("That work is already approved.", "error")
         else:
             mission = mission_store.mission(item["mission_id"])
             mission_store.review(submission_id, decision, note, g.user["id"])
             what = "approved" if decision == "approved" else "sent back"
+            paid = decision == "approved" and mission["reward"] > 0
+            if paid:
+                wallet_store.reward(item["user_id"], mission["reward"], mission["title"][:WALLET_NOTE], g.user["id"])
             notification_store.add([item["user_id"]], g.user["id"], "mission",
                                    f"{g.user['username']} {what} your work for “{mission['title']}”"
+                                   + (f" and {mission['reward']:,} points went to your wallet" if paid else "")
                                    + (f": {note}" if note else ""),
                                    url_for("missions", _anchor=f"mission-{item['mission_id']}"))
-            flash(f"{item['author']}'s work {what}.", "success")
+            flash(f"{item['author']}'s work {what}"
+                  + (f", and {mission['reward']:,} points went to their wallet." if paid else "."), "success")
         return redirect(url_for("missions", _anchor="mission-review"), code=303)
 
     @app.post("/missions/submissions/<int:submission_id>/delete")
@@ -2361,6 +2491,86 @@ def create_app(test_config=None):
             mission_store.delete_submission(submission_id)
             flash("Submission removed.", "success")
         return redirect(url_for("missions", _anchor=f"mission-{item['mission_id']}" if item else None), code=303)
+
+    # ----------------------------------------------------------------- wallet
+
+    def wallet_amount(value, allow_zero=False):
+        """A whole number of points from the form ("1,500" is fine), or None if it isn't one."""
+        value = value.strip().replace(",", "")
+        if allow_zero and not value:
+            return 0
+        if not value.isdigit():
+            return None
+        amount = int(value)
+        return amount if (0 if allow_zero else 1) <= amount <= WALLET_MAX else None
+
+    @app.get("/wallet")
+    def wallet():
+        user = g.user
+        people = [person for person in user_store.all() if person["is_active"]]
+        balances = wallet_store.balances() if user["is_admin"] else {}
+        return render_template(
+            "wallet.html", balance=wallet_store.balance(user["id"]),
+            history=wallet_store.history(user["id"]),
+            everyone=wallet_store.history() if user["is_admin"] else [],
+            recipients=[person for person in people if person["id"] != user["id"]],
+            people=[{**person, "balance": balances.get(person["id"], 0)} for person in people],
+            kinds=WALLET_KINDS, max_amount=WALLET_MAX,
+        )
+
+    @app.post("/wallet/transfer")
+    def wallet_transfer():
+        recipient = user_store.by_name(request.form.get("to", "").strip())
+        amount = wallet_amount(request.form.get("amount", ""))
+        note = " ".join(request.form.get("note", "").split())[:WALLET_NOTE]
+        error = None
+        if recipient is None or not recipient["is_active"]:
+            error = "Choose who to send points to."
+        elif recipient["id"] == g.user["id"]:
+            error = "You can't send points to yourself."
+        elif amount is None:
+            error = f"Send a whole number of points from 1 to {WALLET_MAX:,}."
+        else:
+            try:
+                wallet_store.transfer(g.user["id"], recipient["id"], amount, note)
+            except ValueError as exc:
+                error = str(exc)
+        if error:
+            flash(error, "error")
+        else:
+            notification_store.add([recipient["id"]], g.user["id"], "wallet",
+                                   f"{g.user['username']} sent you {amount:,} points" + (f": {note}" if note else ""),
+                                   url_for("wallet"))
+            flash(f"Sent {amount:,} points to {recipient['username']}.", "success")
+        return redirect(url_for("wallet"), code=303)
+
+    @app.post("/wallet/deposit")
+    def wallet_deposit():
+        admin_required()
+        person = user_store.get(request.form.get("user_id", type=int) or 0)
+        amount = wallet_amount(request.form.get("amount", ""))
+        take = request.form.get("action") == "take"
+        note = " ".join(request.form.get("note", "").split())[:WALLET_NOTE]
+        error = None
+        if person is None:
+            error = "Choose whose wallet to change."
+        elif amount is None:
+            error = f"Enter a whole number of points from 1 to {WALLET_MAX:,}."
+        else:
+            try:
+                wallet_store.deposit(person["id"], -amount if take else amount, note, g.user["id"])
+            except ValueError as exc:
+                error = str(exc)
+        if error:
+            flash(error, "error")
+        else:
+            if not take:
+                notification_store.add([person["id"]], g.user["id"], "wallet",
+                                       f"{g.user['username']} deposited {amount:,} points in your wallet"
+                                       + (f": {note}" if note else ""), url_for("wallet"))
+            flash(f"{'Took' if take else 'Deposited'} {amount:,} points {'from' if take else 'for'} "
+                  f"{person['username']}.", "success")
+        return redirect(url_for("wallet"), code=303)
 
     # ------------------------------------------------------------------- feed
 

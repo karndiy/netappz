@@ -1146,3 +1146,12 @@ body.is-locked { overflow: hidden; }
 @media (max-width: 600px) {
   .mission-review-form { max-width: none; }
 }
+/* Wallet */
+.wallet-balance { display: flex; align-items: baseline; gap: 8px; margin: 0; font-size: 34px; font-weight: 700; }
+.wallet-balance small { color: #667085; font-size: 16px; font-weight: 500; }
+.request-form select { min-height: 42px; padding: 8px 11px; border: 1px solid #d0d5dd; border-radius: 6px; background: #fff; font-size: 15px; }
+.wallet-amount { flex: none; font-size: 17px; font-weight: 700; }
+.wallet-amount.is-in { color: #027a48; }
+.wallet-amount.is-out { color: #b42318; }
+.wallet-entry .request-title-row h3 { font-weight: 600; }
+.mission-reward { background: #fffaeb; color: #b54708; }

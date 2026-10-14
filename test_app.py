@@ -1396,6 +1396,76 @@ class FileManagerTests(unittest.TestCase):
         self.client.post(f"/missions/{mission_id}/delete", data={"_csrf_token": token})
         self.assertEqual(store.all(), [])
 
+    def test_wallet_deposits_transfers_and_mission_rewards(self):
+        token = self._csrf()
+        wallet = self.app.extensions["wallet"]
+        missions = self.app.extensions["missions"]
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        member_id = users.add("member", "member-password")
+        other_id = users.add("other", "other-password")
+
+        # Administrators deposit points and can take them back, but never below zero.
+        self.client.post("/wallet/deposit", data={"_csrf_token": token, "user_id": member_id, "amount": "abc"})
+        self.assertEqual(wallet.balance(member_id), 0)
+        self.client.post("/wallet/deposit", data={"_csrf_token": token, "user_id": member_id,
+                                                  "amount": "1,500", "note": "Welcome"})
+        self.assertEqual(wallet.balance(member_id), 1500)
+        self.assertIn("deposited 1,500 points", notifications.for_user(member_id)[0]["message"])
+        self.client.post("/wallet/deposit", data={"_csrf_token": token, "user_id": member_id,
+                                                  "amount": "2000", "action": "take"})
+        self.assertIn("don&#39;t have that many points", self.client.get("/wallet").get_data(as_text=True))
+        self.client.post("/wallet/deposit", data={"_csrf_token": token, "user_id": member_id,
+                                                  "amount": "500", "action": "take"})
+        self.assertEqual(wallet.balance(member_id), 1000)
+        page = self.client.get("/wallet").get_data(as_text=True)
+        self.assertIn("Everyone's balance", page)
+        self.assertIn("Welcome", page)
+
+        # Members can't deposit; they send from their own points only, never to themselves.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertEqual(self.client.post("/wallet/deposit", data={
+            "_csrf_token": token, "user_id": member_id, "amount": "5"}).status_code, 403)
+        page = self.client.get("/wallet").get_data(as_text=True)
+        self.assertIn("1,000", page)
+        self.assertNotIn("Everyone's balance", page)
+        for amount, to in (("5000", "other"), ("0", "other"), ("-5", "other"), ("10", "member"), ("10", "nobody")):
+            self.client.post("/wallet/transfer", data={"_csrf_token": token, "to": to, "amount": amount})
+        self.assertEqual((wallet.balance(member_id), wallet.balance(other_id)), (1000, 0))
+        self.client.post("/wallet/transfer", data={"_csrf_token": token, "to": "other", "amount": "300",
+                                                   "note": "Lunch"})
+        self.assertEqual((wallet.balance(member_id), wallet.balance(other_id)), (700, 300))
+        self.assertIn("member sent you 300 points: Lunch", notifications.for_user(other_id)[0]["message"])
+        self.assertEqual([e["kind"] for e in wallet.history(member_id)], ["transfer_out", "withdraw", "deposit"])
+
+        # Approving work for a mission with a reward pays it once.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post("/missions", data={"_csrf_token": token, "title": "Bad reward", "reward": "lots"})
+        self.assertEqual(missions.all(), [])
+        self.client.post("/missions", data={"_csrf_token": token, "title": "Tidy Projects", "reward": "250"})
+        mission_id = missions.all()[0]["id"]
+        self.assertIn("250 points", self.client.get("/missions").get_data(as_text=True))
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = other_id
+        self.client.post(f"/missions/{mission_id}/submit", data={"_csrf_token": token, "body": "Done"})
+        submission_id = missions.all()[0]["submissions"][0]["id"]
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        for _ in range(2):
+            self.client.post(f"/missions/submissions/{submission_id}/review",
+                             data={"_csrf_token": token, "decision": "approved"})
+        self.assertEqual(wallet.balance(other_id), 550)
+        self.assertEqual(wallet.history(other_id)[0]["note"], "Tidy Projects")
+        self.assertIn("250 points went to your wallet", notifications.for_user(other_id)[0]["message"])
+
+        # Deleting an account removes its points; the other side keeps theirs.
+        self.client.post(f"/settings/users/{member_id}/delete", data={"_csrf_token": token})
+        self.assertEqual(wallet.history(member_id), [])
+        self.assertEqual(wallet.balance(other_id), 550)
+        self.assertIn("from a deleted account", self.client.get("/wallet").get_data(as_text=True))
+
     def test_user_requests_can_be_added_tracked_and_closed(self):
         import app as app_module
 
@@ -1703,7 +1773,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(notifications.for_user(bee_id), [])
         self.client.post("/feed/posts", data={"_csrf_token": token, "body": "@bee come too"})
         self.assertEqual([a["kind"] for a in notifications.for_user(bee_id)], ["mention"])
-        self.assertIn("3 of 6 kinds on", bee.get("/settings").get_data(as_text=True))
+        self.assertIn("3 of 7 kinds on", bee.get("/settings").get_data(as_text=True))
 
         # Only the author edits a post; the reply has the new text ready to show.
         post_id = self.app.extensions["feed"].posts(self.admin_id)[0]["id"]
