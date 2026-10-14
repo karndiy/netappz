@@ -164,7 +164,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
     {
-        "version": "1.43.0",
+        "version": "1.44.0",
         "date": "2026-10-14",
         "changes": [
             "The Missions page has a new card design (request: use cards for the Missions UI). Summary tiles at the top show open missions, today's quests and what's waiting.",
