@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
+import click
 from flask import (
     Flask,
     Response,
@@ -153,6 +154,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.32.0",
+        "date": "2026-10-14",
+        "changes": [
+            "Administrators can send a request to Claude from the Update log page with the new Send to Claude button (request: check requests automatically and send them to Claude to process).",
+            "The server checks every 5 minutes. Claude makes the change, adds its entry to this log, and checks that everything still works. The app is then updated and the request marked Done with the version that has it, and the person who asked is notified.",
+            "Each request shows a note from Claude: what was changed, or why it couldn't be done, in which case it goes back to Waiting.",
+            "Only administrators can send requests to Claude. Other people's requests wait until an administrator sends them.",
+        ],
+    },
     {
         "version": "1.31.0",
         "date": "2026-10-14",
@@ -479,7 +490,8 @@ UPDATE_LOG = [
 ]
 APP_VERSION = UPDATE_LOG[0]["version"]
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
-REQUEST_STATUSES = {"open": "Waiting", "in_progress": "In progress", "done": "Done"}
+# "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
+REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
 # Photos and videos on the Feed. HEIC photos from iPhones are turned into JPEG.
 FEED_IMAGES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
                ".webp": "image/webp", ".heic": "image/jpeg", ".heif": "image/jpeg"}
@@ -811,6 +823,12 @@ def create_app(test_config=None):
             """
         )
 
+        # Claude processing (1.32.0): who sent a request to Claude, and Claude's result.
+        existing = table_columns(connection, "user_requests")
+        for column in ("sent_by", "note"):
+            if column not in existing:
+                connection.execute(f"ALTER TABLE user_requests ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+
         # Sign-up (1.29.0): accounts made on the sign-up page can wait for an administrator.
         existing = table_columns(connection, "users")
         # Sign-up (1.29.0) and profiles (1.30.0) added these columns to existing databases.
@@ -916,7 +934,7 @@ def create_app(test_config=None):
         """Requests from the people who use the app (features, problems) and how far along they are."""
 
         columns = (
-            "id, kind, title, details, requested_by, status, done_version, "
+            "id, kind, title, details, requested_by, status, done_version, sent_by, note, "
             f"{timestamp_select.format('created_at')}, {timestamp_select.format('updated_at')}"
         )
 
@@ -924,7 +942,8 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 rows = connection.execute(
                     f"SELECT {self.columns} FROM user_requests ORDER BY "
-                    "CASE status WHEN 'in_progress' THEN 0 WHEN 'open' THEN 1 ELSE 2 END, updated_at DESC, id DESC"
+                    "CASE status WHEN 'in_progress' THEN 0 WHEN 'queued' THEN 1 WHEN 'open' THEN 2 ELSE 3 END, "
+                    "updated_at DESC, id DESC"
                 ).fetchall()
             return [dict(row) for row in rows]
 
@@ -944,15 +963,23 @@ def create_app(test_config=None):
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
 
-        def set_status(self, request_id, status, done_version=""):
+        def set_status(self, request_id, status, done_version="", sent_by="", note=""):
             with notes_connection() as connection:
                 connection.execute(
                     sql(
-                        "UPDATE user_requests SET status = ?, done_version = ?, updated_at = CURRENT_TIMESTAMP "
-                        "WHERE id = ?"
+                        "UPDATE user_requests SET status = ?, done_version = ?, sent_by = ?, note = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?"
                     ),
-                    (status, done_version, request_id),
+                    (status, done_version, sent_by, note, request_id),
                 )
+
+        def next_queued(self):
+            """The oldest request an administrator sent to Claude, or None."""
+            with notes_connection() as connection:
+                row = connection.execute(
+                    f"SELECT {self.columns} FROM user_requests WHERE status = 'queued' ORDER BY updated_at, id"
+                ).fetchone()
+            return dict(row) if row else None
 
         def delete(self, request_id):
             with notes_connection() as connection:
@@ -1758,6 +1785,43 @@ def create_app(test_config=None):
         flash("Thanks! Your request was added. Its status shows here as it's worked on.", "success")
         return redirect(url_for("updates", _anchor="requests"), code=303)
 
+    def update_request_status(item, status, actor, note=""):
+        """Sets a request's status and tells the person who asked. Done records the app version."""
+        request_store.set_status(item["id"], status, APP_VERSION if status == "done" else "",
+                                 actor["username"] if status == "queued" else item["sent_by"], note)
+        requester = user_store.by_name(item["requested_by"]) if item["requested_by"] else None
+        if requester and status != item["status"]:
+            notification_store.add([requester["id"]], actor["id"] if actor else None, "request",
+                                   f"Your request “{item['title']}” is now {REQUEST_STATUSES[status].lower()}.",
+                                   url_for("updates", _anchor="requests"))
+
+    @app.cli.command("claude-next")
+    def claude_next():
+        """Prints the oldest request sent to Claude as JSON (nothing if there is none).
+
+        Used by scripts/claude-worker.sh. A request whose sender is no longer an
+        administrator is put back to Waiting instead.
+        """
+        while (item := request_store.next_queued()) is not None:
+            sender = user_store.by_name(item["sent_by"])
+            if sender and sender["is_admin"] and sender["is_active"]:
+                print(json.dumps(item, ensure_ascii=False))
+                return
+            with app.test_request_context():
+                update_request_status(item, "open", None, "Not sent: only an administrator can send requests to Claude.")
+
+    @app.cli.command("claude-status")
+    @click.argument("request_id", type=int)
+    @click.argument("status", type=click.Choice(list(REQUEST_STATUSES)))
+    @click.option("--note", default="", help="Shown under the request, such as Claude's summary.")
+    def claude_status(request_id, status, note):
+        """Sets a request's status from scripts/claude-worker.sh, notifying the requester."""
+        item = request_store.get(request_id)
+        if item is None:
+            raise click.ClickException(f"Request {request_id} does not exist.")
+        with app.test_request_context():
+            update_request_status(item, status, user_store.by_name(item["sent_by"]), note[:2000])
+
     @app.post("/updates/requests/<int:request_id>/status")
     def request_status(request_id):
         item = request_store.get(request_id)
@@ -1765,13 +1829,11 @@ def create_app(test_config=None):
         if item is None or status not in REQUEST_STATUSES:
             flash("That request no longer exists." if item is None else "Choose a status.", "error")
             return redirect(url_for("updates", _anchor="requests"), code=303)
-        # Done requests remember the app version that has the change, to find it in the log below.
-        request_store.set_status(request_id, status, APP_VERSION if status == "done" else "")
-        requester = user_store.by_name(item["requested_by"]) if item["requested_by"] else None
-        if requester and status != item["status"]:
-            notification_store.add([requester["id"]], g.user["id"], "request",
-                                   f"Your request “{item['title']}” is now {REQUEST_STATUSES[status].lower()}.",
-                                   url_for("updates", _anchor="requests"))
+        # Sending to Claude changes the app's code, so only administrators can do it.
+        if status == "queued" and not g.user["is_admin"]:
+            flash("Only an administrator can send a request to Claude.", "error")
+            return redirect(url_for("updates", _anchor="requests"), code=303)
+        update_request_status(item, status, g.user)
         flash(f"“{item['title']}” is now {REQUEST_STATUSES[status].lower()}.", "success")
         return redirect(url_for("updates", status=request.form.get("shown_status") or None, _anchor="requests"), code=303)
 

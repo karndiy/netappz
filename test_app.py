@@ -1079,6 +1079,47 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"status": "ok"})
 
+    def test_only_administrators_send_requests_to_claude(self):
+        import json
+        import app as app_module
+
+        token = self._csrf()
+        store = self.app.extensions["requests"]
+        users = self.app.extensions["users"]
+        request_id = store.add("feature", "Dark mode", "", "member")
+        member_id = users.add("member", "member-password")
+        self.assertIn('class="request-claude"', self.client.get("/updates").get_data(as_text=True))
+
+        # A member can't send a request to Claude, even by posting the status.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertNotIn('class="request-claude"', self.client.get("/updates").get_data(as_text=True))
+        self.client.post(f"/updates/requests/{request_id}/status", data={"_csrf_token": token, "status": "queued"})
+        self.assertEqual(store.get(request_id)["status"], "open")
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post(f"/updates/requests/{request_id}/status", data={"_csrf_token": token, "status": "queued"})
+        item = store.get(request_id)
+        self.assertEqual((item["status"], item["sent_by"]), ("queued", "admin"))
+
+        # The worker reads the queue and reports back through the CLI.
+        runner = self.app.test_cli_runner()
+        queued = json.loads(runner.invoke(args=["claude-next"]).output)
+        self.assertEqual((queued["id"], queued["title"]), (request_id, "Dark mode"))
+        runner.invoke(args=["claude-status", str(request_id), "done", "--note", "Added a dark theme."])
+        item = store.get(request_id)
+        self.assertEqual((item["status"], item["done_version"], item["note"]),
+                         ("done", app_module.APP_VERSION, "Added a dark theme."))
+        self.assertIn("Added a dark theme.", self.client.get("/updates").get_data(as_text=True))
+        self.assertIn("Dark mode", self.app.extensions["notifications"].for_user(member_id)[0]["message"])
+        self.assertEqual(runner.invoke(args=["claude-next"]).output, "")
+
+        # A request sent by someone who is no longer an administrator goes back to Waiting.
+        store.set_status(request_id, "queued", sent_by="member")
+        self.assertEqual(runner.invoke(args=["claude-next"]).output, "")
+        self.assertEqual(store.get(request_id)["status"], "open")
+
     def test_user_requests_can_be_added_tracked_and_closed(self):
         import app as app_module
 

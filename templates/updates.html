@@ -37,7 +37,7 @@
       <div class="requests-head">
         <div>
           <h2 id="requests-heading">Requests</h2>
-          <p>{{ counts.open }} waiting · {{ counts.in_progress }} in progress · {{ counts.done }} done</p>
+          <p>{{ counts.open }} waiting · {% if counts.queued %}{{ counts.queued }} sent to Claude · {% endif %}{{ counts.in_progress }} in progress · {{ counts.done }} done</p>
         </div>
       </div>
 
@@ -95,15 +95,26 @@
                   · Done {{ item.updated_at[:10] }}{% if item.done_version %} in
                   <a href="{{ url_for('updates', q=item.done_version) }}">version {{ item.done_version }}</a>{% endif %}
                 {% endif %}
+                {% if item.sent_by and item.status in ('queued', 'in_progress') %} · Sent to Claude by {{ item.sent_by }}{% endif %}
               </p>
+              {% if item.note %}<p class="request-note">{{ item.note }}</p>{% endif %}
             </div>
             <div class="request-controls">
+              {% if current_user.is_admin and item.status == 'open' %}
+                <form action="{{ url_for('request_status', request_id=item.id) }}" method="post"
+                      onsubmit="return confirm('Send this request to Claude? Claude will change the app, update the log and publish it.');">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="shown_status" value="{{ shown_status }}">
+                  <input type="hidden" name="status" value="queued">
+                  <button class="request-claude" type="submit">Send to Claude</button>
+                </form>
+              {% endif %}
               <form action="{{ url_for('request_status', request_id=item.id) }}" method="post">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="shown_status" value="{{ shown_status }}">
                 <label class="visually-hidden" for="status-{{ item.id }}">Status of {{ item.title }}</label>
                 <select id="status-{{ item.id }}" name="status" onchange="this.form.requestSubmit ? this.form.requestSubmit() : this.form.submit()">
-                  {% for value, label in statuses.items() %}
+                  {% for value, label in statuses.items() if value != 'queued' or current_user.is_admin or item.status == 'queued' %}
                     <option value="{{ value }}" {% if item.status == value %}selected{% endif %}>{{ label }}</option>
                   {% endfor %}
                 </select>

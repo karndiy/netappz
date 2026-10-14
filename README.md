@@ -49,6 +49,17 @@ launchctl load ~/Library/LaunchAgents/local.netappz.start.plist
 
 Docker Desktop needs a logged-in user, so for a server that starts unattended also turn on automatic login (System Preferences → Users & Groups → Login Options; FileVault must be off) and restart after a power cut with `sudo pmset -a autorestart 1`. The log is `/tmp/netappz-start.log`.
 
+## Requests processed by Claude
+
+On the Update log page an administrator can press **Send to Claude** on a waiting request. `scripts/claude-worker.sh`, run every 5 minutes, takes the oldest sent request and runs Claude Code headless (`claude -p --permission-mode auto`) to make the change and add the Update log entry. The script then runs the tests, scans the diff for keys, commits, pushes to GitHub, rebuilds `web` and `telegram`, and marks the request Done with Claude's summary. If something fails, the request goes back to Waiting with a note, and Claude's changes are kept in `git stash`. It waits while the working tree has uncommitted changes. Logs are in `instance/claude/`.
+
+```sh
+cp scripts/local.netappz.claude.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/local.netappz.claude.plist
+```
+
+It needs Claude Code signed in for this Mac user and `~/.git-credentials` for pushing. Only administrators can send requests; the worker also checks that the sender is still an administrator.
+
 ## Database backups
 
 The `backup` service dumps PostgreSQL to `backups/` on the host (outside Docker) when it starts and every 6 hours, keeping the newest 28 (`BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP` in `.env` change this). `backups/` is git-ignored: the dumps contain password hashes.
