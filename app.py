@@ -164,6 +164,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
     {
+        "version": "1.39.0",
+        "date": "2026-10-14",
+        "changes": [
+            "One look across the whole app, modeled on the latest macOS (request #14: a uniform interface using macOS as the UX/UI standard).",
+            "Every page now shares the macOS system colors, font and shapes: a translucent top bar, rounded cards with soft shadows, blue accent buttons and macOS focus rings.",
+            "Dark Mode follows your device setting on every page, not only Notes and Chat.",
+            "Notes and Chat use the same blue accent as the rest of the app. Pages in the PDF editor stay white so documents look as they will print.",
+        ],
+    },
+    {
         "version": "1.38.0",
         "date": "2026-10-14",
         "changes": [

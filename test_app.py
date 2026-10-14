@@ -115,6 +115,29 @@ class FileManagerTests(unittest.TestCase):
                     response.data,
                 )
 
+    def test_every_page_shares_the_macos_stylesheet(self):
+        for url in ("/", "/updates", "/notes", "/chat", "/convert", "/feed", "/settings", "/missions", "/wallet"):
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(b"static/style.css", response.data)
+
+    def test_stylesheets_use_the_macos_design_tokens(self):
+        static = Path(__file__).parent / "static"
+        style = (static / "style.css").read_text()
+        for token in ("--mac-accent:", "--mac-surface:", "--mac-window:", "--mac-text:", "--mac-font:", "--mac-radius-lg:"):
+            self.assertIn(token, style)
+        # Dark Mode redefines the same tokens for every page.
+        dark = style.split("@media (prefers-color-scheme: dark)", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("--mac-surface:", dark)
+        self.assertIn("--mac-text:", dark)
+        # The old one-off palette is gone, so every page draws from the same colors.
+        for css in ("style.css", "pdf-editor.css"):
+            text = (static / css).read_text().lower()
+            for old in ("#155eef", "#182230", "#667085", "#e4e7ec", "#e1a500"):
+                with self.subTest(css=css, color=old):
+                    self.assertNotIn(old, text)
+
     def test_notes_can_be_created_updated_and_deleted(self):
         token = self._csrf()
         response = self.client.get("/notes")
