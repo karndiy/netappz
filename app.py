@@ -138,7 +138,7 @@ SETTINGS_SECTIONS = [
     {"key": "server", "title": "Server", "icon": "🖥️", "admin": True,
      "description": "Storage, database and version. Changed in the server's files."},
     {"key": "activity", "title": "Activity log", "icon": "📜", "admin": True,
-     "description": "What people do in Notes and Chat: notes written, changed and deleted, and chat messages."},
+     "description": "What people do in the app: notes, chat messages, Feed posts and comments, conversions and uploads."},
     {"key": "system", "title": "System & backups", "icon": "🩺", "admin": True,
      "description": "Automatic checks of the database, Redis, disk and backups, and the database backups."},
 ]
@@ -163,6 +163,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.41.0",
+        "date": "2026-10-14",
+        "changes": [
+            "Daily quests on the Missions page (request: daily quests such as posting on the Feed once a day or converting a file, with points approved by an administrator). Administrators set what to do, how many times a day, and the reward.",
+            "Quests can be: post on the Feed, comment on a Feed post, convert a file, upload files to Network Files, write a note, or send a message in Chat. Progress fills in by itself as you use the app, and starts again every day at midnight (Thailand time).",
+            "When a quest is done, press Claim. An administrator approves it (or declines it with a note), then the points go to your wallet. Administrators can also make a quest pay straight away. Each quest can be claimed once a day.",
+            "The Activity log in Settings now also shows Feed posts and comments, conversions and uploads, and can be filtered by them.",
+        ],
+    },
     {
         "version": "1.40.0",
         "date": "2026-10-14",
@@ -581,7 +591,7 @@ BACKUP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.dump")
 SYSTEM_STATUSES = {"ok": "OK", "warning": "Warning", "problem": "Problem"}
 SYSTEM_CHECK_STATE = "_system_checks"  # app_settings row: the last automatic check
 # Settings → Activity log: what people do in Notes and Chat.
-ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat"}
+ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat", "feed": "Feed", "convert": "Convert", "files": "Files"}
 ACTIVITY_DETAIL = 300  # characters of a note title or chat message kept in the log
 ACTIVITY_KEEP_DAYS = 365
 # Convert page: each person's conversion log. Administrators see and can delete everyone's.
@@ -592,6 +602,19 @@ REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 MISSION_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "returned": "Sent back"}
 MISSION_TEXT_LIMIT = 4000
+# Daily quests: do something in the app N times today to earn points. Each action is counted from the
+# activity log as (area, action prefix); "sent a message" also counts messages from Telegram.
+QUEST_ACTIONS = {
+    "feed_post": ("feed", "posted", "Post on the Feed"),
+    "feed_comment": ("feed", "commented", "Comment on a Feed post"),
+    "convert": ("convert", "converted a file", "Convert a file"),
+    "upload": ("files", "uploaded", "Upload files to Network Files"),
+    "note": ("notes", "created", "Write a note"),
+    "chat": ("chat", "sent a message", "Send a message in Chat"),
+}
+QUEST_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "declined": "Declined"}
+# Quest days run midnight to midnight in this time zone (hours from UTC); Thailand by default.
+QUEST_UTC_OFFSET = int(os.environ.get("QUEST_UTC_OFFSET", "7"))
 # Missions people propose wait for an administrator; administrators' own missions start approved.
 MISSION_APPROVALS = {"proposed": "Waiting for approval", "approved": "Approved", "declined": "Declined"}
 # Wallet: points people hold. Administrators deposit them, people transfer them, approved missions pay them.
@@ -899,6 +922,16 @@ def create_app(test_config=None):
                     "SELECT DISTINCT username FROM activity_log WHERE username <> '' ORDER BY username"
                 ).fetchall()
             return [row["username"] for row in rows]
+
+        def count(self, user_id, area, action, since):
+            """How many times this person did this (area, action prefix) since a UTC time."""
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT COUNT(*) AS n FROM activity_log WHERE user_id = ? AND area = ? "
+                        "AND action LIKE ? AND created_at >= ?"),
+                    (user_id, area, f"{action}%", since),
+                ).fetchone()
+            return row["n"]
 
         def count_since(self, hours):
             since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
@@ -1265,7 +1298,39 @@ def create_app(test_config=None):
             )
             """
         )
+        # Daily quests (1.41.0): administrators set them; people claim the reward once a day.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS quests (
+                {id_column},
+                title TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target INTEGER NOT NULL DEFAULT 1,
+                reward INTEGER NOT NULL DEFAULT 0,
+                needs_approval INTEGER NOT NULL DEFAULT 1,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS quest_claims (
+                {id_column},
+                quest_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                day TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                note TEXT NOT NULL DEFAULT '',
+                reviewed_by INTEGER,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         for statement in (
+            "CREATE UNIQUE INDEX IF NOT EXISTS quest_claims_once ON quest_claims (quest_id, user_id, day)",
+            "CREATE INDEX IF NOT EXISTS activity_log_user ON activity_log (user_id, area, created_at)",
             "CREATE INDEX IF NOT EXISTS wallet_entries_user ON wallet_entries (user_id, id)",
             "CREATE INDEX IF NOT EXISTS mission_submissions_mission ON mission_submissions (mission_id, user_id)",
             "CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, is_read, id)",
@@ -1552,6 +1617,90 @@ def create_app(test_config=None):
                 connection.execute(sql("DELETE FROM wallet_entries WHERE user_id = ?"), (user_id,))
                 connection.execute(sql("UPDATE wallet_entries SET other_id = NULL WHERE other_id = ?"), (user_id,))
                 connection.execute(sql("UPDATE wallet_entries SET created_by = NULL WHERE created_by = ?"), (user_id,))
+
+    class QuestStore:
+        """Daily quests and the rewards people claim for them."""
+
+        quest_columns = "id, title, action, target, reward, needs_approval, is_active"
+        claim_columns = (
+            "quest_claims.id, quest_claims.quest_id, quest_claims.user_id, quest_claims.day, quest_claims.status, "
+            "quest_claims.note, quests.title AS quest_title, quests.reward, users.username AS author, "
+            f"{time_as('quest_claims.created_at')}"
+        )
+
+        def all(self, active_only=False):
+            where = "WHERE is_active = 1 " if active_only else ""
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    f"SELECT {self.quest_columns} FROM quests {where}ORDER BY is_active DESC, id"
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def quest(self, quest_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(f"SELECT {self.quest_columns} FROM quests WHERE id = ?"), (quest_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def add(self, title, action, target, reward, needs_approval, admin_id):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("INSERT INTO quests (title, action, target, reward, needs_approval, created_by) "
+                        "VALUES (?, ?, ?, ?, ?, ?)"),
+                    (title, action, target, reward, 1 if needs_approval else 0, admin_id),
+                )
+
+        def set_active(self, quest_id, is_active):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE quests SET is_active = ? WHERE id = ?"), (1 if is_active else 0, quest_id))
+
+        def delete(self, quest_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM quest_claims WHERE quest_id = ?"), (quest_id,))
+                connection.execute(sql("DELETE FROM quests WHERE id = ?"), (quest_id,))
+
+        def _claims(self, where, params):
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(f"SELECT {self.claim_columns} FROM quest_claims JOIN quests ON quests.id = quest_claims.quest_id "
+                        f"JOIN users ON users.id = quest_claims.user_id WHERE {where} ORDER BY quest_claims.id"),
+                    params,
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def claims_on(self, user_id, day):
+            """{quest_id: claim} for this person's claims on this day."""
+            return {claim["quest_id"]: claim for claim in self._claims("quest_claims.user_id = ? AND day = ?",
+                                                                       (user_id, day))}
+
+        def pending(self):
+            return self._claims("quest_claims.status = 'pending'", ())
+
+        def claim(self, claim_id):
+            claims = self._claims("quest_claims.id = ?", (claim_id,))
+            return claims[0] if claims else None
+
+        def add_claim(self, quest_id, user_id, day, status):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("INSERT INTO quest_claims (quest_id, user_id, day, status) VALUES (?, ?, ?, ?)"),
+                    (quest_id, user_id, day, status),
+                )
+
+        def review(self, claim_id, status, note, admin_id):
+            """Decides a waiting claim; False if someone else already did."""
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("UPDATE quest_claims SET status = ?, note = ?, reviewed_by = ? WHERE id = ? AND status = 'pending'"),
+                    (status, note, admin_id, claim_id),
+                )
+            return cursor.rowcount > 0
+
+        def delete_user_content(self, user_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM quest_claims WHERE user_id = ?"), (user_id,))
+                connection.execute(sql("UPDATE quests SET created_by = NULL WHERE created_by = ?"), (user_id,))
 
     class AnnouncementStore:
         """Messages administrators float at the top of every page."""
@@ -1963,6 +2112,8 @@ def create_app(test_config=None):
     app.extensions["missions"] = mission_store
 
     wallet_store = WalletStore()
+    quest_store = QuestStore()
+    app.extensions["quests"] = quest_store
     app.extensions["wallet"] = wallet_store
 
     announcement_store = AnnouncementStore()
@@ -2305,6 +2456,7 @@ def create_app(test_config=None):
             feed_store.delete_user_content(user_id)
             chat_store.delete_user_content(user_id)
             mission_store.delete_user_content(user_id)
+            quest_store.delete_user_content(user_id)
             wallet_store.delete_user_content(user_id)
             announcement_store.delete_user_content(user_id)
             invalidate_notes(user_id)
@@ -2502,8 +2654,9 @@ def create_app(test_config=None):
         live = [m for m in everything if m["approval"] == "approved"]
         waiting = [{**item, "mission_title": mission["title"]} for mission in live
                    for item in mission["submissions"] if item["status"] == "pending"] if user["is_admin"] else []
+        quests = quest_context(user)
         return render_template(
-            "missions.html", missions=[m for m in live if m["is_open"]],
+            "missions.html", **quests, missions=[m for m in live if m["is_open"]],
             closed=[m for m in live if not m["is_open"]], waiting=waiting,
             proposals=[m for m in everything if m["approval"] == "proposed"],
             declined=[m for m in everything if m["approval"] == "declined" and m["created_by"] == user["id"]],
@@ -2672,6 +2825,138 @@ def create_app(test_config=None):
             mission_store.delete_submission(submission_id)
             flash("Submission removed.", "success")
         return redirect(url_for("missions", _anchor=f"mission-{item['mission_id']}" if item else None), code=303)
+
+    # ----------------------------------------------------------------- quests
+
+    def quest_day():
+        """Today's date and when it began in UTC (as stored), in the quests' time zone."""
+        offset = timedelta(hours=QUEST_UTC_OFFSET)
+        local_now = datetime.now(timezone.utc) + offset
+        start = datetime(local_now.year, local_now.month, local_now.day) - offset
+        return local_now.strftime("%Y-%m-%d"), start.strftime("%Y-%m-%d %H:%M:%S")
+
+    def quest_progress(quest, user_id, since):
+        area, action, _label = QUEST_ACTIONS[quest["action"]]
+        return min(activity_log.count(user_id, area, action, since), quest["target"])
+
+    def quest_context(user):
+        day, since = quest_day()
+        claims = quest_store.claims_on(user["id"], day)
+        quests = []
+        for quest in quest_store.all(active_only=not user["is_admin"]):
+            if quest["action"] not in QUEST_ACTIONS:
+                continue
+            done = quest_progress(quest, user["id"], since) if quest["is_active"] else 0
+            quests.append({**quest, "label": QUEST_ACTIONS[quest["action"]][2], "done": done,
+                           "claim": claims.get(quest["id"])})
+        return {"quests": quests, "quest_day": day, "quest_actions": QUEST_ACTIONS, "quest_statuses": QUEST_STATUSES,
+                "quest_claims": quest_store.pending() if user["is_admin"] else [],
+                "quest_form": session.pop("quest_form", None)}
+
+    @app.post("/quests")
+    def create_quest():
+        admin_required()
+        action = request.form.get("action", "")
+        title = " ".join(request.form.get("title", "").split())
+        target = wallet_amount(request.form.get("target", "1"))
+        reward = wallet_amount(request.form.get("reward", ""), allow_zero=True)
+        error = None
+        if action not in QUEST_ACTIONS:
+            error = "Choose what people need to do."
+        elif target is None or target > 100:
+            error = "Times a day is a whole number from 1 to 100."
+        elif reward is None:
+            error = f"The reward is a whole number of points from 0 to {WALLET_MAX:,}."
+        elif len(title) > 120:
+            error = "Keep the title under 120 characters."
+        if error:
+            flash(error, "error")
+            session["quest_form"] = {key: request.form.get(key, "")[:120] for key in ("action", "title", "target", "reward")}
+            return redirect(url_for("missions", _anchor="quests"), code=303)
+        label = QUEST_ACTIONS[action][2]
+        title = title or (label if target == 1 else f"{label} {target} times")
+        quest_store.add(title, action, target, reward, bool(request.form.get("needs_approval")), g.user["id"])
+        everyone = [person["id"] for person in user_store.all() if person["is_active"]]
+        notification_store.add(everyone, g.user["id"], "mission", f"New daily quest: “{title}”",
+                               url_for("missions", _anchor="quests"))
+        flash(f"Daily quest added: {title}.", "success")
+        return redirect(url_for("missions", _anchor="quests"), code=303)
+
+    @app.post("/quests/<int:quest_id>/active")
+    def quest_active(quest_id):
+        admin_required()
+        quest = quest_store.quest(quest_id)
+        if quest is not None:
+            is_active = request.form.get("active") == "1"
+            quest_store.set_active(quest_id, is_active)
+            flash(f"“{quest['title']}” is {'on' if is_active else 'off: people no longer see it'}.", "success")
+        return redirect(url_for("missions", _anchor="quests"), code=303)
+
+    @app.post("/quests/<int:quest_id>/delete")
+    def quest_delete(quest_id):
+        admin_required()
+        if quest_store.quest(quest_id) is not None:
+            quest_store.delete(quest_id)
+            flash("Daily quest deleted.", "success")
+        return redirect(url_for("missions", _anchor="quests"), code=303)
+
+    @app.post("/quests/<int:quest_id>/claim")
+    def quest_claim(quest_id):
+        quest = quest_store.quest(quest_id)
+        day, since = quest_day()
+        error = None
+        if quest is None or not quest["is_active"] or quest["action"] not in QUEST_ACTIONS:
+            error = "That quest isn't available."
+        elif quest_store.claims_on(g.user["id"], day).get(quest_id):
+            error = "You've already claimed this quest today. It starts again tomorrow."
+        elif quest_progress(quest, g.user["id"], since) < quest["target"]:
+            error = "Finish the quest first."
+        if error:
+            flash(error, "error")
+            return redirect(url_for("missions", _anchor="quests"), code=303)
+        try:
+            quest_store.add_claim(quest_id, g.user["id"], day, "pending" if quest["needs_approval"] else "approved")
+        except Exception:  # The unique index stops a double claim sent at the same moment.
+            flash("You've already claimed this quest today.", "error")
+            return redirect(url_for("missions", _anchor="quests"), code=303)
+        if quest["needs_approval"]:
+            notification_store.add(user_store.admin_ids(), g.user["id"], "mission",
+                                   f"{g.user['username']} finished the daily quest “{quest['title']}”",
+                                   url_for("missions", _anchor="quest-claims"))
+            flash("Claimed! An administrator will approve it, then the points go to your wallet.", "success")
+        else:
+            if quest["reward"]:
+                wallet_store.reward(g.user["id"], quest["reward"], f"Daily quest: {quest['title']} ({day})"[:WALLET_NOTE], None)
+            flash(f"Quest complete!" + (f" {quest['reward']:,} points went to your wallet." if quest["reward"] else ""),
+                  "success")
+        return redirect(url_for("missions", _anchor="quests"), code=303)
+
+    @app.post("/quests/claims/<int:claim_id>/review")
+    def quest_review(claim_id):
+        admin_required()
+        claim = quest_store.claim(claim_id)
+        decision = request.form.get("decision", "")
+        note = mission_text("note", 1000)[:1000]
+        if claim is None or claim["status"] != "pending":
+            flash("That claim was already decided or no longer exists.", "error")
+        elif decision not in ("approved", "declined"):
+            flash("Choose Approve or Decline.", "error")
+        elif decision == "declined" and not note:
+            flash("Say why when declining a claim.", "error")
+        elif quest_store.review(claim_id, decision, note, g.user["id"]):
+            paid = decision == "approved" and claim["reward"] > 0
+            if paid:
+                wallet_store.reward(claim["user_id"], claim["reward"],
+                                    f"Daily quest: {claim['quest_title']} ({claim['day']})"[:WALLET_NOTE], g.user["id"])
+            notification_store.add([claim["user_id"]], g.user["id"], "mission",
+                                   f"{g.user['username']} {'approved' if decision == 'approved' else 'declined'} your "
+                                   f"daily quest “{claim['quest_title']}”"
+                                   + (f" and {claim['reward']:,} points went to your wallet" if paid else "")
+                                   + (f": {note}" if note else ""),
+                                   url_for("missions", _anchor="quests"))
+            flash(f"{claim['author']}'s quest {'approved' if decision == 'approved' else 'declined'}"
+                  + (f", and {claim['reward']:,} points went to their wallet." if paid else "."), "success")
+        return redirect(url_for("missions", _anchor="quest-claims"), code=303)
 
     # ----------------------------------------------------------------- wallet
 
@@ -2979,6 +3264,7 @@ def create_app(test_config=None):
                 (feed_media_dir / stored).unlink(missing_ok=True)
             return fail(str(error))
         post_id = feed_store.add_post(g.user["id"], body, saved)
+        activity_log.add(g.user["id"], "feed", "posted", body or f"{len(saved)} photo or video file(s)")
         link = url_for("feed_post", post_id=post_id)
         name = g.user["username"]
         mentioned = mentioned_ids(body)
@@ -3046,6 +3332,7 @@ def create_app(test_config=None):
             return feed_back(post_id if post else None, single and post is not None)
 
         comment_id = feed_store.add_comment(post_id, g.user["id"], body)
+        activity_log.add(g.user["id"], "feed", "commented", body)
         name, link = g.user["username"], url_for("feed_post", post_id=post_id)
         mentioned = mentioned_ids(body)
         notification_store.add(mentioned, g.user["id"], "mention",
@@ -3356,6 +3643,7 @@ def create_app(test_config=None):
             saved += 1
 
         if saved:
+            activity_log.add(g.user["id"], "files", "uploaded", f"{saved} file(s) to /{current}")
             flash(f"Uploaded {saved} file(s).", "success")
         elif not uploads:
             flash("Choose at least one file to upload.", "error")
@@ -4109,6 +4397,7 @@ def create_app(test_config=None):
                 shutil.copyfileobj(handle, output)
             output.seek(0)
         convert_log.add(g.user["id"], tool, file_names, download_name + (f". {note}" if note else ""))
+        activity_log.add(g.user["id"], "convert", "converted a file", ", ".join(file_names))
 
         response = send_file(
             output,

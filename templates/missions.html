@@ -38,6 +38,109 @@
       {% endfor %}
     {% endwith %}
 
+    <section class="requests quests" id="quests" aria-labelledby="quests-heading">
+      <div class="requests-head">
+        <h2 id="quests-heading">Daily quests</h2>
+        <p>Do these in the app today to earn points. They start again every day at midnight (today is {{ quest_day }}).</p>
+      </div>
+      <ul class="quest-list">
+        {% for quest in quests %}
+          {% set complete = quest.done >= quest.target %}
+          <li class="quest{% if not quest.is_active %} is-off{% endif %}{% if complete %} is-complete{% endif %}">
+            <div class="quest-main">
+              <div class="request-title-row">
+                <h3>{{ quest.title }}</h3>
+                {% if quest.reward %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(quest.reward) }} points</span>{% endif %}
+                {% if not quest.is_active %}<span class="request-status">Off</span>{% endif %}
+              </div>
+              <p class="request-meta">{{ quest.label }}{% if quest.target > 1 %}, {{ quest.target }} times{% endif %}
+                · {{ 'An administrator approves the reward' if quest.needs_approval else 'Reward paid straight away' }}</p>
+              {% if quest.is_active %}
+                <div class="quest-progress" role="progressbar" aria-valuemin="0" aria-valuemax="{{ quest.target }}" aria-valuenow="{{ quest.done }}"
+                     aria-label="{{ quest.title }} progress"><span style="width: {{ (100 * quest.done / quest.target) | round | int }}%"></span></div>
+                <p class="quest-count">{{ quest.done }} / {{ quest.target }} today</p>
+              {% endif %}
+              {% if quest.claim and quest.claim.note %}<p class="request-note">{{ quest.claim.note }}</p>{% endif %}
+            </div>
+            <div class="request-controls">
+              {% if quest.claim %}
+                <span class="request-status quest-claim is-{{ quest.claim.status }}">{{ quest_statuses[quest.claim.status] }}</span>
+              {% elif quest.is_active %}
+                <form action="{{ url_for('quest_claim', quest_id=quest.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" {% if not complete %}disabled title="Finish the quest first"{% endif %}>Claim</button>
+                </form>
+              {% endif %}
+              {% if current_user.is_admin %}
+                <form action="{{ url_for('quest_active', quest_id=quest.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="active" value="{{ 0 if quest.is_active else 1 }}">
+                  <button class="secondary" type="submit">{{ 'Turn off' if quest.is_active else 'Turn on' }}</button>
+                </form>
+                <form action="{{ url_for('quest_delete', quest_id=quest.id) }}" method="post"
+                      onsubmit="return confirm('Delete this daily quest and its claims?');">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <button class="request-delete" type="submit" title="Delete quest" aria-label="Delete quest {{ quest.title }}">✕</button>
+                </form>
+              {% endif %}
+            </div>
+          </li>
+        {% else %}
+          <li class="empty">{% if current_user.is_admin %}No daily quests yet. Add one below.{% else %}No daily quests right now.{% endif %}</li>
+        {% endfor %}
+      </ul>
+
+      {% if current_user.is_admin %}
+        <div id="quest-claims">
+          <h3 class="quest-subhead">Quest rewards to approve ({{ quest_claims | length }})</h3>
+          <ul class="request-list">
+            {% for claim in quest_claims %}
+              <li class="request-item is-pending">
+                <div class="request-main">
+                  <div class="request-title-row">
+                    <span class="request-kind-tag">{{ claim.quest_title }}</span>
+                    <h3>{{ claim.author }}</h3>
+                    {% if claim.reward %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(claim.reward) }}</span>{% endif %}
+                  </div>
+                  <p class="request-meta">Quest day {{ claim.day }} · claimed {{ claim.created_at[:16] }} UTC</p>
+                </div>
+                <form class="mission-review-form" action="{{ url_for('quest_review', claim_id=claim.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <label class="visually-hidden" for="quest-note-{{ claim.id }}">Note for {{ claim.author }}</label>
+                  <input id="quest-note-{{ claim.id }}" name="note" type="text" maxlength="1000" placeholder="Note (needed to decline)">
+                  <button type="submit" name="decision" value="approved">Approve</button>
+                  <button class="secondary" type="submit" name="decision" value="declined">Decline</button>
+                </form>
+              </li>
+            {% else %}
+              <li class="empty">No quest rewards waiting.</li>
+            {% endfor %}
+          </ul>
+        </div>
+
+        <details class="request-new" {% if quest_form %}open{% endif %}>
+          <summary>New daily quest</summary>
+          <form class="request-form" action="{{ url_for('create_quest') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <label for="quest-action">What to do</label>
+            <select id="quest-action" name="action" required>
+              {% for key, (area, action, label) in quest_actions.items() %}
+                <option value="{{ key }}" {% if quest_form and quest_form.action == key %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+            <label for="quest-target">Times a day</label>
+            <input id="quest-target" name="target" type="number" min="1" max="100" required value="{{ quest_form.target if quest_form else 1 }}">
+            <label for="quest-reward">Reward in points</label>
+            <input id="quest-reward" name="reward" type="text" inputmode="numeric" maxlength="12" placeholder="0" value="{{ quest_form.reward if quest_form else '' }}">
+            <label for="quest-title">Title <span class="optional">(optional: named after the action if left empty)</span></label>
+            <input id="quest-title" name="title" type="text" maxlength="120" value="{{ quest_form.title if quest_form else '' }}">
+            <label class="quest-approval"><input type="checkbox" name="needs_approval" value="1" checked> An administrator approves each reward</label>
+            <div class="request-actions"><button type="submit">Add daily quest</button></div>
+          </form>
+        </details>
+      {% endif %}
+    </section>
+
     {% macro submission_row(item, mission_id) %}
       <li class="request-item mission-submission is-{{ item.status }}">
         <div class="request-main">

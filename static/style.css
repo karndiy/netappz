@@ -1296,3 +1296,19 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
   outline-offset: 1px;
 }
 .message { border-radius: var(--mac-radius); }
+
+/* Daily quests */
+.quest-list { margin: 14px 0 0; padding: 0; list-style: none; }
+.quest { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 14px 0; border-top: 1px solid var(--mac-border); }
+.quest-main { flex: 1 1 260px; min-width: 0; }
+.quest.is-off { opacity: 0.6; }
+.quest-progress { height: 8px; margin-top: 10px; overflow: hidden; border-radius: 999px; background: var(--mac-fill); }
+.quest-progress span { display: block; height: 100%; border-radius: inherit; background: var(--mac-accent); }
+.quest.is-complete .quest-progress span { background: var(--mac-green); }
+.quest-count { margin: 4px 0 0; color: var(--mac-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.quest-claim.is-pending { background: var(--mac-orange-tint); color: var(--mac-orange-text); }
+.quest-claim.is-approved { background: var(--mac-green-tint); color: var(--mac-green-text); }
+.quest-claim.is-declined { background: var(--mac-red-tint); color: var(--mac-red-text); }
+.quest-subhead { margin: 22px 0 0; font-size: 16px; }
+.quest-approval { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.quest-approval input { width: auto; }

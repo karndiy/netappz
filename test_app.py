@@ -1481,6 +1481,70 @@ class FileManagerTests(unittest.TestCase):
         self.client.post(f"/missions/{lunch['id']}/delete", data={"_csrf_token": token})
         self.assertIsNone(store.mission(lunch["id"]))
 
+    def test_daily_quests_count_actions_and_pay_after_approval(self):
+        token = self._csrf()
+        quests = self.app.extensions["quests"]
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        member_id = users.add("member", "member-password")
+
+        def as_user(user_id):
+            with self.client.session_transaction() as sess:
+                sess["user_id"] = user_id
+
+        # Administrators set quests; members can't.
+        self.client.post("/quests", data={"_csrf_token": token, "action": "nope", "target": "1", "reward": "5"})
+        self.assertEqual(quests.all(), [])
+        self.client.post("/quests", data={"_csrf_token": token, "action": "note", "target": "2", "reward": "20",
+                                          "needs_approval": "1"})
+        self.client.post("/quests", data={"_csrf_token": token, "action": "upload", "target": "1", "reward": "5"})
+        note_quest, upload_quest = quests.all()
+        self.assertEqual((note_quest["title"], note_quest["needs_approval"]), ("Write a note 2 times", 1))
+        self.assertEqual(upload_quest["needs_approval"], 0)
+        self.assertIn("New daily quest", notifications.for_user(member_id)[0]["message"])
+        as_user(member_id)
+        self.assertEqual(self.client.post("/quests", data={"_csrf_token": token, "action": "note"}).status_code, 403)
+
+        # Progress counts today's actions; claiming early does nothing.
+        self.client.post(f"/quests/{note_quest['id']}/claim", data={"_csrf_token": token})
+        self.assertEqual(quests.pending(), [])
+        for title in ("One", "Two", "Three"):
+            self.client.post("/notes/create", data={"_csrf_token": token, "title": title, "content": "x"})
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn("2 / 2 today", page)
+        self.assertIn("0 / 1 today", page)
+
+        # A quest that needs approval waits, can be claimed once a day, and pays when approved.
+        self.client.post(f"/quests/{note_quest['id']}/claim", data={"_csrf_token": token})
+        self.client.post(f"/quests/{note_quest['id']}/claim", data={"_csrf_token": token})
+        pending = quests.pending()
+        self.assertEqual([(c["author"], c["status"]) for c in pending], [("member", "pending")])
+        self.assertIn("finished the daily quest", notifications.for_user(self.admin_id)[0]["message"])
+
+        # Uploading pays the other quest straight away.
+        self.client.post("/upload", data={"_csrf_token": token, "path": "",
+                                          "files": (io.BytesIO(b"hi"), "quest.txt")},
+                         content_type="multipart/form-data")
+        self.client.post(f"/quests/{upload_quest['id']}/claim", data={"_csrf_token": token})
+        from_wallet = lambda: self.client.get("/wallet").get_data(as_text=True)
+        self.assertIn("Daily quest: Upload files to Network Files", from_wallet())
+
+        as_user(self.admin_id)
+        self.assertIn("Quest rewards to approve (1)", self.client.get("/missions").get_data(as_text=True))
+        self.client.post(f"/quests/claims/{pending[0]['id']}/review", data={"_csrf_token": token, "decision": "declined"})
+        self.assertEqual(len(quests.pending()), 1)
+        self.client.post(f"/quests/claims/{pending[0]['id']}/review", data={"_csrf_token": token, "decision": "approved"})
+        self.assertEqual(quests.pending(), [])
+        self.assertIn("approved your daily quest", notifications.for_user(member_id)[0]["message"])
+        as_user(member_id)
+        page = from_wallet()
+        self.assertIn("Daily quest: Write a note 2 times", page)
+        self.assertIn("25", page)
+
+        # The activity log now shows uploads too.
+        as_user(self.admin_id)
+        self.assertIn("1 file(s) to /", self.client.get("/settings/activity?area=files").get_data(as_text=True))
+
     def test_wallet_deposits_transfers_and_mission_rewards(self):
         token = self._csrf()
         wallet = self.app.extensions["wallet"]

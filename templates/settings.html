@@ -436,8 +436,8 @@
           {# --------------------------------------------------- activity #}
           <section class="settings-card" aria-labelledby="activity-heading">
             <div class="settings-card-head">
-              <h2 id="activity-heading">Notes and Chat activity</h2>
-              <p>Each person's notes and chats are private to them; this log records what they do, with the note title or the start of the chat message. Entries are kept for {{ keep_days }} days.</p>
+              <h2 id="activity-heading">Activity</h2>
+              <p>Each person's notes and chats are private to them; this log records what people do, with the note title, the start of a chat message or post, or the file names. Daily quests are counted from it. Entries are kept for {{ keep_days }} days.</p>
             </div>
             <form class="activity-filters" action="{{ url_for('settings_section', section='activity') }}" method="get">
               <label class="visually-hidden" for="activity-user">Person</label>
@@ -447,7 +447,7 @@
               </select>
               <label class="visually-hidden" for="activity-area">Area</label>
               <select id="activity-area" name="area">
-                <option value="">Notes and Chat</option>
+                <option value="">All areas</option>
                 {% for key, label in areas.items() %}<option value="{{ key }}" {% if filters.area == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
               </select>
               <label class="visually-hidden" for="activity-q">Search</label>
