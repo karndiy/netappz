@@ -168,6 +168,13 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
     {
+        "version": "1.45.1",
+        "date": "2026-10-14",
+        "changes": [
+            "Settings moved from the main menu to the bottom of the side menu, next to Log out, with your profile and Wallet (request: move the Settings menu near Log out).",
+        ],
+    },
+    {
         "version": "1.45.0",
         "date": "2026-10-14",
         "changes": [
