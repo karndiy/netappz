@@ -274,7 +274,7 @@
               {% if mission.details %}<p class="mission-text mission-details">{{ mission.details }}</p>{% endif %}
               {% if mission.starts_on or mission.ends_on %}
                 <p class="mission-when">📅 {{ mission.starts_on | mission_date or 'Now' }} – {{ mission.ends_on | mission_date or 'no end date' }}
-                  {% if mission.phase_label and mission.is_open %}<strong>{{ mission.phase_label }}</strong>{% endif %}</p>
+                  {% if mission.phase_label and mission.is_open and mission.phase != 'ended' %}<strong>{{ mission.phase_label }}</strong>{% endif %}</p>
               {% endif %}
               <p class="mission-muted">{% if mission.creator %}Set by {{ mission.creator }} · {% endif %}{{ mission.created_at[:10] }} · {{ mission.approved }} approved</p>
 
@@ -295,7 +295,7 @@
 
               {% if mission.can_submit %}
                 <details class="mission-fold mission-submit-fold">
-                  <summary class="button">{{ 'Submit again' if mission.mine else 'Submit your work' }}</summary>
+                  <summary><span class="button">{{ 'Submit again' if mission.mine else 'Submit your work' }}</span></summary>
                   <form class="request-form mission-submit" action="{{ url_for('mission_submit', mission_id=mission.id) }}" method="post">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                     <label class="visually-hidden" for="mission-body-{{ mission.id }}">What you did</label>

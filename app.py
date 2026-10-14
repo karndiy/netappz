@@ -167,6 +167,15 @@ UPDATE_LOG = [
         "version": "1.43.0",
         "date": "2026-10-14",
         "changes": [
+            "The Missions page has a new card design (request: use cards for the Missions UI). Summary tiles at the top show open missions, today's quests and what's waiting.",
+            "Daily quests are cards with an icon, the reward, a progress bar and the Claim button. Missions are cards in a grid with their status, reward, dates and days left; submitting work and the list of submissions open inside the card.",
+            "Administrators get a Needs your attention area with work and quest rewards to approve side by side. The page fits phones with one card per row.",
+        ],
+    },
+    {
+        "version": "1.43.0",
+        "date": "2026-10-14",
+        "changes": [
             "Wallet moved to the right of the top bar, just before Log out (request #15: move the Wallet menu).",
             "The Wallet link shows how many points you have in small type, such as \"🪙 1,250\".",
             "To hide your points from the top bar, turn off \"Show my points next to Wallet\" under Notifications in Settings.",

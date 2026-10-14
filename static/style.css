@@ -1359,7 +1359,9 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .mission-card.is-upcoming { border-color: var(--mac-purple-line); }
 .mission-card:target { border-color: var(--mac-accent); box-shadow: 0 0 0 3px var(--mac-accent-tint); }
 .quest-card-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.mission-card-close { margin-left: auto; }
+.mission-card { position: relative; }
+.mission-card-close { position: absolute; top: 12px; right: 12px; }
+.mission-proposal .quest-card-top { padding-right: 40px; }
 .mission-text { margin: 0; color: var(--mac-text-2); line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
 .mission-details { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
 .mission-muted { margin: 0; color: var(--mac-muted); font-size: 13px; }
@@ -1376,7 +1378,7 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 
 .mission-fold > summary { color: var(--mac-accent); font-size: 14px; font-weight: 600; cursor: pointer; }
 .mission-submit-fold { margin-top: auto; }
-.mission-submit-fold > summary.button { display: inline-flex; list-style: none; }
+.mission-submit-fold > summary { list-style: none; }
 .mission-submit-fold > summary::-webkit-details-marker { display: none; }
 .mission-submit-fold[open] > summary { display: none; }
 .mission-card .request-form { padding: 6px 0 0; }
