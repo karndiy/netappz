@@ -7,6 +7,8 @@
     <span class="topbar-badge" {% if not unread_alerts %}hidden{% endif %}>{{ unread_alerts if unread_alerts < 100 else "99+" }}</span>
   </a>
   <a class="topbar-link topbar-user" href="{{ url_for('feed_profile', username=current_user.username) }}" title="Your profile">{{ avatar(current_user.username, current_user.avatar, "is-xs") }}<span>{{ current_user.username }}</span></a>
+  <a class="topbar-link topbar-wallet" href="{{ url_for('wallet') }}"{% if request.endpoint == 'wallet' %} aria-current="page"{% endif %}
+     {% if wallet_balance is number %}title="Wallet: {{ '{:,}'.format(wallet_balance) }} points"{% endif %}>Wallet{% if wallet_balance is number %} <small class="topbar-coins">🪙 {{ "{:,}".format(wallet_balance) }}</small>{% endif %}</a>
   <form class="topbar-logout" action="{{ url_for('logout') }}" method="post">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
     <button class="topbar-link" type="submit">Log out</button>

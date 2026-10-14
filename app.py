@@ -126,7 +126,7 @@ SETTINGS_SECTIONS = [
     {"key": "account", "title": "Profile & password", "icon": "👤", "admin": False,
      "description": "Your profile photo, a few words about you, and your password."},
     {"key": "notifications", "title": "Notifications", "icon": "🔔", "admin": False,
-     "description": "Choose what you're told about and whether alerts pop up."},
+     "description": "Choose what you're told about, whether alerts pop up, and whether the top bar shows your points."},
     {"key": "users", "title": "Users & sign-up", "icon": "👥", "admin": True,
      "description": "Add people, approve new accounts, and choose who can sign up."},
     {"key": "ai", "title": "Chat AI", "icon": "🤖", "admin": True,
@@ -163,6 +163,15 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.43.0",
+        "date": "2026-10-14",
+        "changes": [
+            "Wallet moved to the right of the top bar, just before Log out (request #15: move the Wallet menu).",
+            "The Wallet link shows how many points you have in small type, such as \"🪙 1,250\".",
+            "To hide your points from the top bar, turn off \"Show my points next to Wallet\" under Notifications in Settings.",
+        ],
+    },
     {
         "version": "1.42.0",
         "date": "2026-10-14",
@@ -1841,7 +1850,8 @@ def create_app(test_config=None):
             prefs = json.loads(user.get("prefs") or "{}")
         except ValueError:
             prefs = {}
-        return {"mute": [k for k in prefs.get("mute", []) if k in NOTIFY_KINDS], "popups": prefs.get("popups", True)}
+        return {"mute": [k for k in prefs.get("mute", []) if k in NOTIFY_KINDS], "popups": prefs.get("popups", True),
+                "show_balance": prefs.get("show_balance", True)}
 
     class NotificationStore:
         """Alerts for each person (comments, likes, mentions, new members...), read or not yet read."""
@@ -2239,6 +2249,11 @@ def create_app(test_config=None):
                           "alert_popups": user_prefs(user)["popups"]}
             except Exception:  # The top bar must never break a page.
                 app.logger.exception("Could not count notifications")
+            try:
+                if user_prefs(user)["show_balance"]:
+                    alerts["wallet_balance"] = wallet_store.balance(user["id"])
+            except Exception:
+                app.logger.exception("Could not load the wallet balance")
             try:
                 alerts["announcements"] = announcement_store.active()
             except Exception:
@@ -4348,7 +4363,8 @@ def create_app(test_config=None):
     @app.post("/settings/notifications")
     def save_notification_prefs():
         prefs = {"mute": [kind for kind in NOTIFY_KINDS if not request.form.get(f"kind_{kind}")],
-                 "popups": bool(request.form.get("popups"))}
+                 "popups": bool(request.form.get("popups")),
+                 "show_balance": bool(request.form.get("show_balance"))}
         user_store.set_prefs(g.user["id"], prefs)
         flash("Notification choices saved.", "success")
         return redirect(url_for("settings_section", section="notifications"), code=303)

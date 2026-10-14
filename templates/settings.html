@@ -16,7 +16,6 @@
       <a class="topbar-link" href="{{ url_for('chat_page') }}">Chat</a>
       <a class="topbar-link" href="{{ url_for('convert_page') }}">Convert</a>
       <a class="topbar-link" href="{{ url_for('missions') }}">Missions</a>
-      <a class="topbar-link" href="{{ url_for('wallet') }}">Wallet</a>
       <a class="topbar-link" href="{{ url_for('settings_page') }}" aria-current="page">Settings</a>
       <a class="topbar-link" href="{{ url_for('updates') }}">Update log</a>
       {% include "_account_nav.html" %}
@@ -175,6 +174,13 @@
                 <label class="settings-switch">
                   <span>Pop up new notifications in the corner of the screen<small>The bell always shows how many are unread.</small></span>
                   <input type="checkbox" role="switch" name="popups" value="1" {% if prefs.popups %}checked{% endif %}>
+                  <span class="switch" aria-hidden="true"></span>
+                </label>
+              </li>
+              <li>
+                <label class="settings-switch">
+                  <span>Show my points next to Wallet<small>Your wallet balance in small type in the top bar.</small></span>
+                  <input type="checkbox" role="switch" name="show_balance" value="1" {% if prefs.show_balance %}checked{% endif %}>
                   <span class="switch" aria-hidden="true"></span>
                 </label>
               </li>

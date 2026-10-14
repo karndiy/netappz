@@ -1586,6 +1586,26 @@ class FileManagerTests(unittest.TestCase):
         as_user(self.admin_id)
         self.assertIn("1 file(s) to /", self.client.get("/settings/activity?area=files").get_data(as_text=True))
 
+    def test_wallet_link_before_log_out_shows_points_unless_hidden(self):
+        token = self._csrf()
+        self.app.extensions["wallet"].deposit(self.admin_id, 1250, "Start", self.admin_id)
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertEqual(page.count("href=\"/wallet\""), 1)
+        self.assertLess(page.index('class="topbar-link topbar-user"'), page.index("topbar-wallet"))
+        self.assertLess(page.index("topbar-wallet"), page.index("Log out"))
+        self.assertIn('<small class="topbar-coins">🪙 1,250</small>', page)
+        self.assertIn('href="/wallet" aria-current="page"', self.client.get("/wallet").get_data(as_text=True))
+        self.assertIn('name="show_balance" value="1" checked',
+                      self.client.get("/settings/notifications").get_data(as_text=True))
+
+        # Turned off under Settings → Notifications, the link stays but the points don't show.
+        self.client.post("/settings/notifications", data={"_csrf_token": token, "popups": "1"})
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertIn("topbar-wallet", page)
+        self.assertNotIn("topbar-coins", page)
+        self.client.post("/settings/notifications", data={"_csrf_token": token, "show_balance": "1"})
+        self.assertIn("topbar-coins", self.client.get("/").get_data(as_text=True))
+
     def test_wallet_deposits_transfers_and_mission_rewards(self):
         token = self._csrf()
         wallet = self.app.extensions["wallet"]
