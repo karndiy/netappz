@@ -70,11 +70,39 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-notes}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # A new, empty database loads the newest dump from ./backups on first start.
+      - ./backups:/backups:ro
+      - ./scripts/db-init-restore.sh:/docker-entrypoint-initdb.d/restore.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      # TCP, not the socket: during first-start setup and restore Postgres listens on the
+      # socket only, so the app waits until the restore has finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 3s
       retries: 10
+    logging: *logging
+    restart: unless-stopped
+
+  # Dumps the database to ./backups on the host (outside Docker) at start and every
+  # BACKUP_INTERVAL_HOURS. Restore with scripts/db-restore.sh.
+  backup:
+    image: postgres:16-alpine
+    container_name: network-files-backup
+    entrypoint: ["sh", "/db-backup.sh"]
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-notes}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-notes}
+      PGDATABASE: ${POSTGRES_DB:-notes}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-6}
+      BACKUP_KEEP: ${BACKUP_KEEP:-28}
+    volumes:
+      - ./backups:/backups
+      - ./scripts/db-backup.sh:/db-backup.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 128m
     logging: *logging
     restart: unless-stopped
 

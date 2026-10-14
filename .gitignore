@@ -6,6 +6,7 @@ instance/
 shared/
 *.sqlite3
 output.log
+backups/
 
 # Python
 .venv/

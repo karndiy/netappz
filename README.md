@@ -38,6 +38,26 @@ launchctl load ~/Library/LaunchAgents/local.netappz.mdns.plist
 
 To stop it, run `launchctl unload ~/Library/LaunchAgents/local.netappz.mdns.plist`. `.local` names work on macOS, iOS, iPadOS, Windows 10 and later, and Linux with Avahi. Some Android phones can't open `.local` names; use `http://<computer-LAN-IP>` there.
 
+## Start when the Mac turns on
+
+`scripts/netappz-start.sh` opens Docker Desktop, waits for it, and runs `docker-compose up -d`. To run it at every login:
+
+```sh
+cp scripts/local.netappz.start.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/local.netappz.start.plist
+```
+
+Docker Desktop needs a logged-in user, so for a server that starts unattended also turn on automatic login (System Preferences → Users & Groups → Login Options; FileVault must be off) and restart after a power cut with `sudo pmset -a autorestart 1`. The log is `/tmp/netappz-start.log`.
+
+## Database backups
+
+The `backup` service dumps PostgreSQL to `backups/` on the host (outside Docker) when it starts and every 6 hours, keeping the newest 28 (`BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP` in `.env` change this). `backups/` is git-ignored: the dumps contain password hashes.
+
+- **Lost database volume:** when `pgdata` is new and empty, Postgres loads the newest dump on first start (`scripts/db-init-restore.sh`).
+- **Go back to a backup:** `scripts/db-restore.sh` restores the newest dump, or `scripts/db-restore.sh backups/<file>.dump` a chosen one. It saves the current data as `backups/pre-restore-*.dump` first.
+
+Feed photos and videos (the `feedmedia` volume) are not included.
+
 ## Run with Docker
 
 ```sh

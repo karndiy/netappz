@@ -154,6 +154,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
     {
+        "version": "1.31.0",
+        "date": "2026-10-14",
+        "changes": [
+            "The database is backed up automatically to the backups folder on the server computer, outside Docker (request: database backups the system can use after a restart). A backup is made each time the server starts and then every 6 hours, and the newest 28 are kept (about a week).",
+            "If the database is ever lost, for example after Docker is reset, it is filled from the newest backup when it starts again, so accounts, notes, posts, comments and settings come back. Feed photos and videos are stored separately and are not part of these backups.",
+            "An administrator can also go back to any saved backup with scripts/db-restore.sh. The current data is saved first.",
+            "The app now starts by itself when the server computer is turned on and signs in, so it's available again without anyone opening Docker (request: start Network Files at boot).",
+        ],
+    },
+    {
         "version": "1.30.0",
         "date": "2026-10-12",
         "changes": [
