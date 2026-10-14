@@ -8,6 +8,7 @@ import secrets
 import sqlite3
 import shutil
 import tempfile
+import threading
 import time
 import zipfile
 from contextlib import contextmanager
@@ -134,6 +135,8 @@ SETTINGS_SECTIONS = [
      "description": "Chat with the AI from your phone through a Telegram bot."},
     {"key": "server", "title": "Server", "icon": "🖥️", "admin": True,
      "description": "Storage, database and version. Changed in the server's files."},
+    {"key": "system", "title": "System & backups", "icon": "🩺", "admin": True,
+     "description": "Automatic checks of the database, Redis, disk and backups, and the database backups."},
 ]
 SECTION_KEYS = {section["key"]: section for section in SETTINGS_SECTIONS}
 # Alerts people can turn off. Sign-up and approval alerts are always sent.
@@ -154,6 +157,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.33.0",
+        "date": "2026-10-14",
+        "changes": [
+            "New Settings category, System & backups, for administrators (request: automatic system checks and backups in Settings).",
+            "The server checks itself every 15 minutes: the database, Redis, disk space, and whether the latest backup is recent and worked. Administrators are notified when something needs attention and again when it's fixed. Check now runs the checks at once.",
+            "The database backups are listed with their age and size, and each can be downloaded. Back up now makes a new one within a minute.",
+            "The backup schedule (how often, and how many backups to keep) can be changed on the same page.",
+        ],
+    },
     {
         "version": "1.32.0",
         "date": "2026-10-14",
@@ -489,6 +502,10 @@ UPDATE_LOG = [
     },
 ]
 APP_VERSION = UPDATE_LOG[0]["version"]
+# Database dumps made by the backup service (scripts/db-backup.sh).
+BACKUP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.dump")
+SYSTEM_STATUSES = {"ok": "OK", "warning": "Warning", "problem": "Problem"}
+SYSTEM_CHECK_STATE = "_system_checks"  # app_settings row: the last automatic check
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
@@ -2708,6 +2725,177 @@ def create_app(test_config=None):
             ("Largest upload", "5 GB"),
         ]
 
+    # ------------------------------------------------------- system & backups
+    backup_setting = app.config.get("BACKUP_DIR") or os.environ.get("BACKUP_DIR", "")
+    backup_dir = Path(backup_setting).resolve() if backup_setting else None
+
+    def age_text(seconds):
+        minutes = int(seconds // 60)
+        if minutes < 1:
+            return "just now"
+        if minutes < 60:
+            return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+        hours = minutes // 60
+        if hours < 48:
+            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        return f"{hours // 24} days ago"
+
+    def backup_schedule():
+        """How often the backup service runs and how many dumps it keeps.
+
+        Saved on Settings as backups/.schedule, which scripts/db-backup.sh reads before each run.
+        """
+        schedule = {"interval_hours": int(os.environ.get("BACKUP_INTERVAL_HOURS") or 6),
+                    "keep": int(os.environ.get("BACKUP_KEEP") or 28)}
+        try:
+            for line in (backup_dir / ".schedule").read_text().splitlines():
+                match = re.fullmatch(r"(interval_hours|keep)=(\d{1,4})", line.strip())
+                if match and int(match[2]) > 0:
+                    schedule[match[1]] = int(match[2])
+        except (OSError, TypeError):
+            pass
+        return schedule
+
+    def backup_files():
+        """Dumps in the backup folder, newest first."""
+        if backup_dir is None or not backup_dir.is_dir():
+            return []
+        now = time.time()
+        files = []
+        for path in backup_dir.iterdir():
+            if path.is_file() and BACKUP_NAME.fullmatch(path.name):
+                stat = path.stat()
+                files.append({"name": path.name, "size": stat.st_size, "mtime": stat.st_mtime,
+                              "age": age_text(now - stat.st_mtime),
+                              "when": datetime.fromtimestamp(stat.st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                              "safety": path.name.startswith("pre-restore-")})
+        return sorted(files, key=lambda item: item["mtime"], reverse=True)
+
+    def run_system_checks():
+        """Each check: {key, title, status (ok, warning or problem), detail}."""
+        checks = []
+
+        def add(key, title, status, detail):
+            checks.append({"key": key, "title": title, "status": status, "detail": detail})
+
+        try:
+            with notes_connection() as connection:
+                if database_url:
+                    size = connection.execute("SELECT pg_database_size(current_database()) AS size").fetchone()["size"]
+                    add("database", "Database", "ok", f"PostgreSQL is answering · {size / 1048576:.1f} MB")
+                else:
+                    connection.execute("SELECT 1").fetchone()
+                    add("database", "Database", "ok", "SQLite is answering")
+        except Exception as error:
+            add("database", "Database", "problem", f"The database isn't answering: {error}")
+
+        if cache is None:
+            add("redis", "Redis", "ok", "Not used on this server")
+        else:
+            try:
+                memory = cache.info("memory")
+                used, limit = memory.get("used_memory", 0), memory.get("maxmemory", 0)
+                if limit and used / limit >= 0.9:
+                    add("redis", "Redis", "warning", f"Memory {used / limit:.0%} full; the oldest sessions will be dropped")
+                else:
+                    add("redis", "Redis", "ok", f"Answering · {used / 1048576:.1f} MB used"
+                        + (f" of {limit / 1048576:.0f} MB" if limit else ""))
+            except cache_errors as error:
+                add("redis", "Redis", "problem", f"Redis isn't answering: {error}")
+
+        usage = shutil.disk_usage(root)
+        free_gb, free_share = usage.free / 1024 ** 3, usage.free / usage.total
+        detail = f"{free_gb:.1f} GB free of {usage.total / 1024 ** 3:.0f} GB ({free_share:.0%})"
+        if free_gb < 1 or free_share < 0.03:
+            add("disk", "Disk space", "problem", f"Almost full: {detail}")
+        elif free_gb < 5 or free_share < 0.10:
+            add("disk", "Disk space", "warning", f"Getting full: {detail}")
+        else:
+            add("disk", "Disk space", "ok", detail)
+
+        if backup_dir is None:
+            add("backups", "Backups", "warning", "Backups aren't set up on this server (BACKUP_DIR).")
+        else:
+            dumps = [item for item in backup_files() if not item["safety"]]
+            interval = backup_schedule()["interval_hours"] * 3600
+            error_file = backup_dir / ".last-error"
+            failed = error_file.is_file() and (not dumps or error_file.stat().st_mtime > dumps[0]["mtime"])
+            if failed:
+                add("backups", "Backups", "problem",
+                    "The last backup failed: " + error_file.read_text(errors="replace").strip()[:300])
+            elif not dumps:
+                add("backups", "Backups", "problem", "There are no backups yet. Is the backup service running?")
+            else:
+                age = time.time() - dumps[0]["mtime"]
+                detail = f"Last backup {dumps[0]['age']} · {len(dumps)} kept"
+                if age > 2 * interval + 3600:
+                    add("backups", "Backups", "problem", f"{detail}. The backup service may have stopped.")
+                elif age > interval + 3600:
+                    add("backups", "Backups", "warning", f"{detail}. The next one is late.")
+                else:
+                    add("backups", "Backups", "ok", detail)
+        return checks
+
+    def check_and_alert():
+        """Runs the checks and tells administrators about each one that changed since the last run."""
+        checks = run_system_checks()
+        try:
+            previous = json.loads(settings_store.get(SYSTEM_CHECK_STATE) or "{}").get("status", {})
+        except ValueError:
+            previous = {}
+        admins = user_store.admin_ids()
+        with app.test_request_context():
+            link = url_for("settings_section", section="system")
+            for check in checks:
+                before = previous.get(check["key"], "ok")
+                if check["status"] == before:
+                    continue
+                if check["status"] == "ok":
+                    message = f"System check: {check['title']} is OK again."
+                else:
+                    message = f"System check · {SYSTEM_STATUSES[check['status']]}: {check['title']}. {check['detail']}"
+                notification_store.add(admins, None, "system", message, link)
+        settings_store.save({SYSTEM_CHECK_STATE: json.dumps({
+            "status": {check["key"]: check["status"] for check in checks},
+            "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        })})
+        return checks
+
+    def last_automatic_check():
+        try:
+            return json.loads(settings_store.get(SYSTEM_CHECK_STATE) or "{}").get("checked_at")
+        except ValueError:
+            return None
+
+    @app.cli.command("system-check")
+    def system_check_command():
+        """Runs the system checks once and alerts administrators about changes."""
+        for check in check_and_alert():
+            print(f"{SYSTEM_STATUSES[check['status']]:8} {check['title']}: {check['detail']}")
+
+    # Only the web app checks automatically (SYSTEM_CHECK_MINUTES in docker-compose.yml),
+    # not the Telegram bot, which also builds the app.
+    check_minutes = int(app.config.get("SYSTEM_CHECK_MINUTES") or os.environ.get("SYSTEM_CHECK_MINUTES") or 0)
+    if check_minutes > 0 and not app.config.get("TESTING"):
+        def check_loop():
+            time.sleep(60)  # Let the database and Redis settle after a start.
+            while True:
+                try:
+                    check_and_alert()
+                except Exception:
+                    app.logger.exception("System check failed")
+                time.sleep(check_minutes * 60)
+
+        threading.Thread(target=check_loop, name="system-check", daemon=True).start()
+
+    def system_summary():
+        checks = run_system_checks()
+        bad = [check for check in checks if check["status"] != "ok"]
+        if bad:
+            return f"{len(bad)} need{'s' if len(bad) == 1 else ''} attention: " + ", ".join(c["title"] for c in bad)
+        dumps = [item for item in backup_files() if not item["safety"]]
+        return "All checks OK" + (f" · last backup {dumps[0]['age']}" if dumps else "")
+
     def settings_summary():
         """One line per category for the Settings overview."""
         users = user_store.all()
@@ -2727,6 +2915,7 @@ def create_app(test_config=None):
                 "telegram": {"running": "Connected", "off": "Off", "pending": "Connecting"}.get(
                     telegram_status(settings_store.all())["state"], "Not connected"),
                 "server": f"Version {APP_VERSION}",
+                "system": system_summary(),
             })
         return summary, waiting
 
@@ -2746,6 +2935,11 @@ def create_app(test_config=None):
                     "post_counts": feed_store.post_counts()}
         if section == "server":
             return {"server": server_info()}
+        if section == "system":
+            return {"checks": run_system_checks(), "statuses": SYSTEM_STATUSES, "backups": backup_files(),
+                    "schedule": backup_schedule(), "backup_ready": backup_dir is not None,
+                    "backup_pending": backup_dir is not None and (backup_dir / ".backup-now").exists(),
+                    "last_check": last_automatic_check(), "check_minutes": check_minutes}
         if section == "notifications":
             return {"prefs": user_prefs(g.user), "kinds": NOTIFY_KINDS}
         if section == "account":
@@ -2779,6 +2973,51 @@ def create_app(test_config=None):
         settings_store.save(changes)
         flash("Settings saved.", "success")
         return redirect(url_for("settings_section", section=section), code=303)
+
+    @app.post("/settings/system/check")
+    def system_check_now():
+        admin_required()
+        checks = check_and_alert()
+        bad = sum(1 for check in checks if check["status"] != "ok")
+        flash("Everything checked: all OK." if not bad else f"Checked: {bad} need attention.",
+              "success" if not bad else "error")
+        return redirect(url_for("settings_section", section="system"), code=303)
+
+    @app.post("/settings/system/backup")
+    def backup_now():
+        """Asks the backup service for a backup; it looks for this file every 30 seconds."""
+        admin_required()
+        if backup_dir is None:
+            abort(404)
+        (backup_dir / ".backup-now").write_text(datetime.now(timezone.utc).isoformat())
+        flash("Backup started. It appears in the list within a minute; reload to see it.", "success")
+        return redirect(url_for("settings_section", section="system", _anchor="backups"), code=303)
+
+    @app.post("/settings/system/schedule")
+    def save_backup_schedule():
+        admin_required()
+        if backup_dir is None:
+            abort(404)
+        try:
+            interval = int(request.form.get("interval_hours", ""))
+            keep = int(request.form.get("keep", ""))
+        except ValueError:
+            interval = keep = 0
+        if not (1 <= interval <= 168 and 1 <= keep <= 500):
+            flash("Back up every 1 to 168 hours, and keep 1 to 500 backups.", "error")
+        else:
+            (backup_dir / ".schedule").write_text(f"interval_hours={interval}\nkeep={keep}\n")
+            flash(f"Saved: a backup every {interval} hour{'s' if interval != 1 else ''}, keeping the newest {keep}.",
+                  "success")
+        return redirect(url_for("settings_section", section="system", _anchor="schedule"), code=303)
+
+    @app.get("/settings/system/backups/<name>")
+    def download_backup(name):
+        admin_required()
+        if backup_dir is None or not BACKUP_NAME.fullmatch(name) or not (backup_dir / name).is_file():
+            abort(404)
+        return send_file(backup_dir / name, mimetype="application/octet-stream", as_attachment=True,
+                         download_name=name)
 
     @app.post("/settings/notifications")
     def save_notification_prefs():

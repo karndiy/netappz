@@ -1079,6 +1079,73 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"status": "ok"})
 
+    def test_system_checks_and_backups_in_settings(self):
+        import os
+        import time
+
+        backups = Path(self.temp_dir.name) / "backups"
+        backups.mkdir()
+        app = create_app({
+            "TESTING": True, "FILES_ROOT": str(self.root), "SECRET_KEY": "test-secret",
+            "NOTES_DATABASE": str(Path(self.temp_dir.name) / "notes.sqlite3"),
+            "FEED_MEDIA": str(Path(self.temp_dir.name) / "feed"), "BACKUP_DIR": str(backups),
+        })
+        client = app.test_client()
+        with client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        client.get("/")
+        with client.session_transaction() as sess:
+            token = sess["_csrf_token"]
+        notifications = app.extensions["notifications"]
+
+        # No backups yet is a problem, and administrators are told once.
+        page = client.get("/settings/system").get_data(as_text=True)
+        self.assertIn("There are no backups yet", page)
+        runner = app.test_cli_runner()
+        self.assertIn("Problem  Backups", runner.invoke(args=["system-check"]).output)
+        runner.invoke(args=["system-check"])
+        alerts = [n for n in notifications.for_user(self.admin_id) if n["kind"] == "system"]
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("Backups", alerts[0]["message"])
+
+        # A fresh dump is OK again, and listed for download; a stale one is late.
+        dump = backups / "notes-20261014-032151Z.dump"
+        dump.write_bytes(b"PGDMP")
+        (backups / "notes.txt").write_text("not a dump")
+        runner.invoke(args=["system-check"])
+        self.assertIn("Backups is OK again", notifications.for_user(self.admin_id)[0]["message"])
+        page = client.get("/settings/system").get_data(as_text=True)
+        self.assertIn("notes-20261014-032151Z.dump", page)
+        self.assertNotIn("notes.txt", page)
+        response = client.get("/settings/system/backups/notes-20261014-032151Z.dump")
+        self.assertEqual((response.status_code, response.data), (200, b"PGDMP"))
+        response.close()
+        for name in ("notes.txt", "..%2Fnotes.sqlite3", "missing.dump"):
+            self.assertEqual(client.get(f"/settings/system/backups/{name}").status_code, 404)
+        old = time.time() - 9 * 3600
+        os.utime(dump, (old, old))
+        self.assertIn("The next one is late", client.get("/settings/system").get_data(as_text=True))
+        (backups / ".last-error").write_text("2026-10-14 03:00 UTC:\npg_dump: connection refused")
+        self.assertIn("The last backup failed", client.get("/settings/system").get_data(as_text=True))
+
+        # Back up now leaves a request for the backup service; the schedule is validated.
+        client.post("/settings/system/backup", data={"_csrf_token": token})
+        self.assertTrue((backups / ".backup-now").exists())
+        self.assertIn("Backing up…", client.get("/settings/system").get_data(as_text=True))
+        client.post("/settings/system/schedule", data={"_csrf_token": token, "interval_hours": "0", "keep": "5"})
+        self.assertFalse((backups / ".schedule").exists())
+        client.post("/settings/system/schedule", data={"_csrf_token": token, "interval_hours": "12", "keep": "14"})
+        self.assertEqual((backups / ".schedule").read_text(), "interval_hours=12\nkeep=14\n")
+        self.assertIn('value="12"', client.get("/settings/system").get_data(as_text=True))
+
+        # Members can't see or use any of it.
+        member_id = app.extensions["users"].add("member", "member-password")
+        with client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertEqual(client.get("/settings/system").status_code, 403)
+        self.assertEqual(client.get("/settings/system/backups/notes-20261014-032151Z.dump").status_code, 403)
+        self.assertEqual(client.post("/settings/system/backup", data={"_csrf_token": token}).status_code, 403)
+
     def test_only_administrators_send_requests_to_claude(self):
         import json
         import app as app_module

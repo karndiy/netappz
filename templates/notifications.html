@@ -56,7 +56,7 @@
     <ul class="alert-list">
       {% for item in items %}
         <li class="alert-item{% if not item.is_read %} is-unread{% endif %}">
-          <span class="alert-icon kind-{{ item.kind }}" aria-hidden="true">{{ {"comment": "💬", "like": "👍", "mention": "@", "post": "📝", "signup": "👤", "approved": "✅", "request": "📋"}.get(item.kind, "🔔") }}</span>
+          <span class="alert-icon kind-{{ item.kind }}" aria-hidden="true">{{ {"comment": "💬", "like": "👍", "mention": "@", "post": "📝", "signup": "👤", "approved": "✅", "request": "📋", "system": "🩺"}.get(item.kind, "🔔") }}</span>
           <a class="alert-main" href="{{ url_for('notification_open', notification_id=item.id) }}">
             <span class="alert-message">{{ item.message }}</span>
             <time datetime="{{ item.created_at | note_iso }}" data-relative>{{ item.created_at | note_short_date }}</time>

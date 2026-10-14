@@ -24,8 +24,14 @@ services:
       REDIS_URL: redis://redis:6379/0
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      # Settings → System & backups: automatic checks, and the dumps made by the backup service.
+      SYSTEM_CHECK_MINUTES: ${SYSTEM_CHECK_MINUTES:-15}
+      BACKUP_DIR: /data/backups
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-6}
+      BACKUP_KEEP: ${BACKUP_KEEP:-28}
     volumes:
       - ./shared:/data/shared
+      - ./backups:/data/backups
       # Photos and videos posted on the Feed.
       - feedmedia:/data/feed
     depends_on:
@@ -84,7 +90,8 @@ services:
     restart: unless-stopped
 
   # Dumps the database to ./backups on the host (outside Docker) at start and every
-  # BACKUP_INTERVAL_HOURS. Restore with scripts/db-restore.sh.
+  # BACKUP_INTERVAL_HOURS. Settings → System & backups can change the schedule and start a
+  # backup. Restore with scripts/db-restore.sh.
   backup:
     image: postgres:16-alpine
     container_name: network-files-backup

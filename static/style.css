@@ -791,6 +791,19 @@ img.avatar { background: #eaecf0; }
 .settings-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 .settings-card > small { margin-top: 8px; }
 .settings-card .settings-actions { margin-top: 18px; }
+/* System & backups */
+.system-checks, .backup-list { margin: 14px 0 0; padding: 0; list-style: none; }
+.system-check, .backup-list li { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid #eaecf0; font-size: 14px; }
+.system-check div, .backup-list li div { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+.system-check span:not(.system-status), .backup-list li span { color: #667085; font-size: 13px; overflow-wrap: anywhere; }
+.backup-list strong { overflow-wrap: anywhere; font-weight: 600; }
+.system-status { flex: none; width: 74px; padding: 2px 0; border-radius: 999px; background: #ecfdf3; color: #027a48; font-size: 12.5px; font-weight: 600; text-align: center; }
+.is-warning .system-status { background: #fffaeb; color: #b54708; }
+.is-problem .system-status { background: #fef3f2; color: #b42318; }
+.backup-list .button { flex: none; }
+.backup-schedule { display: grid; grid-template-columns: max-content 110px; align-items: center; gap: 10px 14px; margin-top: 14px; }
+.backup-schedule label { margin: 0; }
+.backup-schedule .settings-actions { grid-column: 1 / -1; margin-top: 4px; }
 .settings-sticky-actions { position: sticky; bottom: 0; padding: 12px 0; background: linear-gradient(transparent, #f4f6f8 30%); }
 .profile-photo { display: flex; align-items: center; gap: 18px; margin-top: 18px; }
 .profile-photo-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }

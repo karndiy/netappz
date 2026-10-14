@@ -69,6 +69,8 @@ The `backup` service dumps PostgreSQL to `backups/` on the host (outside Docker)
 
 Feed photos and videos (the `feedmedia` volume) are not included.
 
+**Settings → System & backups** (administrators) lists the dumps for download, has **Back up now** (writes `backups/.backup-now`, which the backup service picks up within 30 seconds), and changes the schedule (saved in `backups/.schedule`, read before each run). The page also shows the system check: database, Redis, disk space, and whether the newest backup is recent and the last one succeeded (`backups/.last-error`). The web app runs the check every `SYSTEM_CHECK_MINUTES` (15) and notifies administrators when a check changes; `flask --app app system-check` runs it once.
+
 ## Run with Docker
 
 ```sh

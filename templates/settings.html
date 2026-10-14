@@ -375,6 +375,74 @@
               {% endfor %}
             </dl>
           </section>
+
+        {% elif section.key == "system" %}
+          {# ----------------------------------------------------- system #}
+          {% set bad = checks | rejectattr("status", "equalto", "ok") | list %}
+          <section class="settings-card{% if bad %} is-attention{% endif %}" aria-labelledby="checks-heading">
+            <div class="settings-card-head">
+              <h2 id="checks-heading">System check</h2>
+              <p>
+                {% if check_minutes %}Checked automatically every {{ check_minutes }} minutes; administrators are notified when something goes wrong and when it's fixed.{% else %}Automatic checks are off on this server (SYSTEM_CHECK_MINUTES).{% endif %}
+                {% if last_check %}Last automatic check {{ last_check | note_long_date }}.{% endif %}
+              </p>
+            </div>
+            <ul class="system-checks">
+              {% for check in checks %}
+                <li class="system-check is-{{ check.status }}">
+                  <span class="system-status">{{ statuses[check.status] }}</span>
+                  <div><strong>{{ check.title }}</strong><span>{{ check.detail }}</span></div>
+                </li>
+              {% endfor %}
+            </ul>
+            <form class="settings-actions" action="{{ url_for('system_check_now') }}" method="post">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button class="secondary" type="submit">Check now</button>
+            </form>
+          </section>
+
+          <section class="settings-card" id="backups" aria-labelledby="backups-heading">
+            <div class="settings-card-head">
+              <h2 id="backups-heading">Database backups</h2>
+              <p>Saved in the backups folder on the server computer, outside Docker. Accounts, notes, posts, comments, requests and settings are included; Feed photos and videos are not. To go back to a backup, run <code>scripts/db-restore.sh</code> on the server.</p>
+            </div>
+            {% if not backup_ready %}
+              <p class="empty">Backups aren't set up on this server. Set BACKUP_DIR and run the backup service (see the README).</p>
+            {% else %}
+              <form class="settings-actions" action="{{ url_for('backup_now') }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" {% if backup_pending %}disabled{% endif %}>{% if backup_pending %}Backing up…{% else %}Back up now{% endif %}</button>
+              </form>
+              <ul class="backup-list">
+                {% for item in backups %}
+                  <li>
+                    <div><strong>{{ item.name }}</strong>
+                      <span>{{ item.age }} · {{ item.when }} · {{ item.size | filesizeformat }}{% if item.safety %} · saved before a restore{% endif %}</span></div>
+                    <a class="button secondary" href="{{ url_for('download_backup', name=item.name) }}" download>Download</a>
+                  </li>
+                {% else %}
+                  <li class="empty">No backups yet.</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </section>
+
+          {% if backup_ready %}
+            <section class="settings-card" id="schedule" aria-labelledby="schedule-heading">
+              <div class="settings-card-head">
+                <h2 id="schedule-heading">Backup schedule</h2>
+                <p>A backup is also made each time the server starts. Older backups beyond the number kept are removed.</p>
+              </div>
+              <form class="backup-schedule" action="{{ url_for('save_backup_schedule') }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <label for="interval_hours">Back up every (hours)</label>
+                <input id="interval_hours" name="interval_hours" type="number" min="1" max="168" required value="{{ schedule.interval_hours }}">
+                <label for="keep">Backups to keep</label>
+                <input id="keep" name="keep" type="number" min="1" max="500" required value="{{ schedule.keep }}">
+                <div class="settings-actions"><button type="submit">Save schedule</button></div>
+              </form>
+            </section>
+          {% endif %}
         {% endif %}
       {% endif %}
     </main>
