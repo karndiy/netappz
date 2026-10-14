@@ -1632,6 +1632,32 @@ class FileManagerTests(unittest.TestCase):
         self.client.post("/settings/appearance", data={"_csrf_token": token, "theme": "light"})
         self.assertIn('data-theme="light"', self.client.get("/wallet").get_data(as_text=True))
 
+    def test_help_page_covers_every_part_of_the_app(self):
+        import app as app_module
+
+        # The help must be updated with every version.
+        self.assertEqual(app_module.HELP_VERSION, app_module.APP_VERSION,
+                         "Update HELP_TOPICS for this change, then set HELP_VERSION to the new version.")
+        page = self.client.get("/help").get_data(as_text=True)
+        self.assertIn('class="sidebar-link" href="/help" title="Help" aria-current="page"', page)
+        self.assertIn(f"Up to date with version {app_module.APP_VERSION}", page)
+        # Every page in the side menu and every Settings category has its help.
+        menu = self.client.get("/").get_data(as_text=True).split('<nav class="sidebar-nav"')[1].split("</nav>")[0]
+        for href in re.findall(r'class="sidebar-link" href="([^"]+)"', menu):
+            if href != "/help":
+                self.assertIn(f'class="button secondary help-open" href="{href}"', page)
+        for section in app_module.SETTINGS_SECTIONS:
+            self.assertIn(section["title"].split(" & ")[0], page)
+        self.assertIn("For administrators", page)
+
+        # People who aren't administrators get only the parts they can use.
+        member_id = self.app.extensions["users"].add("member", "member-password")
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        page = self.client.get("/help").get_data(as_text=True)
+        self.assertIn("Submit for approval", page)
+        self.assertNotIn("For administrators", page)
+
     def test_wallet_deposits_transfers_and_mission_rewards(self):
         token = self._csrf()
         wallet = self.app.extensions["wallet"]

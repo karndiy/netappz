@@ -1514,3 +1514,16 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 .theme-preview.is-auto b { background: linear-gradient(135deg, #fff 50%, #2c2c2e 50%); }
 .theme-choice input:checked + .theme-preview { border-color: var(--mac-accent); box-shadow: 0 0 0 3px var(--mac-accent-tint); }
 .theme-choice input:focus-visible + .theme-preview { outline: 3px solid var(--mac-focus); outline-offset: 2px; }
+
+/* Help: one card per part of the app, with numbered steps. */
+.help-contents { margin-top: 18px; }
+.help-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); align-items: start; }
+.help-card { scroll-margin-top: 16px; }
+.help-card:target { border-color: var(--mac-accent); box-shadow: 0 0 0 3px var(--mac-accent-tint); }
+.help-card-head { display: flex; align-items: flex-start; gap: 12px; }
+.help-card-head h2 { margin: 2px 0 4px; }
+.help-steps, .help-admin ul { margin: 0; padding-left: 22px; color: var(--mac-text-2); line-height: 1.55; }
+.help-steps li + li, .help-admin li + li { margin-top: 6px; }
+.help-admin { padding: 10px 12px; border-radius: 10px; background: var(--mac-fill); }
+.help-admin h3 { margin: 0 0 6px; font-size: 14px; }
+.help-open { align-self: flex-start; margin-top: 4px; }

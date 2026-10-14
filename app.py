@@ -165,8 +165,164 @@ TELEGRAM_TOKEN = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
 TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 
-# Patch notes, newest first. Add an entry for every change.
+# The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
+# with every update, change the topics that update touches (or add one for a new page), then set
+# HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
+HELP_VERSION = "1.46.0"
+HELP_TOPICS = [
+    {
+        "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
+        "summary": "Network Files is a shared space for your team: files, posts, notes, an AI chat, converters, missions and points.",
+        "steps": [
+            "Open the app at http://netappz.local from any phone, tablet or computer on the same network.",
+            "Sign in with your username and password. No account yet? Choose Sign up on the sign-in page; an administrator may need to approve it before you can sign in.",
+            "The menu down the left side (across the top on phones) takes you to each part of the app. Hold the pointer over an icon to see its name.",
+            "At the bottom of the menu are Notifications, your profile, Wallet with your points, Settings and Log out.",
+            "Messages floating across the top of the page are announcements from an administrator. Press ✕ to close one on this device.",
+        ],
+        "admin": [
+            "The very first visit creates the administrator account. Administrators see extra buttons and the Administration part of Settings.",
+        ],
+    },
+    {
+        "key": "files", "title": "Files", "icon": "📁", "endpoint": "index",
+        "summary": "Shared folders on the server that everyone on the network can use.",
+        "steps": [
+            "Click a folder to open it. The path at the top takes you back up.",
+            "Create folder makes a folder inside the one you are in: type its name and press Create.",
+            "Upload files sends files into the folder you are in; Or upload a folder sends a whole folder.",
+            "Click a file to download it. Downloading a folder gives you a ZIP of everything in it.",
+            "Rename and Delete are next to each file and folder. Delete asks you to confirm first, and can't be undone.",
+        ],
+    },
+    {
+        "key": "feed", "title": "Feed", "icon": "📰", "endpoint": "feed",
+        "summary": "Share posts with text, photos and videos, then like and comment on them.",
+        "steps": [
+            "Write in the new-post box at the top. Add up to 10 photos (JPG, PNG, GIF, WebP, HEIC, up to 25 MB) or videos (MP4, MOV, WebM, up to 500 MB) by choosing, dragging or pasting them.",
+            "Type @name to mention someone; they are notified.",
+            "Press Like or double-tap a photo to like a post. Write a comment under the post, or use Reply to answer someone.",
+            "The ⋯ menu on your own posts lets you edit or delete them, and copy a link to any post.",
+            "Click someone's name or photo to see their profile and all their posts.",
+        ],
+    },
+    {
+        "key": "notes", "title": "Notes", "icon": "📝", "endpoint": "notes",
+        "summary": "Private notes that only you can see, in the style of macOS Notes.",
+        "steps": [
+            "Press the compose button to start a note. Notes save by themselves as you type; ⌘-S or Ctrl-S saves at once.",
+            "Search finds notes by their words. The sidebar button hides the note list; full screen gives you more room.",
+            "Web addresses become links. Select text and press Insert link (⌘K) to turn it into a named link; put the cursor on a link and press Open to visit it.",
+            "Delete a note with the bin button at the top.",
+        ],
+        "admin": [
+            "Administrators don't see your notes, but the Activity log in Settings shows when a note was added, changed or deleted, and its title.",
+        ],
+    },
+    {
+        "key": "chat", "title": "Chat", "icon": "💬", "endpoint": "chat_page",
+        "summary": "Talk with an AI assistant. Your chats are private to you.",
+        "steps": [
+            "Type a message and send it; the reply appears as it is written.",
+            "Start a new chat for a new subject, and pick an earlier one from the list to carry on. Delete a chat you no longer need.",
+            "When a reply contains code, Download code gives you every code block as files in a ZIP.",
+            "If the Telegram bot is set up, you can chat from your phone too; /new starts a fresh conversation there.",
+        ],
+        "admin": [
+            "Choose which AI answers (Claude or Local AI) and its model under Settings → Chat AI, and set up the bot under Settings → Telegram bot.",
+        ],
+    },
+    {
+        "key": "convert", "title": "Convert", "icon": "🔄", "endpoint": "convert_page",
+        "summary": "Change files from one type to another, merge PDFs and edit PDFs.",
+        "steps": [
+            "Word to PDF and PDF to Word: choose or drop a file and press Convert; the result downloads. PDF to Word reads Thai and English, including scanned pages.",
+            "Image to PDF puts several pictures into one PDF. PDF to Image saves each page as PNG or JPG (a ZIP when there is more than one page).",
+            "Merge PDFs joins up to 50 PDFs. Drag them, or use the arrows, to set the order.",
+            "Edit PDF opens a PDF in the editor: change text, add text, pictures, a signature, shapes and comments, cover or redact content, and rotate, reorder or delete pages. Download the result or save it into Files.",
+            "The Conversion log lists what you converted and whether it worked. Delete single entries or clear it.",
+        ],
+        "admin": [
+            "Administrators see everyone's conversions in the log and can delete any of them.",
+        ],
+    },
+    {
+        "key": "missions", "title": "Missions & daily quests", "icon": "🚩", "endpoint": "missions",
+        "summary": "Tasks that earn points. Do the work, send it in, and get paid when it's approved.",
+        "steps": [
+            "Open missions are cards showing the reward, the dates and the days left. Write what you did on its card and press Submit for approval.",
+            "You are notified when your work is approved (the points go to your Wallet) or sent back with a note. After a send-back you can submit again.",
+            "Daily quests, such as posting on the Feed or converting a file, fill in by themselves as you use the app. When one is done, press Claim. Quests start again every day at midnight (Thailand time).",
+            "Have an idea for a mission? Press ＋ Propose a mission; it starts once an administrator approves it.",
+        ],
+        "admin": [
+            "Add missions with an optional reward and dates, approve or send back work and quest claims under Needs your attention, and approve or decline proposed missions.",
+            "Add daily quests with what to do, how many times a day and the reward, and turn them off or delete them.",
+        ],
+    },
+    {
+        "key": "wallet", "title": "Wallet", "icon": "🪙", "endpoint": "wallet",
+        "summary": "Your points: what you have, and every change to it.",
+        "steps": [
+            "Wallet at the bottom of the menu shows your points. Open it to see the full history.",
+            "To send points to someone, choose the person, enter the amount and press Send. They are notified.",
+            "To hide your points from the menu, turn off \"Show my points next to Wallet\" under Settings → Notifications.",
+        ],
+        "admin": [
+            "Administrators deposit points into anyone's wallet, or take them back, and see everyone's balance.",
+        ],
+    },
+    {
+        "key": "notifications", "title": "Notifications", "icon": "🔔", "endpoint": "notifications",
+        "summary": "News about comments, likes, mentions, missions, points and requests.",
+        "steps": [
+            "The bell at the bottom of the menu shows how many are unread. New ones also pop up while the app is open.",
+            "Click a notification to go to what it is about; that marks it as read.",
+            "Mark all as read, or remove the ones you have read.",
+            "Choose which kinds you get, and turn pop-ups off, under Settings → Notifications.",
+        ],
+    },
+    {
+        "key": "updates", "title": "Update log & requests", "icon": "🕘", "endpoint": "updates",
+        "summary": "Ask for a change, report a problem, and read what's new in each version.",
+        "steps": [
+            "Open New request, choose Feature or Problem, write a short title and the details, and press Send request.",
+            "Each request shows its status: Waiting, Sent to Claude, In progress or Done. You are notified when it changes.",
+            "The patch notes below list every version, newest first. Search finds both requests and patch notes.",
+        ],
+        "admin": [
+            "Administrators change a request's status, delete it, or press Send to Claude to have the change made automatically.",
+        ],
+    },
+    {
+        "key": "settings", "title": "Settings", "icon": "⚙️", "endpoint": "settings_page",
+        "summary": "Your profile, password, notifications and the look of the app.",
+        "steps": [
+            "Profile & password: add a profile photo and a few words about you, and change your password.",
+            "Notifications: choose what you're told about, whether alerts pop up, and whether your points show next to Wallet.",
+            "Appearance: choose Light, Dark or Match my device. It applies wherever you sign in.",
+        ],
+        "admin": [
+            "Users & sign-up: add people, approve new accounts, make someone an administrator, set passwords and choose who can sign up.",
+            "Chat AI and Telegram bot: the AI behind Chat, and the bot for chatting from Telegram.",
+            "Announcements: messages that float at the top of every page, colored by how important they are.",
+            "Activity log: what people do in the app. System & backups: automatic checks, and database backups to download or make now.",
+            "Server: where files are stored, the database and the version. These are changed in the server's files.",
+        ],
+    },
+]
+
+# Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.46.0",
+        "date": "2026-10-14",
+        "changes": [
+            "New Help page in the side menu that teaches how to use every part of the app (request #17: a help page for learning the whole system, kept up to date with every update).",
+            "Each part (Files, Feed, Notes, Chat, Convert, Missions, Wallet, Notifications, the Update log and Settings) has a card with step-by-step instructions, a link to open it, and what administrators can do there.",
+            "The Help page is updated together with every new version, and shows which version it covers.",
+        ],
+    },
     {
         "version": "1.45.1",
         "date": "2026-10-14",
@@ -2709,6 +2865,14 @@ def create_app(test_config=None):
 
     def mission_text(name, limit=MISSION_TEXT_LIMIT):
         return request.form.get(name, "").strip().replace("\r\n", "\n")[:limit + 1]
+
+    @app.get("/help")
+    def help_page():
+        topics = [
+            {**topic, "admin": topic.get("admin", []) if g.user["is_admin"] else []}
+            for topic in HELP_TOPICS
+        ]
+        return render_template("help.html", topics=topics, help_version=HELP_VERSION)
 
     @app.get("/missions")
     def missions():

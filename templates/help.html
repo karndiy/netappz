@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Help · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {% include "_sidebar.html" %}
+  <main class="container">
+    <section class="heading">
+      <div>
+        <h1>Help</h1>
+        <p class="page-description">How to use each part of Network Files, step by step. Up to date with version {{ help_version }}.</p>
+      </div>
+    </section>
+
+    <nav class="request-filters help-contents" aria-label="Help topics">
+      {% for topic in topics %}
+        <a href="#help-{{ topic.key }}">{{ topic.icon }} {{ topic.title }}</a>
+      {% endfor %}
+    </nav>
+
+    <ul class="card-grid help-grid">
+      {% for topic in topics %}
+        <li class="mission-card help-card" id="help-{{ topic.key }}">
+          <div class="help-card-head">
+            <span class="mission-stat-icon" aria-hidden="true">{{ topic.icon }}</span>
+            <div>
+              <h2>{{ topic.title }}</h2>
+              <p class="mission-text">{{ topic.summary }}</p>
+            </div>
+          </div>
+          <ol class="help-steps">
+            {% for step in topic.steps %}<li>{{ step }}</li>{% endfor %}
+          </ol>
+          {% if topic.admin %}
+            <div class="help-admin">
+              <h3>For administrators</h3>
+              <ul>{% for step in topic.admin %}<li>{{ step }}</li>{% endfor %}</ul>
+            </div>
+          {% endif %}
+          {% if topic.endpoint %}
+            <a class="button secondary help-open" href="{{ url_for(topic.endpoint) }}">Open {{ topic.title }}</a>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </main>
+</body>
+</html>
