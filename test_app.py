@@ -1466,6 +1466,57 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(wallet.balance(other_id), 550)
         self.assertIn("from a deleted account", self.client.get("/wallet").get_data(as_text=True))
 
+    def test_announcements_float_on_every_page_colored_by_level(self):
+        token = self._csrf()
+        store = self.app.extensions["announcements"]
+        users = self.app.extensions["users"]
+        member_id = users.add("member", "member-password")
+
+        # Administrators post them; a bad level or an empty message is refused.
+        self.client.post("/settings/announcements/add", data={"_csrf_token": token, "message": "  ", "level": "info"})
+        self.client.post("/settings/announcements/add", data={"_csrf_token": token, "message": "Hi", "level": "loud"})
+        self.assertEqual(store.all(), [])
+        self.client.post("/settings/announcements/add", data={"_csrf_token": token, "message": "x" * 301,
+                                                              "level": "info"})
+        self.assertEqual(store.all(), [])
+        self.client.post("/settings/announcements/add", data={"_csrf_token": token,
+                                                              "message": "New  printer on floor 2", "level": "info"})
+        self.client.post("/settings/announcements/add", data={"_csrf_token": token,
+                                                              "message": "Server restarts at 22:00", "level": "urgent"})
+        self.assertEqual([item["message"] for item in store.all()],
+                         ["Server restarts at 22:00", "New printer on floor 2"])
+        self.assertEqual([item["level"] for item in store.active()], ["urgent", "info"])
+        self.assertIn("2 showing", self.client.get("/settings").get_data(as_text=True))
+
+        # Everyone sees them floating on every page, in their level's color; members can't manage them.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        for path in ("/", "/feed", "/notes", "/wallet"):
+            page = self.client.get(path).get_data(as_text=True)
+            self.assertIn('class="announcements"', page, path)
+            self.assertIn('announcement is-urgent', page)
+            self.assertIn("Server restarts at 22:00", page)
+        urgent_id = store.all()[0]["id"]
+        for path in ("/settings/announcements/add", f"/settings/announcements/{urgent_id}/toggle",
+                     f"/settings/announcements/{urgent_id}/delete"):
+            self.assertEqual(self.client.post(path, data={"_csrf_token": token, "message": "Mine",
+                                                          "level": "info"}).status_code, 403)
+        self.assertEqual(self.client.get("/settings/announcements").status_code, 403)
+        self.assertEqual(len(store.all()), 2)
+
+        # Turned off, it stops showing; turned back on, it returns; deleted, it's gone.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post(f"/settings/announcements/{urgent_id}/toggle", data={"_csrf_token": token})
+        self.assertNotIn("Server restarts at 22:00", self.client.get("/").get_data(as_text=True))
+        self.assertIn("Server restarts at 22:00", self.client.get("/settings/announcements").get_data(as_text=True))
+        self.client.post(f"/settings/announcements/{urgent_id}/toggle", data={"_csrf_token": token})
+        self.assertIn("Server restarts at 22:00", self.client.get("/").get_data(as_text=True))
+        for item in store.all():
+            self.client.post(f"/settings/announcements/{item['id']}/delete", data={"_csrf_token": token})
+        self.assertEqual(store.all(), [])
+        self.assertNotIn('class="announcements"', self.client.get("/").get_data(as_text=True))
+
     def test_user_requests_can_be_added_tracked_and_closed(self):
         import app as app_module
 

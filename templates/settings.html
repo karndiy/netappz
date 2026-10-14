@@ -364,6 +364,60 @@
             </div>
           </form>
 
+        {% elif section.key == "announcements" %}
+          {# ---------------------------------------------- announcements #}
+          <section class="settings-card" aria-labelledby="announce-heading">
+            <div class="settings-card-head">
+              <h2 id="announce-heading">New announcement</h2>
+              <p>It floats at the top of every page for everyone who is signed in, in the color of its level. The newest {{ shown }} turned-on announcements are shown, most urgent first.</p>
+            </div>
+            <form class="announcement-form" action="{{ url_for('announcement_add') }}" method="post">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <label for="announce-message">Message</label>
+              <textarea id="announce-message" name="message" rows="2" maxlength="{{ limit }}" required
+                        placeholder="For example: The server restarts tonight at 22:00.">{{ form.message or "" }}</textarea>
+              <fieldset class="announcement-levels">
+                <legend>How important is it?</legend>
+                {% for key, label in levels.items() %}
+                  <label class="announcement-level is-{{ key }}">
+                    <input type="radio" name="level" value="{{ key }}" {% if (form.level or "info") == key %}checked{% endif %}>
+                    <span>{{ label }}</span>
+                  </label>
+                {% endfor %}
+              </fieldset>
+              <div class="settings-actions"><button type="submit">Post announcement</button></div>
+            </form>
+          </section>
+
+          <section class="settings-card" aria-labelledby="announce-list-heading">
+            <div class="settings-card-head">
+              <h2 id="announce-list-heading">Announcements ({{ announcements | length }})</h2>
+              <p>Turn one off to hide it without deleting it.</p>
+            </div>
+            <ul class="user-list">
+              {% for item in announcements %}
+                <li class="user-row announcement-row is-{{ item.level }}{% if not item.is_active %} is-off{% endif %}">
+                  <div class="user-name">
+                    <span class="announcement-tag is-{{ item.level }}">{{ levels.get(item.level, item.level) }}</span>
+                    <span class="announcement-text">{{ item.message }}</span>
+                    <span class="user-meta">{% if item.is_active %}Showing{% else %}Off{% endif %} · {{ item.creator or "Deleted account" }} · {{ item.created_at[:16] }} UTC</span>
+                  </div>
+                  <form action="{{ url_for('announcement_toggle', announcement_id=item.id) }}" method="post">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <button class="secondary" type="submit">{% if item.is_active %}Turn off{% else %}Turn on{% endif %}</button>
+                  </form>
+                  <form action="{{ url_for('announcement_delete', announcement_id=item.id) }}" method="post"
+                        onsubmit="return confirm('Delete this announcement?');">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <button class="secondary" type="submit">Delete</button>
+                  </form>
+                </li>
+              {% else %}
+                <li class="empty">No announcements yet.</li>
+              {% endfor %}
+            </ul>
+          </section>
+
         {% elif section.key == "server" %}
           {# ----------------------------------------------------- server #}
           <section class="settings-card" aria-labelledby="server-heading">

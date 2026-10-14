@@ -133,6 +133,8 @@ SETTINGS_SECTIONS = [
      "description": "The AI that answers on the Chat page and in Telegram."},
     {"key": "telegram", "title": "Telegram bot", "icon": "✈️", "admin": True,
      "description": "Chat with the AI from your phone through a Telegram bot."},
+    {"key": "announcements", "title": "Announcements", "icon": "📣", "admin": True,
+     "description": "Messages that float at the top of every page, colored by how important they are."},
     {"key": "server", "title": "Server", "icon": "🖥️", "admin": True,
      "description": "Storage, database and version. Changed in the server's files."},
     {"key": "activity", "title": "Activity log", "icon": "📜", "admin": True,
@@ -161,6 +163,16 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
+    {
+        "version": "1.38.0",
+        "date": "2026-10-14",
+        "changes": [
+            "Announcements (request #13: floating text above the interface, with colors for importance). Administrators write them under Settings → Announcements.",
+            "Each announcement has a level with its own color: Information (blue), Good news (green), Important (amber) or Urgent (red).",
+            "Turned-on announcements float at the top of every page with the text scrolling across. Anyone can close one with ✕; it stays closed on that device.",
+            "Administrators can turn an announcement off and on again, or delete it.",
+        ],
+    },
     {
         "version": "1.37.0",
         "date": "2026-10-14",
@@ -567,6 +579,10 @@ WALLET_KINDS = {"deposit": "Deposit", "withdraw": "Taken away", "transfer_in": "
 WALLET_MAX = 1_000_000  # the most points in one deposit, transfer or mission reward
 WALLET_NOTE = 200
 WALLET_SHOWN = 100
+# Announcements float at the top of every page; the level picks the color.
+ANNOUNCEMENT_LEVELS = {"info": "Information", "success": "Good news", "warning": "Important", "urgent": "Urgent"}
+ANNOUNCEMENT_LIMIT = 300
+ANNOUNCEMENTS_SHOWN = 3
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
 # Photos and videos on the Feed. HEIC photos from iPhones are turned into JPEG.
 FEED_IMAGES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
@@ -1209,6 +1225,19 @@ def create_app(test_config=None):
             )
             """
         )
+        # Announcements (1.38.0): floating messages for everyone, set by administrators.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS announcements (
+                {id_column},
+                message TEXT NOT NULL,
+                level TEXT NOT NULL DEFAULT 'info',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         for statement in (
             "CREATE INDEX IF NOT EXISTS wallet_entries_user ON wallet_entries (user_id, id)",
             "CREATE INDEX IF NOT EXISTS mission_submissions_mission ON mission_submissions (mission_id, user_id)",
@@ -1486,6 +1515,58 @@ def create_app(test_config=None):
                 connection.execute(sql("DELETE FROM wallet_entries WHERE user_id = ?"), (user_id,))
                 connection.execute(sql("UPDATE wallet_entries SET other_id = NULL WHERE other_id = ?"), (user_id,))
                 connection.execute(sql("UPDATE wallet_entries SET created_by = NULL WHERE created_by = ?"), (user_id,))
+
+    class AnnouncementStore:
+        """Messages administrators float at the top of every page."""
+
+        columns = (
+            "announcements.id, announcements.message, announcements.level, announcements.is_active, "
+            f"users.username AS creator, {time_as('announcements.created_at')}"
+        )
+
+        def _rows(self, where="", limit=None):
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    f"SELECT {self.columns} FROM announcements LEFT JOIN users ON users.id = announcements.created_by "
+                    f"{where}ORDER BY announcements.id DESC" + (f" LIMIT {int(limit)}" if limit else "")
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def all(self):
+            return self._rows()
+
+        def active(self):
+            """The newest turned-on announcements, most important first."""
+            order = list(ANNOUNCEMENT_LEVELS)
+            items = self._rows("WHERE announcements.is_active = 1 ", ANNOUNCEMENTS_SHOWN)
+            return sorted(items, key=lambda item: -order.index(item["level"]) if item["level"] in order else 0)
+
+        def get(self, announcement_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT id, message, level, is_active FROM announcements WHERE id = ?"), (announcement_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def add(self, message, level, user_id):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("INSERT INTO announcements (message, level, created_by) VALUES (?, ?, ?)"),
+                    (message, level, user_id),
+                )
+
+        def set_active(self, announcement_id, active):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE announcements SET is_active = ? WHERE id = ?"),
+                                   (1 if active else 0, announcement_id))
+
+        def delete(self, announcement_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM announcements WHERE id = ?"), (announcement_id,))
+
+        def delete_user_content(self, user_id):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE announcements SET created_by = NULL WHERE created_by = ?"), (user_id,))
 
     class UserStore:
         """Accounts for signing in. Passwords are stored only as salted hashes."""
@@ -1847,6 +1928,9 @@ def create_app(test_config=None):
     wallet_store = WalletStore()
     app.extensions["wallet"] = wallet_store
 
+    announcement_store = AnnouncementStore()
+    app.extensions["announcements"] = announcement_store
+
     settings_store = SettingsStore()
     app.extensions["settings"] = settings_store
     chat.use_settings(settings_store.get)
@@ -1950,7 +2034,11 @@ def create_app(test_config=None):
                           "alert_popups": user_prefs(user)["popups"]}
             except Exception:  # The top bar must never break a page.
                 app.logger.exception("Could not count notifications")
-        return {"current_user": user, **alerts}
+            try:
+                alerts["announcements"] = announcement_store.active()
+            except Exception:
+                app.logger.exception("Could not load announcements")
+        return {"current_user": user, "announcement_levels": ANNOUNCEMENT_LEVELS, **alerts}
 
     @app.before_request
     def require_login():
@@ -2181,6 +2269,7 @@ def create_app(test_config=None):
             chat_store.delete_user_content(user_id)
             mission_store.delete_user_content(user_id)
             wallet_store.delete_user_content(user_id)
+            announcement_store.delete_user_content(user_id)
             invalidate_notes(user_id)
             remove_avatar(user["avatar"])
             user_store.delete(user_id)
@@ -3636,6 +3725,8 @@ def create_app(test_config=None):
                       if chat.is_configured() else "Not set up yet",
                 "telegram": {"running": "Connected", "off": "Off", "pending": "Connecting"}.get(
                     telegram_status(settings_store.all())["state"], "Not connected"),
+                "announcements": (lambda shown: f"{shown} showing" if shown else "None showing")(
+                    sum(1 for item in announcement_store.all() if item["is_active"])),
                 "server": f"Version {APP_VERSION}",
                 "system": system_summary(),
                 "activity": f"{activity_log.count_since(24)} in the last 24 hours",
@@ -3658,6 +3749,10 @@ def create_app(test_config=None):
                     "post_counts": feed_store.post_counts()}
         if section == "server":
             return {"server": server_info()}
+        if section == "announcements":
+            return {"announcements": announcement_store.all(), "levels": ANNOUNCEMENT_LEVELS,
+                    "limit": ANNOUNCEMENT_LIMIT, "shown": ANNOUNCEMENTS_SHOWN,
+                    "form": session.pop("announcement_form", {})}
         if section == "activity":
             filters = {"username": request.args.get("user", "")[:60], "area": request.args.get("area", ""),
                        "query": request.args.get("q", "").strip()[:100]}
@@ -3751,6 +3846,47 @@ def create_app(test_config=None):
             abort(404)
         return send_file(backup_dir / name, mimetype="application/octet-stream", as_attachment=True,
                          download_name=name)
+
+    @app.post("/settings/announcements/add")
+    def announcement_add():
+        admin_required()
+        message = " ".join(request.form.get("message", "").split())
+        level = request.form.get("level", "")
+        error = None
+        if not message:
+            error = "Write the announcement first."
+        elif len(message) > ANNOUNCEMENT_LIMIT:
+            error = f"Keep announcements under {ANNOUNCEMENT_LIMIT} characters."
+        elif level not in ANNOUNCEMENT_LEVELS:
+            error = "Choose how important the announcement is."
+        if error:
+            flash(error, "error")
+            session["announcement_form"] = {"message": message[:ANNOUNCEMENT_LIMIT], "level": level}
+        else:
+            announcement_store.add(message, level, g.user["id"])
+            flash("Announcement posted. It now floats at the top of every page.", "success")
+        return redirect(url_for("settings_section", section="announcements"), code=303)
+
+    @app.post("/settings/announcements/<int:announcement_id>/toggle")
+    def announcement_toggle(announcement_id):
+        admin_required()
+        item = announcement_store.get(announcement_id)
+        if item is None:
+            flash("That announcement no longer exists.", "error")
+        else:
+            announcement_store.set_active(announcement_id, not item["is_active"])
+            flash("Announcement turned off." if item["is_active"] else "Announcement turned on.", "success")
+        return redirect(url_for("settings_section", section="announcements"), code=303)
+
+    @app.post("/settings/announcements/<int:announcement_id>/delete")
+    def announcement_delete(announcement_id):
+        admin_required()
+        if announcement_store.get(announcement_id) is None:
+            flash("That announcement no longer exists.", "error")
+        else:
+            announcement_store.delete(announcement_id)
+            flash("Announcement deleted.", "success")
+        return redirect(url_for("settings_section", section="announcements"), code=303)
 
     @app.post("/settings/notifications")
     def save_notification_prefs():

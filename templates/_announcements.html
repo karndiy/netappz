@@ -1,0 +1,40 @@
+{# Announcements float at the top of every page; closed ones stay closed on this device. #}
+{% if announcements %}
+  <div class="announcements" id="announcements" aria-label="Announcements">
+    {% for item in announcements %}
+      <div class="announcement is-{{ item.level }}" data-id="{{ item.id }}"
+           role="{{ 'alert' if item.level == 'urgent' else 'status' }}">
+        <span class="announcement-label">{{ announcement_levels.get(item.level, "Notice") }}</span>
+        <div class="announcement-track"><span class="announcement-message">{{ item.message }}</span></div>
+        <button class="announcement-close" type="button" title="Close" aria-label="Close announcement">✕</button>
+      </div>
+    {% endfor %}
+  </div>
+  <script>
+    (function () {
+      var box = document.getElementById('announcements');
+      if (!box || box.dataset.ready) return;
+      box.dataset.ready = '1';
+      var key = 'closed-announcements';
+      var closed;
+      try { closed = JSON.parse(localStorage.getItem(key) || '[]'); } catch (e) { closed = []; }
+      box.querySelectorAll('.announcement').forEach(function (item) {
+        if (closed.indexOf(item.dataset.id) !== -1) { item.remove(); return; }
+        // Short messages sit still; long ones scroll across so all of it can be read.
+        var track = item.querySelector('.announcement-track');
+        var text = item.querySelector('.announcement-message');
+        if (text.scrollWidth > track.clientWidth) {
+          item.classList.add('is-scrolling');
+          text.style.animationDuration = Math.max(10, text.scrollWidth / 60) + 's';
+        }
+        item.querySelector('.announcement-close').addEventListener('click', function () {
+          closed = closed.concat(item.dataset.id).slice(-50);
+          try { localStorage.setItem(key, JSON.stringify(closed)); } catch (e) {}
+          item.remove();
+          if (!box.querySelector('.announcement')) box.remove();
+        });
+      });
+      if (!box.querySelector('.announcement')) box.remove();
+    })();
+  </script>
+{% endif %}

@@ -12,4 +12,5 @@
     <button class="topbar-link" type="submit">Log out</button>
   </form>
   <script src="{{ url_for('static', filename='notify.js') }}" defer></script>
+  {% include "_announcements.html" %}
 {% endif %}
