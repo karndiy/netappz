@@ -26,8 +26,8 @@
       <div>
         <h1>Missions</h1>
         <p class="page-description">
-          {% if current_user.is_admin %}Set tasks for everyone, then approve the work they submit or send it back with a note.
-          {% else %}Tasks set by an administrator. Submit what you did, and an administrator approves it or sends it back with a note.{% endif %}
+          {% if current_user.is_admin %}Set tasks for everyone, approve the missions people propose, then approve the work they submit or send it back with a note.
+          {% else %}Submit what you did for a mission, and an administrator approves it or sends it back with a note. You can also propose a new mission for an administrator to approve.{% endif %}
         </p>
       </div>
     </section>
@@ -96,9 +96,54 @@
           {% endfor %}
         </ul>
       </section>
+    {% endif %}
 
-      <details class="request-new mission-new" {% if form or not (missions or closed) %}open{% endif %}>
-        <summary>New mission</summary>
+    {% if proposals or declined %}
+      <section class="requests" id="mission-proposals" aria-labelledby="mission-proposals-heading">
+        <div class="requests-head">
+          <h2 id="mission-proposals-heading">{{ 'Proposed missions' if current_user.is_admin else 'Your proposed missions' }}</h2>
+          <p>{% if current_user.is_admin %}Approve a mission to open it to everyone, or decline it with a note.{% else %}An administrator approves or declines each one; you're notified either way.{% endif %}</p>
+        </div>
+        <ul class="request-list">
+          {% for mission in proposals + declined %}
+            <li class="request-item mission-proposal is-{{ mission.approval }}" id="mission-{{ mission.id }}">
+              <div class="request-main">
+                <div class="request-title-row">
+                  <span class="request-status">{{ approvals[mission.approval] }}</span>
+                  <h3>{{ mission.title }}</h3>
+                  {% if mission.reward %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(mission.reward) }} points suggested</span>{% endif %}
+                </div>
+                {% if mission.details %}<p class="request-details">{{ mission.details }}</p>{% endif %}
+                <p class="request-meta">Proposed by {{ mission.creator or 'a deleted account' }} · {{ mission.created_at[:10] }}</p>
+                {% if mission.approval_note %}<p class="request-note">{{ mission.approval_note }}</p>{% endif %}
+              </div>
+              {% if current_user.is_admin and mission.approval == 'proposed' %}
+                <form class="mission-review-form" action="{{ url_for('mission_decide', mission_id=mission.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <label class="visually-hidden" for="decide-reward-{{ mission.id }}">Reward in points</label>
+                  <input id="decide-reward-{{ mission.id }}" class="mission-decide-reward" name="reward" type="text" inputmode="numeric"
+                         maxlength="12" value="{{ mission.reward }}" placeholder="Reward in points" title="Reward in points">
+                  <label class="visually-hidden" for="decide-note-{{ mission.id }}">Note for {{ mission.creator }}</label>
+                  <input id="decide-note-{{ mission.id }}" name="note" type="text" maxlength="1000" placeholder="Note (needed to decline)">
+                  <button type="submit" name="decision" value="approved">Approve</button>
+                  <button class="secondary" type="submit" name="decision" value="declined">Decline</button>
+                </form>
+              {% endif %}
+              <div class="request-controls">
+                <form action="{{ url_for('mission_delete', mission_id=mission.id) }}" method="post"
+                      onsubmit="return confirm('Remove this mission proposal?');">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <button class="request-delete" type="submit" title="Remove proposal" aria-label="Remove proposal {{ mission.title }}">✕</button>
+                </form>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+
+      <details class="request-new mission-new" {% if form or (current_user.is_admin and not (missions or closed)) %}open{% endif %}>
+        <summary>{{ 'New mission' if current_user.is_admin else 'Propose a mission' }}</summary>
         <form class="request-form" action="{{ url_for('create_mission') }}" method="post">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
           <label for="mission-title">Title</label>
@@ -107,13 +152,12 @@
           <label for="mission-details">Details <span class="optional">(optional)</span></label>
           <textarea id="mission-details" name="details" rows="3" maxlength="4000"
                     placeholder="What needs doing, and what should people send as proof?">{{ form.details if form else '' }}</textarea>
-          <label for="mission-reward">Reward in points <span class="optional">(optional: paid into the wallet when work is approved)</span></label>
+          <label for="mission-reward">Reward in points <span class="optional">(optional: paid into the wallet when work is approved{% if not current_user.is_admin %}; an administrator decides the final amount{% endif %})</span></label>
           <input id="mission-reward" name="reward" type="text" inputmode="numeric" maxlength="12"
                  placeholder="0" value="{{ form.reward if form else '' }}">
-          <div class="request-actions"><button type="submit">Add mission</button></div>
+          <div class="request-actions"><button type="submit">{{ 'Add mission' if current_user.is_admin else 'Send for approval' }}</button></div>
         </form>
       </details>
-    {% endif %}
 
     {% for group, heading in ((missions, 'Open missions'), (closed, 'Closed missions')) if group or heading == 'Open missions' %}
       <h2 class="patch-heading mission-heading">{{ heading }}</h2>

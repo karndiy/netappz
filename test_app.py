@@ -1335,7 +1335,7 @@ class FileManagerTests(unittest.TestCase):
         member_id = users.add("member", "member-password")
         other_id = users.add("other", "other-password")
 
-        # Only administrators set missions; a title is needed.
+        # Administrators set missions; a title is needed.
         self.client.post("/missions", data={"_csrf_token": token, "title": " ", "details": "Keep me"})
         page = self.client.get("/missions").get_data(as_text=True)
         self.assertIn("Give the mission a short title.", page)
@@ -1348,7 +1348,6 @@ class FileManagerTests(unittest.TestCase):
 
         with self.client.session_transaction() as sess:
             sess["user_id"] = member_id
-        self.assertEqual(self.client.post("/missions", data={"_csrf_token": token, "title": "Mine"}).status_code, 403)
         page = self.client.get("/missions").get_data(as_text=True)
         self.assertIn("Move old files to Archive", page)
         self.assertNotIn("Waiting for approval</h2>", page)
@@ -1418,6 +1417,69 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(store.all()[0]["submissions"], [])
         self.client.post(f"/missions/{mission_id}/delete", data={"_csrf_token": token})
         self.assertEqual(store.all(), [])
+
+    def test_members_propose_missions_that_administrators_approve(self):
+        token = self._csrf()
+        store = self.app.extensions["missions"]
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        member_id = users.add("member", "member-password")
+        other_id = users.add("other", "other-password")
+
+        def as_user(user_id):
+            with self.client.session_transaction() as sess:
+                sess["user_id"] = user_id
+
+        # A member's mission is a proposal: only they and administrators see it, and no work can be submitted yet.
+        as_user(member_id)
+        self.assertIn("Propose a mission", self.client.get("/missions").get_data(as_text=True))
+        self.client.post("/missions", data={"_csrf_token": token, "title": "Clean the kitchen",
+                                            "details": "Every Friday", "reward": "50"})
+        mission = store.all()[0]
+        self.assertEqual((mission["approval"], mission["reward"]), ("proposed", 50))
+        self.assertIn("member proposed a mission", notifications.for_user(self.admin_id)[0]["message"])
+        self.assertIn("Your proposed missions", self.client.get("/missions").get_data(as_text=True))
+        self.client.post(f"/missions/{mission['id']}/submit", data={"_csrf_token": token, "body": "Done"})
+        self.assertEqual(store.all()[0]["submissions"], [])
+        self.assertEqual(self.client.post(f"/missions/{mission['id']}/decide", data={
+            "_csrf_token": token, "decision": "approved", "reward": "50"}).status_code, 403)
+        as_user(other_id)
+        self.assertNotIn("Clean the kitchen", self.client.get("/missions").get_data(as_text=True))
+        self.assertEqual(self.client.post(f"/missions/{mission['id']}/delete", data={"_csrf_token": token}).status_code, 403)
+
+        # Declining needs a note; approving sets the reward and opens it to everyone.
+        as_user(self.admin_id)
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn("Proposed missions", page)
+        self.assertIn("Clean the kitchen", page)
+        self.client.post(f"/missions/{mission['id']}/decide", data={"_csrf_token": token, "decision": "declined", "reward": "50"})
+        self.assertEqual(store.mission(mission["id"])["approval"], "proposed")
+        self.client.post(f"/missions/{mission['id']}/decide", data={
+            "_csrf_token": token, "decision": "approved", "reward": "30"})
+        mission = store.mission(mission["id"])
+        self.assertEqual((mission["approval"], mission["reward"]), ("approved", 30))
+        self.assertIn("approved your mission", notifications.for_user(member_id)[0]["message"])
+        self.assertIn("Clean the kitchen", notifications.for_user(other_id)[0]["message"])
+        as_user(other_id)
+        self.client.post(f"/missions/{mission['id']}/submit", data={"_csrf_token": token, "body": "Cleaned it"})
+        approved = next(m for m in store.all() if m["id"] == mission["id"])
+        self.assertEqual([item["body"] for item in approved["submissions"]], ["Cleaned it"])
+        # Once approved, the member can't remove it any more.
+        as_user(member_id)
+        self.assertEqual(self.client.post(f"/missions/{mission['id']}/delete", data={"_csrf_token": token}).status_code, 403)
+
+        # A declined proposal shows the note to the person who proposed it, who can remove it.
+        self.client.post("/missions", data={"_csrf_token": token, "title": "Free lunch"})
+        lunch = next(m for m in store.all() if m["title"] == "Free lunch")
+        as_user(self.admin_id)
+        self.client.post(f"/missions/{lunch['id']}/decide", data={
+            "_csrf_token": token, "decision": "declined", "note": "Not a task", "reward": "0"})
+        self.assertIn("declined your mission", notifications.for_user(member_id)[0]["message"])
+        as_user(member_id)
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn("Not a task", page)
+        self.client.post(f"/missions/{lunch['id']}/delete", data={"_csrf_token": token})
+        self.assertIsNone(store.mission(lunch["id"]))
 
     def test_wallet_deposits_transfers_and_mission_rewards(self):
         token = self._csrf()

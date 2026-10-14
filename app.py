@@ -164,6 +164,15 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # Patch notes, newest first. Add an entry for every change.
 UPDATE_LOG = [
     {
+        "version": "1.40.0",
+        "date": "2026-10-14",
+        "changes": [
+            "Anyone can now propose a mission on the Missions page (request: missions added by users and approved by an administrator). Administrators' own missions still start right away.",
+            "Proposed missions wait under Proposed missions, where an administrator approves them, setting the reward in points, or declines them with a note. The person who proposed it is notified either way, and everyone is told when it's approved.",
+            "Until it's approved, a proposed mission is seen only by the person who proposed it and by administrators, and no work can be submitted for it. People can remove their own proposal until it's approved.",
+        ],
+    },
+    {
         "version": "1.39.0",
         "date": "2026-10-14",
         "changes": [
@@ -583,6 +592,8 @@ REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 MISSION_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "returned": "Sent back"}
 MISSION_TEXT_LIMIT = 4000
+# Missions people propose wait for an administrator; administrators' own missions start approved.
+MISSION_APPROVALS = {"proposed": "Waiting for approval", "approved": "Approved", "declined": "Declined"}
 # Wallet: points people hold. Administrators deposit them, people transfer them, approved missions pay them.
 WALLET_KINDS = {"deposit": "Deposit", "withdraw": "Taken away", "transfer_in": "Received",
                 "transfer_out": "Sent", "reward": "Mission reward"}
@@ -1220,6 +1231,12 @@ def create_app(test_config=None):
         # Rewards (1.37.0): approved mission work pays points into the wallet.
         if "reward" not in table_columns(connection, "missions"):
             connection.execute("ALTER TABLE missions ADD COLUMN reward INTEGER NOT NULL DEFAULT 0")
+        # Proposed missions (1.40.0): anyone can propose one; an administrator approves or declines it.
+        existing = table_columns(connection, "missions")
+        for column, definition in (("approval", "TEXT NOT NULL DEFAULT 'approved'"),
+                                   ("approval_note", "TEXT NOT NULL DEFAULT ''")):
+            if column not in existing:
+                connection.execute(f"ALTER TABLE missions ADD COLUMN {column} {definition}")
         # Wallet (1.37.0): every change to someone's points is a row; the balance is their sum.
         connection.execute(
             f"""
@@ -1347,6 +1364,7 @@ def create_app(test_config=None):
 
         mission_columns = (
             "missions.id, missions.title, missions.details, missions.created_by, missions.is_open, missions.reward, "
+            "missions.approval, missions.approval_note, "
             f"users.username AS creator, {time_as('missions.created_at')}"
         )
         submission_columns = (
@@ -1383,13 +1401,22 @@ def create_app(test_config=None):
                 ).fetchone()
             return dict(row) if row else None
 
-        def add(self, title, details, user_id, reward=0):
+        def add(self, title, details, user_id, reward=0, approval="approved"):
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO missions (title, details, created_by, reward) VALUES (?, ?, ?, ?)") + returning_id,
-                    (title, details, user_id, reward),
+                    sql("INSERT INTO missions (title, details, created_by, reward, approval) VALUES (?, ?, ?, ?, ?)")
+                    + returning_id,
+                    (title, details, user_id, reward, approval),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def decide(self, mission_id, approval, note, reward):
+            """An administrator's answer to a proposed mission."""
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("UPDATE missions SET approval = ?, approval_note = ?, reward = ? WHERE id = ?"),
+                    (approval, note, reward, mission_id),
+                )
 
         def set_open(self, mission_id, is_open):
             with notes_connection() as connection:
@@ -2463,24 +2490,29 @@ def create_app(test_config=None):
     @app.get("/missions")
     def missions():
         user = g.user
-        everything = mission_store.all()
+        # Proposals are seen only by the person who proposed them and by administrators.
+        everything = [m for m in mission_store.all()
+                      if m["approval"] == "approved" or user["is_admin"] or m["created_by"] == user["id"]]
         for mission in everything:
             mine = [item for item in mission["submissions"] if item["user_id"] == user["id"]]
             mission["mine"] = mine
-            mission["can_submit"] = bool(mission["is_open"]) and not any(
+            mission["can_submit"] = mission["approval"] == "approved" and bool(mission["is_open"]) and not any(
                 item["status"] in ("pending", "approved") for item in mine)
             mission["approved"] = sum(1 for item in mission["submissions"] if item["status"] == "approved")
-        waiting = [{**item, "mission_title": mission["title"]} for mission in everything
+        live = [m for m in everything if m["approval"] == "approved"]
+        waiting = [{**item, "mission_title": mission["title"]} for mission in live
                    for item in mission["submissions"] if item["status"] == "pending"] if user["is_admin"] else []
         return render_template(
-            "missions.html", missions=[m for m in everything if m["is_open"]],
-            closed=[m for m in everything if not m["is_open"]], waiting=waiting,
-            statuses=MISSION_STATUSES, form=session.pop("mission_form", None),
+            "missions.html", missions=[m for m in live if m["is_open"]],
+            closed=[m for m in live if not m["is_open"]], waiting=waiting,
+            proposals=[m for m in everything if m["approval"] == "proposed"],
+            declined=[m for m in everything if m["approval"] == "declined" and m["created_by"] == user["id"]],
+            statuses=MISSION_STATUSES, approvals=MISSION_APPROVALS, form=session.pop("mission_form", None),
         )
 
     @app.post("/missions")
     def create_mission():
-        admin_required()
+        """Administrators add missions; anyone else proposes one for an administrator to approve."""
         title = " ".join(request.form.get("title", "").split())
         details = mission_text("details")
         reward = wallet_amount(request.form.get("reward", ""), allow_zero=True)
@@ -2496,12 +2528,56 @@ def create_app(test_config=None):
             session["mission_form"] = {"title": title[:120], "details": details[:MISSION_TEXT_LIMIT],
                                        "reward": request.form.get("reward", "")[:12]}
             return redirect(url_for("missions"), code=303)
+        if not g.user["is_admin"]:
+            mission_id = mission_store.add(title, details, g.user["id"], reward, approval="proposed")
+            notification_store.add(user_store.admin_ids(), g.user["id"], "mission",
+                                   f"{g.user['username']} proposed a mission: “{title}”",
+                                   url_for("missions", _anchor="mission-proposals"))
+            flash("Mission proposed. An administrator will approve it or decline it with a note.", "success")
+            return redirect(url_for("missions", _anchor=f"mission-{mission_id}"), code=303)
         mission_store.add(title, details, g.user["id"], reward)
-        everyone = [user["id"] for user in user_store.all() if user["is_active"]]
-        notification_store.add(everyone, g.user["id"], "mission",
-                               f"{g.user['username']} set a new mission: “{title}”", url_for("missions"))
+        announce_mission(title, g.user["id"])
         flash("Mission added. Everyone can now submit their work for it.", "success")
         return redirect(url_for("missions"), code=303)
+
+    def announce_mission(title, actor_id):
+        everyone = [user["id"] for user in user_store.all() if user["is_active"]]
+        actor = user_store.get(actor_id)
+        notification_store.add(everyone, actor_id, "mission",
+                               f"{actor['username'] if actor else 'An administrator'} set a new mission: “{title}”",
+                               url_for("missions"))
+
+    @app.post("/missions/<int:mission_id>/decide")
+    def mission_decide(mission_id):
+        admin_required()
+        mission = mission_store.mission(mission_id)
+        decision = request.form.get("decision", "")
+        note = mission_text("note", 1000)[:1000]
+        reward = wallet_amount(request.form.get("reward", ""), allow_zero=True)
+        if mission is None:
+            flash("That mission no longer exists.", "error")
+        elif mission["approval"] != "proposed":
+            flash("That mission was already decided.", "error")
+        elif decision not in ("approved", "declined"):
+            flash("Choose Approve or Decline.", "error")
+        elif decision == "declined" and not note:
+            flash("Say why when declining a mission.", "error")
+        elif reward is None:
+            flash(f"The reward is a whole number of points from 0 to {WALLET_MAX:,}.", "error")
+        else:
+            mission_store.decide(mission_id, decision, note, reward)
+            if decision == "approved":
+                notification_store.add([mission["created_by"]], g.user["id"], "mission",
+                                       f"{g.user['username']} approved your mission “{mission['title']}”",
+                                       url_for("missions", _anchor=f"mission-{mission_id}"))
+                announce_mission(mission["title"], mission["created_by"])
+                flash(f"“{mission['title']}” approved. Everyone can now submit their work for it.", "success")
+            else:
+                notification_store.add([mission["created_by"]], g.user["id"], "mission",
+                                       f"{g.user['username']} declined your mission “{mission['title']}”: {note}",
+                                       url_for("missions", _anchor=f"mission-{mission_id}"))
+                flash(f"“{mission['title']}” declined.", "success")
+        return redirect(url_for("missions", _anchor="mission-proposals"), code=303)
 
     @app.post("/missions/<int:mission_id>/open")
     def mission_open(mission_id):
@@ -2518,10 +2594,14 @@ def create_app(test_config=None):
 
     @app.post("/missions/<int:mission_id>/delete")
     def mission_delete(mission_id):
-        admin_required()
-        if mission_store.mission(mission_id) is not None:
+        mission = mission_store.mission(mission_id)
+        if mission is not None and not g.user["is_admin"] and (
+                mission["created_by"] != g.user["id"] or mission["approval"] == "approved"):
+            abort(403, "You can only withdraw your own mission before it's approved.")
+        if mission is not None:
             mission_store.delete(mission_id)
-            flash("Mission deleted, with the work submitted for it.", "success")
+            flash("Mission deleted, with the work submitted for it." if mission["approval"] == "approved"
+                  else "Mission proposal removed.", "success")
         return redirect(url_for("missions"), code=303)
 
     @app.post("/missions/<int:mission_id>/submit")
@@ -2531,6 +2611,8 @@ def create_app(test_config=None):
         error = None
         if mission is None:
             error = "That mission no longer exists."
+        elif mission["approval"] != "approved":
+            error = "This mission hasn't been approved yet."
         elif not mission["is_open"]:
             error = "This mission is closed, so no new work can be submitted."
         elif mission_store.active_submission(mission_id, g.user["id"]):

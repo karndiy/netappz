@@ -1229,9 +1229,9 @@ body.is-locked { overflow: hidden; }
 .mission > .request-item:first-child { padding-top: 0; border-top: 0; }
 .mission-submissions { margin-top: 4px; }
 .mission-submission { padding-left: 14px; }
-.is-pending .request-status { background: var(--mac-orange-tint); color: var(--mac-orange-text); }
+.is-pending .request-status, .is-proposed .request-status { background: var(--mac-orange-tint); color: var(--mac-orange-text); }
 .is-approved .request-status { background: var(--mac-green-tint); color: var(--mac-green-text); }
-.is-returned .request-status { background: var(--mac-red-tint); color: var(--mac-red-text); }
+.is-returned .request-status, .is-declined .request-status { background: var(--mac-red-tint); color: var(--mac-red-text); }
 .mission-submit { margin-top: 6px; padding: 12px 0 0; border-top: 1px solid var(--mac-separator); }
 .mission-new { margin-top: 18px; background: var(--mac-surface); }
 .mission-review-form { display: flex; flex: none; flex-wrap: wrap; align-items: flex-start; gap: 6px; max-width: 360px; }
