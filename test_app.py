@@ -1958,6 +1958,62 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual((economy["trend"][-1]["created"], economy["trend"][-1]["used"]), (1200, 400))
         self.assertIn("Supply is high", self.client.get("/wallet").get_data(as_text=True))
 
+    def test_mission_reward_goals(self):
+        token = self._csrf()
+        wallet = self.app.extensions["wallet"]
+        users = self.app.extensions["users"]
+        member_id = users.add("member", "member-password")
+        wallet.deposit(member_id, 1500, "Start", self.admin_id)
+
+        page = self.client.get("/missions").get_data(as_text=True)
+        for text in ("Reward goals", "No rewards yet.", "＋ New reward"):
+            self.assertIn(text, page)
+
+        # Administrators add rewards with details from the Missions page and come back to it.
+        response = self.client.post("/wallet/offers", data={
+            "_csrf_token": token, "back": "missions", "title": "Travel ticket", "price": "3,000", "stock": "2",
+            "details": "Return flight to Chiang Mai"})
+        self.assertTrue(response.headers["Location"].endswith("/missions#goals"))
+        self.client.post("/wallet/offers", data={"_csrf_token": token, "title": "Coffee", "price": "500"})
+        ticket, coffee = sorted(wallet.offers(), key=lambda offer: -offer["price"])
+        self.assertEqual(ticket["details"], "Return flight to Chiang Mai")
+
+        # A member picks a goal and sees how far along they are.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertNotIn("＋ New reward", page)
+        self.assertIn("pick a reward to save for", page)
+        self.client.post("/missions/goal", data={"_csrf_token": token, "offer_id": "999"})
+        self.assertIsNone(wallet.goal(member_id))
+        self.client.post("/missions/goal", data={"_csrf_token": token, "offer_id": str(ticket["id"])})
+        self.assertEqual(wallet.goal(member_id), ticket["id"])
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn("50%", page)
+        self.assertIn("1,500 more points needed", page)
+        self.assertIn("Return flight to Chiang Mai", page)
+        self.assertLess(page.index("Travel ticket</h3>"), page.index("Coffee</h3>"))
+
+        # Not enough points yet; once there are, exchanging reaches the goal and clears it.
+        response = self.client.post(f"/wallet/offers/{ticket['id']}/exchange",
+                                    data={"_csrf_token": token, "back": "missions"})
+        self.assertTrue(response.headers["Location"].endswith("/missions#goals"))
+        self.assertEqual(wallet.balance(member_id), 1500)
+        wallet.reward(member_id, 1500, "Mission", self.admin_id)
+        self.assertIn("You have enough points!", self.client.get("/missions").get_data(as_text=True))
+        self.client.post(f"/wallet/offers/{ticket['id']}/exchange", data={"_csrf_token": token, "back": "missions"})
+        self.assertEqual(wallet.balance(member_id), 0)
+        self.assertIsNone(wallet.goal(member_id))
+        self.assertEqual(wallet.offer(ticket["id"])["stock"], 1)
+
+        # Removing a goal, and deleting a reward someone is saving for, both clear it.
+        self.client.post("/missions/goal", data={"_csrf_token": token, "offer_id": str(coffee["id"])})
+        self.client.post("/missions/goal", data={"_csrf_token": token, "offer_id": ""})
+        self.assertIsNone(wallet.goal(member_id))
+        wallet.set_goal(member_id, coffee["id"])
+        wallet.delete_offer(coffee["id"])
+        self.assertIsNone(wallet.goal(member_id))
+
     def test_announcements_float_on_every_page_colored_by_level(self):
         token = self._csrf()
         store = self.app.extensions["announcements"]

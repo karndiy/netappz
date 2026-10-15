@@ -39,6 +39,9 @@
         {% set my_waiting = missions | map(attribute="mine") | sum(start=[]) | selectattr("status", "equalto", "pending") | list %}
         <li><span class="mission-stat-icon" aria-hidden="true">⏳</span><strong>{{ my_waiting | length }}</strong><span>of your submissions waiting</span></li>
       {% endif %}
+      <li class="{% if goal and not goal.needed %}is-ready{% endif %}"><span class="mission-stat-icon" aria-hidden="true">🏆</span>
+        {% if goal %}<strong>{{ goal.progress }}%</strong><span>to {{ goal.title }}</span>
+        {% else %}<strong>🪙 {{ "{:,}".format(balance) }}</strong><span><a href="#goals">pick a reward to save for</a></span>{% endif %}</li>
     </ul>
 
     {% macro submission_row(item) %}
@@ -142,6 +145,87 @@
             <label class="quest-approval"><input type="checkbox" name="needs_approval" value="1" checked> An administrator approves each reward</label>
             <div class="request-actions"><button type="submit">Add daily quest</button></div>
           </form>
+        </details>
+      {% endif %}
+    </section>
+
+    {# ---------------------------------------------------------------- reward goals #}
+    <section class="mission-section" id="goals" aria-labelledby="goals-heading">
+      <div class="mission-section-head">
+        <h2 id="goals-heading">Reward goals</h2>
+        <p>Save your points for a reward, such as a travel ticket. Pick one as your goal to follow how close you are; when you have enough, exchange your points for it. You have 🪙 {{ "{:,}".format(balance) }} points.</p>
+      </div>
+      <ul class="card-grid goal-grid">
+        {% for offer in rewards %}
+          {% set ready = not offer.needed and offer.stock != 0 %}
+          <li class="mission-card goal-card{% if offer.is_goal %} is-goal{% endif %}{% if ready %} is-complete{% endif %}">
+            <div class="quest-card-top">
+              <span class="quest-icon" aria-hidden="true">🎁</span>
+              <span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(offer.price) }}</span>
+              {% if offer.is_goal %}<span class="request-status">My goal</span>{% endif %}
+            </div>
+            <h3>{{ offer.title }}</h3>
+            {% if offer.details %}<p class="mission-text">{{ offer.details }}</p>{% endif %}
+            <div class="quest-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ offer.progress }}"
+                 aria-label="Points saved for {{ offer.title }}"><span style="width: {{ offer.progress }}%"></span></div>
+            <p class="quest-count">
+              {% if offer.stock == 0 %}Sold out
+              {% elif offer.needed %}{{ offer.progress }}% · {{ "{:,}".format(offer.needed) }} more points needed
+              {% else %}You have enough points!{% endif %}
+              {% if offer.stock > 0 %} · {{ offer.stock }} left{% endif %}
+            </p>
+            <div class="mission-card-foot">
+              <form action="{{ url_for('wallet_exchange', offer_id=offer.id) }}" method="post"
+                    onsubmit="return confirm('Exchange {{ "{:,}".format(offer.price) }} points for this reward?');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="back" value="missions">
+                <button type="submit" {% if not ready %}disabled title="{{ 'Sold out' if offer.stock == 0 else 'Not enough points yet' }}"{% endif %}>Exchange</button>
+              </form>
+              <form action="{{ url_for('mission_goal') }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="offer_id" value="{{ '' if offer.is_goal else offer.id }}">
+                <button class="secondary" type="submit">{{ 'Remove goal' if offer.is_goal else 'Make it my goal' }}</button>
+              </form>
+              {% if current_user.is_admin %}
+                <span class="mission-card-tools">
+                  <form action="{{ url_for('wallet_offer_active', offer_id=offer.id) }}" method="post">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="back" value="missions">
+                    <input type="hidden" name="active" value="0">
+                    <button class="secondary" type="submit">Turn off</button>
+                  </form>
+                </span>
+              {% endif %}
+            </div>
+          </li>
+        {% else %}
+          <li class="mission-empty">{% if current_user.is_admin %}No rewards yet. Add one below, such as a travel ticket.{% else %}No rewards to save for yet.{% endif %}</li>
+        {% endfor %}
+      </ul>
+
+      {% if current_user.is_admin %}
+        <details class="mission-card mission-form-card">
+          <summary>＋ New reward</summary>
+          <form class="request-form" action="{{ url_for('wallet_offer_create') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="back" value="missions">
+            <label for="goal-title">Reward</label>
+            <input id="goal-title" name="title" type="text" maxlength="120" required placeholder="Travel ticket to Chiang Mai">
+            <label for="goal-details">Details <span class="optional">(optional: what it is, dates, where to)</span></label>
+            <textarea id="goal-details" name="details" rows="2" maxlength="1000" placeholder="Return flight for one person, any weekend before March"></textarea>
+            <div class="mission-dates">
+              <div>
+                <label for="goal-price">Price in points</label>
+                <input id="goal-price" name="price" type="text" inputmode="numeric" maxlength="12" required placeholder="5,000">
+              </div>
+              <div>
+                <label for="goal-stock">How many <span class="optional">(empty for no limit)</span></label>
+                <input id="goal-stock" name="stock" type="text" inputmode="numeric" maxlength="12" placeholder="2">
+              </div>
+            </div>
+            <div class="request-actions"><button type="submit">Add reward</button></div>
+          </form>
+          <p class="mission-muted">Rewards also show under Wallet → Exchange, where you can turn them back on or delete them.</p>
         </details>
       {% endif %}
     </section>

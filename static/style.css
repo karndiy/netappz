@@ -1528,6 +1528,10 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .quest-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-right: auto; border-radius: 12px; background: var(--mac-accent-tint); font-size: 22px; }
 .quest-card.is-complete .quest-icon { background: var(--mac-green-tint); }
 .quest-card .quest-progress { margin-top: 4px; }
+.goal-card.is-goal { border-color: var(--mac-accent); box-shadow: 0 0 0 1px var(--mac-accent); }
+.goal-card.is-complete .quest-progress span { background: var(--mac-green); }
+.goal-card button[disabled] { opacity: .5; cursor: not-allowed; }
+.mission-stats li.is-ready strong { color: var(--mac-green); }
 .quest-card .quest-count { margin: 0; }
 .quest-card .mission-card-foot button[disabled] { opacity: .5; cursor: not-allowed; }
 

@@ -168,7 +168,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.50.0"
+HELP_VERSION = "1.51.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -256,10 +256,12 @@ HELP_TOPICS = [
             "You are notified when your work is approved (the points go to your Wallet) or sent back with a note. After a send-back you can submit again.",
             "Daily quests, such as posting on the Feed or converting a file, fill in by themselves as you use the app. When one is done, press Claim. Quests start again every day at midnight (Thailand time).",
             "Have an idea for a mission? Press ＋ Propose a mission; it starts once an administrator approves it. Add a picture to promote it: it shows at the top of the mission's card.",
+            "Reward goals show what your points can buy, such as a travel ticket. Press Make it my goal on one to follow how close you are; it shows at the top of the page. When you have enough points, press Exchange.",
         ],
         "admin": [
             "Add missions with an optional reward, dates and picture, approve or send back work and quest claims under Needs your attention, and approve or decline proposed missions.",
             "Change or remove a mission's picture with Change picture on its card.",
+            "Add rewards people can save for under Reward goals with ＋ New reward: a name, details, the price in points and how many there are. Turn one off from its card; turn it back on or delete it under Wallet → Exchange.",
             "Add daily quests with what to do, how many times a day and the reward, and turn them off or delete them.",
         ],
     },
@@ -277,7 +279,7 @@ HELP_TOPICS = [
         ],
         "admin": [
             "Administrators deposit points into anyone's wallet, or take them back, and see everyone's balance and history.",
-            "Under Exchange, add rewards with a price and how many there are, and turn them off or delete them. You are notified when someone exchanges.",
+            "Under Exchange, add rewards with details, a price and how many there are, and turn them off or delete them. You are notified when someone exchanges.",
         ],
     },
     {
@@ -323,6 +325,16 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.51.0",
+        "date": "2026-10-15",
+        "changes": [
+            "New Reward goals on the Missions page (request #21: set goals to exchange points for rewards such as travel tickets). Each reward shows its price, details and a bar of how many of the points you already have.",
+            "Press Make it my goal on a reward to save for it: the top of the page shows how close you are, and the card says how many more points you need.",
+            "When you have enough points, press Exchange right on the card. Reaching your goal clears it so you can pick the next one.",
+            "Administrators add rewards, with details such as a trip's dates, from the Missions page or Wallet → Exchange.",
+        ],
+    },
     {
         "version": "1.50.0",
         "date": "2026-10-15",
@@ -1586,6 +1598,19 @@ def create_app(test_config=None):
             )
             """
         )
+        # Reward goals (1.51.0): rewards can say more about themselves (a trip's dates, where to), and each
+        # person can pick one reward as the goal they save their points for.
+        if "details" not in table_columns(connection, "wallet_offers"):
+            connection.execute("ALTER TABLE wallet_offers ADD COLUMN details TEXT NOT NULL DEFAULT ''")
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS reward_goals (
+                user_id INTEGER PRIMARY KEY,
+                offer_id INTEGER NOT NULL,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         # Announcements (1.38.0): floating messages for everyone, set by administrators.
         connection.execute(
             f"""
@@ -1921,7 +1946,7 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 self._add(connection, user_id, amount, "reward", note, admin_id)
 
-        offer_columns = "id, title, price, stock, is_active"
+        offer_columns = "id, title, details, price, stock, is_active"
 
         def offers(self, active_only=False):
             where = "WHERE is_active = 1 " if active_only else ""
@@ -1938,11 +1963,11 @@ def create_app(test_config=None):
                 ).fetchone()
             return dict(row) if row else None
 
-        def add_offer(self, title, price, stock, admin_id):
+        def add_offer(self, title, price, stock, admin_id, details=""):
             with notes_connection() as connection:
                 connection.execute(
-                    sql("INSERT INTO wallet_offers (title, price, stock, created_by) VALUES (?, ?, ?, ?)"),
-                    (title, price, stock, admin_id),
+                    sql("INSERT INTO wallet_offers (title, details, price, stock, created_by) VALUES (?, ?, ?, ?, ?)"),
+                    (title, details, price, stock, admin_id),
                 )
 
         def set_offer_active(self, offer_id, is_active):
@@ -1952,7 +1977,24 @@ def create_app(test_config=None):
 
         def delete_offer(self, offer_id):
             with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM reward_goals WHERE offer_id = ?"), (offer_id,))
                 connection.execute(sql("DELETE FROM wallet_offers WHERE id = ?"), (offer_id,))
+
+        def goal(self, user_id):
+            """The reward this person is saving for, or None."""
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT offer_id FROM reward_goals WHERE user_id = ?"), (user_id,)
+                ).fetchone()
+            return row["offer_id"] if row else None
+
+        def set_goal(self, user_id, offer_id):
+            """Pick the reward to save for; None clears the goal."""
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM reward_goals WHERE user_id = ?"), (user_id,))
+                if offer_id is not None:
+                    connection.execute(sql("INSERT INTO reward_goals (user_id, offer_id) VALUES (?, ?)"),
+                                       (user_id, offer_id))
 
         def exchange(self, user_id, offer_id):
             """Spend points on an offer; the points leave the system. Returns the offer."""
@@ -1970,6 +2012,9 @@ def create_app(test_config=None):
                 self._add(connection, user_id, -row["price"], "exchange", row["title"][:WALLET_NOTE], user_id)
                 if row["stock"] > 0:
                     connection.execute(sql("UPDATE wallet_offers SET stock = stock - 1 WHERE id = ?"), (offer_id,))
+                # Reaching the goal: the reward is theirs, so they can pick the next one.
+                connection.execute(sql("DELETE FROM reward_goals WHERE user_id = ? AND offer_id = ?"),
+                                   (user_id, offer_id))
             return dict(row)
 
         def economy(self, today=None):
@@ -2025,6 +2070,7 @@ def create_app(test_config=None):
                 connection.execute(sql("UPDATE wallet_entries SET other_id = NULL WHERE other_id = ?"), (user_id,))
                 connection.execute(sql("UPDATE wallet_entries SET created_by = NULL WHERE created_by = ?"), (user_id,))
                 connection.execute(sql("UPDATE wallet_offers SET created_by = NULL WHERE created_by = ?"), (user_id,))
+                connection.execute(sql("DELETE FROM reward_goals WHERE user_id = ?"), (user_id,))
 
     class QuestStore:
         """Daily quests and the rewards people claim for them."""
@@ -3095,13 +3141,40 @@ def create_app(test_config=None):
         waiting = [{**item, "mission_title": mission["title"]} for mission in live
                    for item in mission["submissions"] if item["status"] == "pending"] if user["is_admin"] else []
         quests = quest_context(user)
+        balance = wallet_store.balance(user["id"])
+        goal_id = wallet_store.goal(user["id"])
+        rewards = []
+        for offer in wallet_store.offers(active_only=True):
+            offer["progress"] = min(100, 100 * max(balance, 0) // offer["price"])
+            offer["needed"] = max(0, offer["price"] - balance)
+            offer["is_goal"] = offer["id"] == goal_id
+            rewards.append(offer)
+        rewards.sort(key=lambda offer: not offer["is_goal"])  # the goal first, the rest by price
         return render_template(
             "missions.html", **quests, missions=[m for m in live if m["is_open"] and m["phase"] != "ended"],
             closed=[m for m in live if not m["is_open"] or m["phase"] == "ended"], waiting=waiting,
             proposals=[m for m in everything if m["approval"] == "proposed"],
             declined=[m for m in everything if m["approval"] == "declined" and m["created_by"] == user["id"]],
             statuses=MISSION_STATUSES, approvals=MISSION_APPROVALS, form=session.pop("mission_form", None),
+            rewards=rewards, balance=balance, goal=next((offer for offer in rewards if offer["is_goal"]), None),
         )
+
+    @app.post("/missions/goal")
+    def mission_goal():
+        """Pick a reward to save points for, or clear the goal."""
+        offer_id = request.form.get("offer_id", "").strip()
+        if not offer_id:
+            wallet_store.set_goal(g.user["id"], None)
+            flash("Goal removed.", "success")
+        else:
+            offer = wallet_store.offer(int(offer_id)) if offer_id.isdigit() else None
+            if offer is None or not offer["is_active"]:
+                flash("That reward isn't available.", "error")
+            else:
+                wallet_store.set_goal(g.user["id"], offer["id"])
+                flash(f"Your goal is {offer['title']} for {offer['price']:,} points. Missions and quests get you there.",
+                      "success")
+        return redirect(url_for("missions", _anchor="goals"), code=303)
 
     def mission_dates():
         """(starts_on, ends_on, error) from the form; each date is optional, as YYYY-MM-DD."""
@@ -3548,16 +3621,25 @@ def create_app(test_config=None):
                   f"{person['username']}.", "success")
         return redirect(url_for("wallet", _anchor="deposit"), code=303)
 
+    def exchange_back():
+        """Rewards are shown on both Wallet → Exchange and Missions → Reward goals; go back to where it came from."""
+        if request.form.get("back") == "missions":
+            return redirect(url_for("missions", _anchor="goals"), code=303)
+        return redirect(url_for("wallet", _anchor="exchange"), code=303)
+
     @app.post("/wallet/offers")
     def wallet_offer_create():
         admin_required()
         title = " ".join(request.form.get("title", "").split())
+        details = mission_text("details", WALLET_NOTE * 5)
         price = wallet_amount(request.form.get("price", ""))
         stock = request.form.get("stock", "").strip()
         stock = -1 if not stock else wallet_amount(stock)
         error = None
         if not title or len(title) > 120:
             error = "Give the offer a name under 120 characters."
+        elif len(details) > WALLET_NOTE * 5:
+            error = f"Keep the details under {WALLET_NOTE * 5:,} characters."
         elif price is None:
             error = f"The price is a whole number of points from 1 to {WALLET_MAX:,}."
         elif stock is None:
@@ -3565,9 +3647,9 @@ def create_app(test_config=None):
         if error:
             flash(error, "error")
         else:
-            wallet_store.add_offer(title, price, stock, g.user["id"])
+            wallet_store.add_offer(title, price, stock, g.user["id"], details)
             flash(f"Offer added: {title} for {price:,} points.", "success")
-        return redirect(url_for("wallet", _anchor="exchange"), code=303)
+        return exchange_back()
 
     @app.post("/wallet/offers/<int:offer_id>/active")
     def wallet_offer_active(offer_id):
@@ -3577,7 +3659,7 @@ def create_app(test_config=None):
             is_active = request.form.get("active") == "1"
             wallet_store.set_offer_active(offer_id, is_active)
             flash(f"“{offer['title']}” is {'on' if is_active else 'off: people no longer see it'}.", "success")
-        return redirect(url_for("wallet", _anchor="exchange"), code=303)
+        return exchange_back()
 
     @app.post("/wallet/offers/<int:offer_id>/delete")
     def wallet_offer_delete(offer_id):
@@ -3585,7 +3667,7 @@ def create_app(test_config=None):
         if wallet_store.offer(offer_id) is not None:
             wallet_store.delete_offer(offer_id)
             flash("Offer deleted.", "success")
-        return redirect(url_for("wallet", _anchor="exchange"), code=303)
+        return exchange_back()
 
     @app.post("/wallet/offers/<int:offer_id>/exchange")
     def wallet_exchange(offer_id):
@@ -3599,7 +3681,7 @@ def create_app(test_config=None):
                                    url_for("wallet", _anchor="wallet-all"))
             flash(f"Exchanged {offer['price']:,} points for {offer['title']}. An administrator will hand it over.",
                   "success")
-        return redirect(url_for("wallet", _anchor="exchange"), code=303)
+        return exchange_back()
 
     # ------------------------------------------------------------------- feed
 

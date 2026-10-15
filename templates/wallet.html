@@ -137,6 +137,7 @@
         {% for offer in offers %}
           <li class="mission-card wallet-offer {{ '' if offer.is_active else 'is-off' }}">
             <h3>{{ offer.title }}</h3>
+            {% if offer.details %}<p class="request-details">{{ offer.details }}</p>{% endif %}
             <p class="wallet-offer-price">🪙 {{ "{:,}".format(offer.price) }} <small>points</small></p>
             <p class="request-meta">
               {% if offer.stock < 0 %}No limit{% elif offer.stock == 0 %}Sold out{% else %}{{ offer.stock }} left{% endif %}
@@ -175,6 +176,8 @@
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <label for="offer-title">Reward</label>
             <input id="offer-title" name="title" type="text" maxlength="120" required placeholder="Coffee voucher">
+            <label for="offer-details">Details <span class="optional">(optional: what it is, dates, where to)</span></label>
+            <textarea id="offer-details" name="details" rows="2" maxlength="1000" placeholder="Return flight Bangkok–Chiang Mai for one person"></textarea>
             <label for="offer-price">Price in points</label>
             <input id="offer-price" name="price" type="text" inputmode="numeric" maxlength="12" required placeholder="500">
             <label for="offer-stock">How many <span class="optional">(empty for no limit)</span></label>
