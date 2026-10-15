@@ -79,8 +79,21 @@ class FileManagerTests(unittest.TestCase):
         response.close()
 
     def test_no_login_is_required_and_path_traversal_is_rejected(self):
-        self.assertEqual(self.client.get("/").status_code, 200)
-        self.assertEqual(self.client.get("/?path=../outside").status_code, 400)
+        self.assertEqual(self.client.get("/files").status_code, 200)
+        self.assertEqual(self.client.get("/files?path=../outside").status_code, 400)
+
+    def test_feed_is_the_home_page_and_files_sits_below_it(self):
+        (self.root / "docs").mkdir()
+        page = self.client.get("/").get_data(as_text=True)
+        self.assertIn('class="sidebar-link" href="/feed" title="Feed" aria-current="page"', page)
+        self.assertIn('class="sidebar-brand" href="/feed"', page)
+        menu = page.split('<nav class="sidebar-nav"')[1].split("</nav>")[0]
+        self.assertEqual(re.findall(r'class="sidebar-link" href="([^"]+)"', menu)[:2], ["/feed", "/files"])
+        self.assertIn("Shared files", self.client.get("/files").get_data(as_text=True))
+        # Old links to a folder still open it in Files.
+        response = self.client.get("/?path=docs")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/files?path=docs")
 
     def test_update_log_page_lists_versions_and_changes(self):
         response = self.client.get("/updates?per=0")
@@ -2213,7 +2226,7 @@ class FileManagerTests(unittest.TestCase):
         response = client2.post("/login", data={
             "_csrf_token": token2, "username": "admin", "password": "admin-password", "next": "//evil.example/",
         })
-        self.assertEqual(response.headers["Location"], "/")
+        self.assertEqual(response.headers["Location"], "/feed")
 
         with client.session_transaction() as sess:
             token = sess["_csrf_token"]

@@ -168,7 +168,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.52.0"
+HELP_VERSION = "1.53.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -177,6 +177,7 @@ HELP_TOPICS = [
             "Open the app at http://netappz.local from any phone, tablet or computer on the same network.",
             "Sign in with your username and password. No account yet? Choose Sign up on the sign-in page; an administrator may need to approve it before you can sign in.",
             "The menu down the left side (across the top on phones) takes you to each part of the app. Hold the pointer over an icon to see its name.",
+            "After you sign in you land on the Feed, the home page. The logo at the top of the menu always brings you back to it.",
             "At the bottom of the menu are Notifications, your profile, Wallet with your points, Settings and Log out.",
             "Messages floating across the top of the page are announcements from an administrator. Press ✕ to close one on this device.",
         ],
@@ -185,25 +186,26 @@ HELP_TOPICS = [
         ],
     },
     {
-        "key": "files", "title": "Files", "icon": "📁", "endpoint": "index",
-        "summary": "Shared folders on the server that everyone on the network can use.",
-        "steps": [
-            "Click a folder to open it. The path at the top takes you back up.",
-            "Create folder makes a folder inside the one you are in: type its name and press Create.",
-            "Upload files sends files into the folder you are in; Or upload a folder sends a whole folder.",
-            "Click a file to download it. Downloading a folder gives you a ZIP of everything in it.",
-            "Rename and Delete are next to each file and folder. Delete asks you to confirm first, and can't be undone.",
-        ],
-    },
-    {
         "key": "feed", "title": "Feed", "icon": "📰", "endpoint": "feed",
-        "summary": "Share posts with text, photos and videos, then like and comment on them.",
+        "summary": "The home page: share posts with text, photos and videos, then like and comment on them.",
         "steps": [
             "Write in the new-post box at the top. Add up to 10 photos (JPG, PNG, GIF, WebP, HEIC, up to 25 MB) or videos (MP4, MOV, WebM, up to 500 MB) by choosing, dragging or pasting them.",
             "Type @name to mention someone; they are notified.",
             "Press Like or double-tap a photo to like a post. Write a comment under the post, or use Reply to answer someone.",
             "The ⋯ menu on your own posts lets you edit or delete them, and copy a link to any post.",
             "Click someone's name or photo to see their profile and all their posts.",
+        ],
+    },
+    {
+        "key": "files", "title": "Files", "icon": "📁", "endpoint": "index",
+        "summary": "Shared folders on the server that everyone on the network can use.",
+        "steps": [
+            "Files is the second icon in the menu, just below Feed (the address is /files).",
+            "Click a folder to open it. The path at the top takes you back up.",
+            "Create folder makes a folder inside the one you are in: type its name and press Create.",
+            "Upload files sends files into the folder you are in; Or upload a folder sends a whole folder.",
+            "Click a file to download it. Downloading a folder gives you a ZIP of everything in it.",
+            "Rename and Delete are next to each file and folder. Delete asks you to confirm first, and can't be undone.",
         ],
     },
     {
@@ -326,6 +328,14 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.53.0",
+        "date": "2026-10-15",
+        "changes": [
+            "The Feed is now the home page (request #25: make the home page the Feed and move the Files icon down to where the Feed was). Signing in and the logo at the top of the menu take you to the Feed.",
+            "Files moved down to the second icon in the menu, below Feed, and now lives at /files. Old links to folders still open them.",
+        ],
+    },
     {
         "version": "1.52.0",
         "date": "2026-10-15",
@@ -2680,7 +2690,7 @@ def create_app(test_config=None):
 
     def safe_next(target):
         # Only paths on this site, never another host ("//evil.example" or "https://…").
-        return target if target and target.startswith("/") and not target.startswith("//") else url_for("index")
+        return target if target and target.startswith("/") and not target.startswith("//") else url_for("feed")
 
     def sign_in(user):
         session.clear()
@@ -2755,7 +2765,7 @@ def create_app(test_config=None):
                 user_id = user_store.add(username, password, is_admin=True)
                 sign_in(user_store.get(user_id))
                 flash(f"Welcome, {username}! You're the administrator: add other people on the Settings page.", "success")
-                return redirect(url_for("index"), code=303)
+                return redirect(url_for("feed"), code=303)
         return render_template("auth.html", mode="setup", error=error, username=username), (400 if error else 200)
 
     def check_new_account(username, password, confirm, check_name=True):
@@ -2803,7 +2813,7 @@ def create_app(test_config=None):
         if user_store.count() == 0:
             return redirect(url_for("setup"))
         if g.user:
-            return redirect(url_for("index"))
+            return redirect(url_for("feed"))
         mode = signup_mode()
         if mode == "off":
             flash("Sign-up is turned off. Ask an administrator to add you.", "error")
@@ -2979,7 +2989,7 @@ def create_app(test_config=None):
             return jsonify(status="error", problems=problems), 503
         return jsonify(status="ok")
 
-    @app.get("/")
+    @app.get("/files")
     def index():
         relative = relative_path(request.args.get("path", ""))
         directory = resolve_path(relative.as_posix() if relative.parts else "")
@@ -3932,8 +3942,12 @@ def create_app(test_config=None):
     def can_change(owner_id):
         return g.user["id"] == owner_id or g.user["is_admin"]
 
-    @app.get("/feed")
+    @app.get("/")
+    @app.get("/feed")  # Applied first, so links to the Feed say /feed.
     def feed():
+        """The home page. Old links to "/?path=…" still open that folder in Files."""
+        if request.path == "/" and "path" in request.args:
+            return redirect(url_for("index", path=request.args["path"]))
         before = request.args.get("before", type=int)
         posts = feed_store.posts(g.user["id"], before_id=before)
         older = posts[-1]["id"] if len(posts) == 15 else None
