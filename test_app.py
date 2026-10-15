@@ -1728,6 +1728,96 @@ class FileManagerTests(unittest.TestCase):
         self.client.post(f"/missions/{with_picture['id']}/delete", data={"_csrf_token": token})
         self.assertFalse((folder / with_picture["image"]).exists())
 
+    def _as(self, user_id):
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = user_id
+
+    def _game_post(self, url, token, body=None):
+        return self.client.post(url, json=body or {}, headers={"X-CSRF-Token": token})
+
+    def test_thai_checkers_against_the_computer(self):
+        token = self._csrf()
+        games = self.app.extensions["games"]
+        self.assertIn("Play the computer", self.client.get("/games").get_data(as_text=True))
+        response = self.client.post("/games/bot", data={"_csrf_token": token, "level": "easy"})
+        game_id = int(response.headers["Location"].rsplit("/", 1)[1])
+        self.assertIn("checkers.js", self.client.get(f"/games/{game_id}").get_data(as_text=True))
+        state = self.client.get(f"/games/{game_id}/state").get_json()
+        self.assertEqual((state["you"], state["turn"], state["players"]["b"]), ("w", "w", "Computer (Easy)"))
+        self.assertEqual(len(state["moves"]), 7)
+
+        # Illegal moves and stale boards are refused; a legal move gets the computer's reply.
+        self.assertEqual(self._game_post(f"/games/{game_id}/move", token, {"path": [49, 33], "version": state["version"]}).status_code, 400)
+        self.assertEqual(self._game_post(f"/games/{game_id}/move", token, {"path": state["moves"][0], "version": 99}).status_code, 409)
+        after = self._game_post(f"/games/{game_id}/move", token, {"path": state["moves"][0], "version": state["version"]}).get_json()
+        self.assertEqual((after["turn"], after["plies"]), ("w", 2))
+        self.assertTrue(after["moves"])
+
+        # Someone else can watch but not move.
+        watcher = self.app.extensions["users"].add("watcher", "watcher-password")
+        self._as(watcher)
+        watching = self.client.get(f"/games/{game_id}/state").get_json()
+        self.assertEqual((watching["you"], watching["moves"]), (None, []))
+        self.assertEqual(self._game_post(f"/games/{game_id}/move", token, {"path": after["moves"][0], "version": after["version"]}).status_code, 403)
+        self.assertIn(f"/games/{game_id}", self.client.get("/games").get_data(as_text=True))
+
+        # Resigning ends it, logs it and counts for the daily quest.
+        self._as(self.admin_id)
+        done = self._game_post(f"/games/{game_id}/resign", token).get_json()
+        self.assertEqual((done["status"], done["winner"]), ("finished", "b"))
+        self.assertIn("resigned", done["result"])
+        self.assertEqual(self.app.extensions["activity"].search(area="games")[0]["action"], "finished a game")
+        self.assertEqual(games.get(game_id)["ending"], "resigned")
+
+    def test_thai_checkers_rooms_with_a_bet(self):
+        token = self._csrf()
+        users, wallet, games = self.app.extensions["users"], self.app.extensions["wallet"], self.app.extensions["games"]
+        player_id = users.add("player", "player-password")
+
+        # A bet must be covered; rooms wait for a second player.
+        self.client.post("/games/room", data={"_csrf_token": token, "bet": "100"})
+        self.assertEqual(games.waiting(), [])
+        wallet.deposit(self.admin_id, 1000, "start", self.admin_id)
+        self.client.post("/games/room", data={"_csrf_token": token, "bet": "100"})
+        room = games.waiting()[0]
+        self.assertEqual((room["bet"], room["status"]), (100, "waiting"))
+        self.client.post("/games/room", data={"_csrf_token": token, "bet": "5"})
+        self.assertEqual(len(games.waiting()), 1)
+
+        self._as(player_id)
+        self.client.post(f"/games/{room['id']}/join", data={"_csrf_token": token})
+        self.assertEqual(games.get(room["id"])["status"], "waiting")
+        self.assertIn("have enough points", self.client.get("/games").get_data(as_text=True))
+        wallet.deposit(player_id, 500, "start", self.admin_id)
+        self.client.post(f"/games/{room['id']}/join", data={"_csrf_token": token})
+        game = games.get(room["id"])
+        self.assertEqual((game["status"], game["black_id"]), ("playing", player_id))
+        self.assertEqual((wallet.balance(self.admin_id), wallet.balance(player_id)), (900, 400))
+        self.assertIn("joined your Thai checkers room", self.app.extensions["notifications"].for_user(self.admin_id)[0]["message"])
+
+        # Black waits for White; the winner takes the pot.
+        state = self.client.get(f"/games/{room['id']}/state").get_json()
+        self.assertEqual((state["you"], state["moves"]), ("b", []))
+        done = self._game_post(f"/games/{room['id']}/resign", token).get_json()
+        self.assertEqual(done["winner"], "w")
+        self.assertEqual((wallet.balance(self.admin_id), wallet.balance(player_id)), (1100, 400))
+
+        # A draw gives both bets back.
+        self._as(self.admin_id)
+        self.client.post("/games/room", data={"_csrf_token": token, "bet": "50"})
+        room = games.waiting()[0]
+        self._as(player_id)
+        self.client.post(f"/games/{room['id']}/join", data={"_csrf_token": token})
+        game = games.get(room["id"])
+        board = ["."] * 64
+        board[63], board[0] = "W", "B"
+        games.update(game, state={"board": "".join(board), "turn": "w", "quiet": 39, "last": None, "plies": 80})
+        self._as(self.admin_id)
+        state = self.client.get(f"/games/{room['id']}/state").get_json()
+        done = self._game_post(f"/games/{room['id']}/move", token, {"path": [63, 54], "version": state["version"]}).get_json()
+        self.assertEqual((done["status"], done["winner"]), ("finished", "draw"))
+        self.assertEqual((wallet.balance(self.admin_id), wallet.balance(player_id)), (1100, 400))
+
     def test_daily_quests_count_actions_and_pay_after_approval(self):
         token = self._csrf()
         quests = self.app.extensions["quests"]
@@ -2521,7 +2611,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(notifications.for_user(bee_id), [])
         self.client.post("/feed/posts", data={"_csrf_token": token, "body": "@bee come too"})
         self.assertEqual([a["kind"] for a in notifications.for_user(bee_id)], ["mention"])
-        self.assertIn("3 of 7 kinds on", bee.get("/settings").get_data(as_text=True))
+        self.assertIn(f"3 of {len(__import__('app').NOTIFY_KINDS)} kinds on", bee.get("/settings").get_data(as_text=True))
 
         # Only the author edits a post; the reply has the new text ready to show.
         post_id = self.app.extensions["feed"].posts(self.admin_id)[0]["id"]

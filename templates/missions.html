@@ -9,7 +9,7 @@
 <body>
   {% include "_sidebar.html" %}
   <main class="container missions-page">
-    {% set quest_icons = {"feed_post": "📝", "feed_comment": "💬", "convert": "🔄", "upload": "⬆️", "note": "🗒️", "chat": "🤖"} %}
+    {% set quest_icons = {"feed_post": "📝", "feed_comment": "💬", "convert": "🔄", "upload": "⬆️", "note": "🗒️", "chat": "🤖", "game": "♟️"} %}
     {% set active_quests = quests | selectattr("is_active") | list %}
     {% set quests_done = active_quests | selectattr("claim") | list | length %}
     <section class="heading missions-hero">

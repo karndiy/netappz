@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="{{ lang }}" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>หมากฮอส #{{ game.id }} · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {% include "_sidebar.html" %}
+  <main class="container game-page">
+    <a class="settings-back game-back" href="{{ url_for('games_page') }}">‹ Games</a>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <div class="game-layout" id="game" data-state-url="{{ url_for('game_state', game_id=game.id) }}"
+         data-move-url="{{ url_for('game_move', game_id=game.id) }}" data-resign-url="{{ url_for('game_resign', game_id=game.id) }}"
+         data-poll="{{ poll_ms }}" data-csrf="{{ csrf_token() }}">
+      <section class="game-board-wrap" aria-label="Board">
+        <div class="game-player is-top" id="player-top"></div>
+        <div class="game-board" id="board" role="grid" aria-label="Thai checkers board"></div>
+        <div class="game-player is-bottom" id="player-bottom"></div>
+      </section>
+
+      <aside class="mission-card game-side">
+        <h1>หมากฮอส <span class="mission-muted">#{{ game.id }}</span></h1>
+        <p class="game-status" id="status" aria-live="polite"></p>
+        <p class="request-kind-tag mission-reward" id="bet" hidden></p>
+        <p class="game-error" id="error" role="alert" hidden></p>
+        <dl class="game-facts">
+          <div><dt>Mode</dt><dd>{{ 'Against the computer · ' + levels.get(game.level, game.level) if game.mode == 'bot' else 'Two players' }}</dd></div>
+          <div><dt>Pieces left</dt><dd id="counts"></dd></div>
+          <div><dt>Moves</dt><dd id="plies">{{ game.state.plies }}</dd></div>
+        </dl>
+        {% if game.status == 'waiting' and game.white_id == current_user.id %}
+          <p class="mission-muted">Waiting for someone to join. This page updates by itself. Share the link: <code>{{ request.url }}</code></p>
+        {% elif game.status == 'waiting' %}
+          <form action="{{ url_for('game_join', game_id=game.id) }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <button type="submit">Join{% if game.bet %} and bet {{ "{:,}".format(game.bet) }} points{% endif %}</button>
+          </form>
+        {% endif %}
+        <div class="mission-card-foot">
+          <button class="secondary" type="button" id="resign" hidden>Resign</button>
+          {% if game.mode == 'bot' %}
+            <form action="{{ url_for('game_against_computer') }}" method="post" id="again" hidden>
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" name="level" value="{{ game.level }}">Play again</button>
+            </form>
+          {% endif %}
+        </div>
+        <details class="mission-fold game-rules">
+          <summary>Rules</summary>
+          <ul>
+            <li>Men move one square diagonally forward and capture forward only, by jumping a piece next to them.</li>
+            <li>Capturing is compulsory, and you keep jumping while you can.</li>
+            <li>A man reaching the far row becomes a king (ฮอส). Kings move any distance diagonally and capture by landing on the square right behind the piece.</li>
+            <li>You lose with no pieces or no legal move. 40 king moves in a row without a capture is a draw.</li>
+          </ul>
+        </details>
+      </aside>
+    </div>
+    <script id="game-initial" type="application/json">{{ payload | tojson }}</script>
+  </main>
+  <script src="{{ url_for('static', filename='checkers.js') }}"></script>
+</body>
+</html>

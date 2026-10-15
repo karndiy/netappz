@@ -46,7 +46,7 @@ COPY fonts-thai-aliases.conf /etc/fonts/conf.d/60-thai-aliases.conf
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
-COPY app.py converters.py pdf_editor.py pdf_word.py chat.py telegram_bot.py ./
+COPY app.py checkers.py converters.py pdf_editor.py pdf_word.py chat.py telegram_bot.py ./
 COPY templates ./templates
 COPY static ./static
 

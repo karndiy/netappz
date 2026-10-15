@@ -37,6 +37,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 import chat
+import checkers
 import converters
 import pdf_editor
 import pdf_word
@@ -162,6 +163,7 @@ TRANSLATIONS = {
     "Chat": {"th": "แชท", "lo": "ແຊັດ", "zh": "聊天", "ru": "Чат", "es": "Chat", "la": "Colloquium"},
     "Convert": {"th": "แปลงไฟล์", "lo": "ແປງໄຟລ໌", "zh": "转换", "ru": "Конвертер", "es": "Convertir",
                 "la": "Convertere"},
+    "Games": {"th": "เกม", "lo": "ເກມ", "zh": "游戏", "ru": "Игры", "es": "Juegos", "la": "Ludi"},
     "Missions": {"th": "ภารกิจ", "lo": "ພາລະກິດ", "zh": "任务", "ru": "Миссии", "es": "Misiones", "la": "Munera"},
     "Update log": {"th": "บันทึกอัปเดต", "lo": "ບັນທຶກການອັບເດດ", "zh": "更新日志", "ru": "Журнал обновлений",
                    "es": "Registro de cambios", "la": "Acta renovationum"},
@@ -214,6 +216,7 @@ NOTIFY_KINDS = {
     "request": "News about requests on the Update log",
     "mission": "New missions, and news about mission work",
     "wallet": "Points you receive in your wallet",
+    "game": "Someone joins your game room, or a game you play ends",
 }
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}")
 LOCAL_URL = re.compile(r"https?://[^\s/]+(/\S*)?")
@@ -226,7 +229,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.56.0"
+HELP_VERSION = "1.57.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -333,6 +336,19 @@ HELP_TOPICS = [
         ],
     },
     {
+        "key": "games", "title": "Games: Thai checkers (หมากฮอส)", "icon": "♟️", "endpoint": "games_page",
+        "summary": "Play หมากฮอส against the computer or another person, bet points on a game, or watch one.",
+        "steps": [
+            "Open Games in the menu. Under Play the computer, press Easy, Medium or Hard. You play White and move first.",
+            "To play someone here, enter a bet in points if you like and press Create room. The game starts when someone presses Join on your room; you're notified.",
+            "With a bet, both players put in the same points when the game starts. The winner gets them all; a draw gives them back. Resigning loses the bet.",
+            "On the board, pieces that can move have a green ring. Press one, then the blue dot where it should go. For a double capture, press each landing square in turn.",
+            "Capturing is compulsory and continues while you can. A man that reaches the far row becomes a king (ฮอส) that moves any distance and captures by landing right behind the piece.",
+            "Under Watch a game, open any game being played to follow it live.",
+        ],
+        "admin": ["Administrators can cancel any room that is waiting for a player."],
+    },
+    {
         "key": "wallet", "title": "Wallet", "icon": "🪙", "endpoint": "wallet",
         "summary": "Your points account: balance, deposits, transfers, exchanges and the coin economy.",
         "steps": [
@@ -393,6 +409,16 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.57.0",
+        "date": "2026-10-15",
+        "changes": [
+            "New Games page with Thai checkers (หมากฮอส) (request: a mini game with a computer player at three levels, rooms to play other people, and watching games). Find it as Games in the menu.",
+            "Play the computer at Easy, Medium or Hard, or create a room and play someone here. The board updates by itself, shows the last move, and only lets you make legal moves, including compulsory and multiple captures.",
+            "Bet points on a game between two people (request: bet coins): both players put in the same amount when the game starts, the winner takes it all, a draw gives it back. Bets and winnings show in the Wallet history.",
+            "Anyone can watch a game that's being played, live. Finishing a game also counts for a new daily quest, Finish a game of Thai checkers.",
+        ],
+    },
     {
         "version": "1.56.0",
         "date": "2026-10-15",
@@ -962,7 +988,8 @@ BACKUP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.dump")
 SYSTEM_STATUSES = {"ok": "OK", "warning": "Warning", "problem": "Problem"}
 SYSTEM_CHECK_STATE = "_system_checks"  # app_settings row: the last automatic check
 # Settings → Activity log: what people do in Notes and Chat.
-ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat", "feed": "Feed", "convert": "Convert", "files": "Files"}
+ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat", "feed": "Feed", "convert": "Convert", "files": "Files",
+                  "games": "Games"}
 ACTIVITY_DETAIL = 300  # characters of a note title or chat message kept in the log
 ACTIVITY_KEEP_DAYS = 365
 # Convert page: each person's conversion log. Administrators see and can delete everyone's.
@@ -982,6 +1009,7 @@ QUEST_ACTIONS = {
     "upload": ("files", "uploaded", "Upload files to Network Files"),
     "note": ("notes", "created", "Write a note"),
     "chat": ("chat", "sent a message", "Send a message in Chat"),
+    "game": ("games", "finished a game", "Finish a game of Thai checkers"),
 }
 QUEST_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "declined": "Declined"}
 # Quest days run midnight to midnight in this time zone (hours from UTC); Thailand by default.
@@ -990,7 +1018,8 @@ QUEST_UTC_OFFSET = int(os.environ.get("QUEST_UTC_OFFSET", "7"))
 MISSION_APPROVALS = {"proposed": "Waiting for approval", "approved": "Approved", "declined": "Declined"}
 # Wallet: points people hold. Administrators deposit them, people transfer them, approved missions pay them.
 WALLET_KINDS = {"deposit": "Deposit", "withdraw": "Taken away", "transfer_in": "Received",
-                "transfer_out": "Sent", "reward": "Mission reward", "exchange": "Exchanged"}
+                "transfer_out": "Sent", "reward": "Mission reward", "exchange": "Exchanged",
+                "bet": "Game bet", "bet_win": "Game winnings", "bet_refund": "Bet returned"}
 WALLET_MAX = 1_000_000  # the most points in one deposit, transfer or mission reward
 # Supply and demand: deposits and rewards create points; taking back and exchanging use them up.
 WALLET_CREATED = ("deposit", "reward")
@@ -998,6 +1027,10 @@ WALLET_USED = ("withdraw", "exchange")
 WALLET_TREND_DAYS = 14
 WALLET_PERIOD_DAYS = 30
 WALLET_NOTE = 200
+# Games (Thai checkers): how often the board page asks for the other player's move, in milliseconds.
+GAME_POLL_MS = 1500
+GAME_STATUSES = {"waiting": "Waiting for a player", "playing": "Playing", "finished": "Finished",
+                 "cancelled": "Cancelled"}
 WALLET_SHOWN = 100
 # Announcements float at the top of every page; the level picks the color.
 ANNOUNCEMENT_LEVELS = {"info": "Information", "success": "Good news", "warning": "Important", "urgent": "Urgent"}
@@ -1768,7 +1801,28 @@ def create_app(test_config=None):
             )
             """
         )
+        # Games (1.57.0): Thai checkers against the computer or another person, with an optional bet.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS games (
+                {id_column},
+                mode TEXT NOT NULL,
+                level TEXT NOT NULL DEFAULT '',
+                white_id INTEGER,
+                black_id INTEGER,
+                bet INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                winner TEXT NOT NULL DEFAULT '',
+                ending TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 0,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         for statement in (
+            "CREATE INDEX IF NOT EXISTS games_status ON games (status, id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS quest_claims_once ON quest_claims (quest_id, user_id, day)",
             "CREATE INDEX IF NOT EXISTS activity_log_user ON activity_log (user_id, area, created_at)",
             "CREATE INDEX IF NOT EXISTS wallet_entries_user ON wallet_entries (user_id, id)",
@@ -2060,6 +2114,23 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 self._add(connection, user_id, amount, "reward", note, admin_id)
 
+        def stake(self, players, amount, note):
+            """Takes a game's bet from every player at once, or from nobody if one can't cover it."""
+            with notes_connection() as connection:
+                self.lock(connection)
+                for user_id in players:
+                    if self._balance(connection, user_id) < amount:
+                        raise ValueError(user_id)
+                for user_id in players:
+                    self._add(connection, user_id, -amount, "bet", note, user_id)
+
+        def pay_out(self, payments, note):
+            """Game winnings or returned bets: [(user id, amount, kind, other player's id)]."""
+            with notes_connection() as connection:
+                for user_id, amount, kind, other_id in payments:
+                    if user_id and amount:
+                        self._add(connection, user_id, amount, kind, note, None, other_id)
+
         offer_columns = "id, title, details, price, stock, is_active, image"
 
         def offers(self, active_only=False):
@@ -2274,6 +2345,73 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 connection.execute(sql("DELETE FROM quest_claims WHERE user_id = ?"), (user_id,))
                 connection.execute(sql("UPDATE quests SET created_by = NULL WHERE created_by = ?"), (user_id,))
+
+    class GameStore:
+        """Thai checkers games. The position is kept as JSON; "version" goes up with every change, so two
+        moves sent at the same moment can't both be played."""
+
+        columns = (
+            "games.id, games.mode, games.level, games.white_id, games.black_id, games.bet, games.status, "
+            "games.winner, games.ending, games.state, games.version, whites.username AS white, "
+            f"blacks.username AS black, {time_as('games.created_at')}, {time_as('games.updated_at', 'updated_at')}"
+        )
+
+        def _rows(self, where, values=(), limit=50):
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(f"SELECT {self.columns} FROM games LEFT JOIN users whites ON whites.id = games.white_id "
+                        f"LEFT JOIN users blacks ON blacks.id = games.black_id WHERE {where} "
+                        f"ORDER BY games.id DESC LIMIT {int(limit)}"), values
+                ).fetchall()
+            games = []
+            for row in rows:
+                game = dict(row)
+                game["state"] = json.loads(game["state"])
+                games.append(game)
+            return games
+
+        def get(self, game_id):
+            games = self._rows("games.id = ?", (game_id,), 1)
+            return games[0] if games else None
+
+        def waiting(self):
+            return self._rows("games.status = 'waiting'")
+
+        def live(self):
+            return self._rows("games.status = 'playing'")
+
+        def recent(self, user_id, limit=10):
+            return self._rows("games.status IN ('finished', 'cancelled') AND (games.white_id = ? OR games.black_id = ?)",
+                              (user_id, user_id), limit)
+
+        def create(self, mode, white_id, level="", bet=0):
+            status = "playing" if mode == "bot" else "waiting"
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("INSERT INTO games (mode, level, white_id, bet, status, state) VALUES (?, ?, ?, ?, ?, ?)")
+                    + returning_id,
+                    (mode, level, white_id, bet, status, json.dumps(checkers.new_state())),
+                )
+                return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def update(self, game, **changes):
+            """Saves changes if nobody changed the game since it was read; False if somebody did."""
+            if "state" in changes:
+                changes["state"] = json.dumps(changes["state"])
+            names = ", ".join(f"{name} = ?" for name in changes)
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql(f"UPDATE games SET {names}, version = version + 1, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND version = ?"),
+                    (*changes.values(), game["id"], game["version"]),
+                )
+            return cursor.rowcount == 1
+
+        def delete_user_content(self, user_id):
+            """A deleted account's unfinished games end; finished ones stay for the other player's history."""
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE games SET status = 'cancelled' WHERE status IN ('waiting', 'playing') "
+                                       "AND (white_id = ? OR black_id = ?)"), (user_id, user_id))
 
     class AnnouncementStore:
         """Messages administrators float at the top of every page."""
@@ -2697,6 +2835,8 @@ def create_app(test_config=None):
 
     wallet_store = WalletStore()
     quest_store = QuestStore()
+    game_store = GameStore()
+    app.extensions["games"] = game_store
     app.extensions["quests"] = quest_store
     app.extensions["wallet"] = wallet_store
 
@@ -3049,6 +3189,11 @@ def create_app(test_config=None):
             chat_store.delete_user_content(user_id)
             mission_store.delete_user_content(user_id)
             quest_store.delete_user_content(user_id)
+            for game in game_store.live():  # The other player gets their bet back.
+                if game["bet"] and user_id in (game["white_id"], game["black_id"]):
+                    other_id = game["black_id"] if game["white_id"] == user_id else game["white_id"]
+                    wallet_store.pay_out([(other_id, game["bet"], "bet_refund", None)], f"Thai checkers #{game['id']}")
+            game_store.delete_user_content(user_id)
             wallet_store.delete_user_content(user_id)
             announcement_store.delete_user_content(user_id)
             invalidate_notes(user_id)
@@ -3657,6 +3802,219 @@ def create_app(test_config=None):
             flash(f"{claim['author']}'s quest {'approved' if decision == 'approved' else 'declined'}"
                   + (f", and {claim['reward']:,} points went to their wallet." if paid else "."), "success")
         return redirect(url_for("missions", _anchor="quest-claims"), code=303)
+
+    # ------------------------------------------------------------------ games
+
+    def game_side(game, user):
+        """"w" or "b" if this person plays in the game, else None (they're watching)."""
+        if game and user:
+            if game["white_id"] == user["id"]:
+                return "w"
+            if game["black_id"] == user["id"]:
+                return "b"
+        return None
+
+    def game_names(game):
+        computer = f"Computer ({checkers.LEVELS.get(game['level'], game['level'])})"
+        return {"w": game["white"] or "?", "b": computer if game["mode"] == "bot" else (game["black"] or "")}
+
+    def game_result_text(game):
+        names = game_names(game)
+        if game["status"] == "cancelled":
+            return "Cancelled"
+        if game["winner"] == "draw":
+            return "Draw: 40 king moves in a row without a capture"
+        if game["winner"] in ("w", "b"):
+            how = {"resigned": f"{names[checkers.other(game['winner'])]} resigned",
+                   "captured_all": "every piece captured",
+                   "blocked": "no legal move left"}.get(game["ending"], "")
+            return f"{names[game['winner']]} won" + (f" ({how})" if how else "")
+        return ""
+
+    def game_payload(game, user):
+        state = game["state"]
+        side = game_side(game, user)
+        my_turn = game["status"] == "playing" and side == state["turn"]
+        moves = checkers.legal_moves(state["board"], state["turn"]) if my_turn else []
+        return {
+            "id": game["id"], "mode": game["mode"], "status": game["status"], "version": game["version"],
+            "board": state["board"], "turn": state["turn"], "last": state.get("last"), "you": side,
+            "players": game_names(game), "bet": game["bet"], "counts": checkers.counts(state["board"]),
+            "winner": game["winner"], "result": game_result_text(game),
+            "moves": [move["path"] for move in moves], "must_capture": bool(moves and moves[0]["captured"]),
+            "plies": state.get("plies", 0),
+        }
+
+    def finish_game(game, winner, ending):
+        """After a game has been saved as finished: pay out the bet, log it and tell the players."""
+        names = game_names(game)
+        note = f"Thai checkers #{game['id']}"
+        if game["mode"] == "pvp" and game["bet"]:
+            if winner in ("w", "b"):
+                winner_id = game["white_id"] if winner == "w" else game["black_id"]
+                loser_id = game["black_id"] if winner == "w" else game["white_id"]
+                wallet_store.pay_out([(winner_id, 2 * game["bet"], "bet_win", loser_id)], note)
+            else:
+                wallet_store.pay_out([(game["white_id"], game["bet"], "bet_refund", game["black_id"]),
+                                      (game["black_id"], game["bet"], "bet_refund", game["white_id"])], note)
+        finished = {**game, "status": "finished", "winner": winner, "ending": ending}
+        text = game_result_text(finished)
+        players = [uid for uid in (game["white_id"], game["black_id"]) if uid]
+        for uid in players:
+            activity_log.add(uid, "games", "finished a game", f"#{game['id']}: {text}")
+        if game["mode"] == "pvp":
+            with app.test_request_context():
+                link = url_for("game_page", game_id=game["id"])
+            for uid in players:
+                notification_store.add([uid], None, "game", f"Thai checkers: {text}"
+                                       + (f" · bet {game['bet']:,} points" if game["bet"] else ""), link)
+
+    def ending_for(state, winner):
+        if winner == "draw":
+            return "draw_moves"
+        return "captured_all" if checkers.counts(state["board"])[checkers.other(winner)] == 0 else "blocked"
+
+    def game_error(message, status=409):
+        return jsonify(error=message), status
+
+    @app.get("/games")
+    def games_page():
+        user = g.user
+        mine = [game for game in game_store.live() if game_side(game, user)]
+        return render_template(
+            "games.html", rooms=game_store.waiting(), live=[game for game in game_store.live() if not game_side(game, user)],
+            mine=mine, recent=game_store.recent(user["id"]), levels=checkers.LEVELS, names=game_names,
+            result_text=game_result_text, balance=wallet_store.balance(user["id"]), max_bet=WALLET_MAX,
+        )
+
+    @app.post("/games/bot")
+    def game_against_computer():
+        level = request.form.get("level", "medium")
+        if level not in checkers.LEVELS:
+            level = "medium"
+        game_id = game_store.create("bot", g.user["id"], level=level)
+        return redirect(url_for("game_page", game_id=game_id), code=303)
+
+    @app.post("/games/room")
+    def game_room():
+        bet = wallet_amount(request.form.get("bet", ""), allow_zero=True)
+        error = None
+        if bet is None:
+            error = f"The bet is a whole number of points from 0 to {WALLET_MAX:,}."
+        elif bet and wallet_store.balance(g.user["id"]) < bet:
+            error = "You don't have enough points for that bet."
+        elif any(game["white_id"] == g.user["id"] for game in game_store.waiting()):
+            error = "You already have a room waiting for a player."
+        if error:
+            flash(error, "error")
+            return redirect(url_for("games_page"), code=303)
+        game_id = game_store.create("pvp", g.user["id"], bet=bet)
+        flash("Room created. The game starts when someone joins." + (f" Each player bets {bet:,} points." if bet else ""),
+              "success")
+        return redirect(url_for("game_page", game_id=game_id), code=303)
+
+    @app.post("/games/<int:game_id>/join")
+    def game_join(game_id):
+        game = game_store.get(game_id)
+        if game is None or game["status"] != "waiting":
+            flash("That room isn't waiting for a player any more.", "error")
+            return redirect(url_for("games_page"), code=303)
+        if game["white_id"] == g.user["id"]:
+            flash("This is your own room. Wait for someone to join.", "error")
+            return redirect(url_for("game_page", game_id=game_id), code=303)
+        note = f"Thai checkers #{game_id}"
+        if game["bet"]:
+            try:
+                wallet_store.stake([game["white_id"], g.user["id"]], game["bet"], note)
+            except ValueError as error:
+                short = "You don't" if error.args[0] == g.user["id"] else f"{game['white']} doesn't"
+                flash(f"{short} have enough points for the {game['bet']:,}-point bet.", "error")
+                return redirect(url_for("games_page"), code=303)
+        if not game_store.update(game, black_id=g.user["id"], status="playing"):
+            if game["bet"]:  # Someone else joined first: give the bets back.
+                wallet_store.pay_out([(game["white_id"], game["bet"], "bet_refund", g.user["id"]),
+                                      (g.user["id"], game["bet"], "bet_refund", game["white_id"])], note)
+            flash("Someone else joined that room first.", "error")
+            return redirect(url_for("games_page"), code=303)
+        notification_store.add([game["white_id"]], g.user["id"], "game",
+                               f"{g.user['username']} joined your Thai checkers room. Your move!",
+                               url_for("game_page", game_id=game_id))
+        return redirect(url_for("game_page", game_id=game_id), code=303)
+
+    @app.post("/games/<int:game_id>/cancel")
+    def game_cancel(game_id):
+        game = game_store.get(game_id)
+        if game and game["status"] == "waiting" and (game["white_id"] == g.user["id"] or g.user["is_admin"]):
+            game_store.update(game, status="cancelled")
+            flash("Room cancelled.", "success")
+        return redirect(url_for("games_page"), code=303)
+
+    @app.get("/games/<int:game_id>")
+    def game_page(game_id):
+        game = game_store.get(game_id)
+        if game is None:
+            abort(404)
+        return render_template("game.html", game=game, payload=game_payload(game, g.user), poll_ms=GAME_POLL_MS,
+                               levels=checkers.LEVELS, statuses=GAME_STATUSES)
+
+    @app.get("/games/<int:game_id>/state")
+    def game_state(game_id):
+        game = game_store.get(game_id)
+        if game is None:
+            abort(404)
+        return jsonify(game_payload(game, g.user))
+
+    @app.post("/games/<int:game_id>/move")
+    def game_move(game_id):
+        game = game_store.get(game_id)
+        data = request.get_json(silent=True) or {}
+        side = game_side(game, g.user)
+        if game is None:
+            abort(404)
+        if game["status"] != "playing":
+            return game_error("This game isn't being played.")
+        if side is None:
+            return game_error("You're watching this game.", 403)
+        if game["state"]["turn"] != side or data.get("version") != game["version"]:
+            return game_error("The board has changed. It has been brought up to date.")
+        path = data.get("path")
+        if not isinstance(path, list) or not all(isinstance(square, int) for square in path):
+            return game_error("Choose a move on the board.", 400)
+        try:
+            state, winner = checkers.play(game["state"], path)
+        except ValueError as error:
+            return game_error(str(error), 400)
+        changes = {"state": state}
+        if winner:
+            changes.update(status="finished", winner=winner, ending=ending_for(state, winner))
+        if not game_store.update(game, **changes):
+            return game_error("The board has changed. It has been brought up to date.")
+        if winner:
+            finish_game(game, winner, changes["ending"])
+        elif game["mode"] == "bot":
+            game = game_store.get(game_id)
+            reply = checkers.choose_move(state, game["level"])
+            state, winner = checkers.play(state, reply["path"])
+            changes = {"state": state}
+            if winner:
+                changes.update(status="finished", winner=winner, ending=ending_for(state, winner))
+            if game_store.update(game, **changes) and winner:
+                finish_game(game, winner, changes["ending"])
+        return jsonify(game_payload(game_store.get(game_id), g.user))
+
+    @app.post("/games/<int:game_id>/resign")
+    def game_resign(game_id):
+        game = game_store.get(game_id)
+        side = game_side(game, g.user)
+        if game is None:
+            abort(404)
+        if game["status"] != "playing" or side is None:
+            return game_error("You can only resign from a game you're playing.")
+        winner = checkers.other(side)
+        if not game_store.update(game, status="finished", winner=winner, ending="resigned"):
+            return game_error("The board has changed. Try again.")
+        finish_game(game, winner, "resigned")
+        return jsonify(game_payload(game_store.get(game_id), g.user))
 
     # ----------------------------------------------------------------- wallet
 

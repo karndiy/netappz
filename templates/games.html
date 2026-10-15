@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="{{ lang }}" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Games · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {% include "_sidebar.html" %}
+  <main class="container missions-page games-page">
+    <section class="heading missions-hero">
+      <div>
+        <h1>หมากฮอส · Thai checkers</h1>
+        <p class="page-description">Play the computer, open a room to play someone here (with a bet in points if you like), or watch a game that's on.</p>
+      </div>
+    </section>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <div class="card-grid game-start">
+      <section class="mission-card" aria-labelledby="bot-heading">
+        <div class="quest-card-top"><span class="quest-icon" aria-hidden="true">🤖</span></div>
+        <h2 id="bot-heading">Play the computer</h2>
+        <p class="mission-muted">You play White and move first.</p>
+        <form class="game-levels" action="{{ url_for('game_against_computer') }}" method="post">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          {% for key, label in levels.items() %}
+            <button class="{{ 'secondary' if key != 'medium' else '' }}" type="submit" name="level" value="{{ key }}">{{ label }}</button>
+          {% endfor %}
+        </form>
+      </section>
+
+      <section class="mission-card" aria-labelledby="room-heading">
+        <div class="quest-card-top"><span class="quest-icon" aria-hidden="true">👥</span></div>
+        <h2 id="room-heading">Create a room</h2>
+        <p class="mission-muted">Someone joins to play you. With a bet, both players put in the same points and the winner takes them all; a draw gives them back. You have 🪙 {{ "{:,}".format(balance) }}.</p>
+        <form class="game-room-form" action="{{ url_for('game_room') }}" method="post">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <label for="game-bet">Bet in points <span class="optional">(optional)</span></label>
+          <div>
+            <input id="game-bet" name="bet" type="text" inputmode="numeric" maxlength="12" placeholder="0">
+            <button type="submit">Create room</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    {% macro game_card(game, action) %}
+      {% set who = names(game) %}
+      <li class="mission-card game-card">
+        <div class="quest-card-top">
+          <span class="request-status mission-phase is-{{ 'upcoming' if game.status == 'waiting' else 'running' }}">{{ 'Waiting' if game.status == 'waiting' else 'Playing' }}</span>
+          {% if game.bet %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(game.bet) }} bet</span>{% endif %}
+        </div>
+        <h3><span class="game-dot is-w" aria-hidden="true"></span>{{ who.w }} <span class="mission-muted">vs</span>
+          {% if who.b %}<span class="game-dot is-b" aria-hidden="true"></span>{{ who.b }}{% else %}<em class="mission-muted">waiting…</em>{% endif %}</h3>
+        <p class="mission-muted">#{{ game.id }} · {{ game.state.plies }} moves</p>
+        <div class="mission-card-foot">
+          {% if action == 'join' and game.white_id != current_user.id %}
+            <form action="{{ url_for('game_join', game_id=game.id) }}" method="post">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button type="submit">Join{% if game.bet %} and bet {{ "{:,}".format(game.bet) }}{% endif %}</button>
+            </form>
+          {% else %}
+            <a class="button {{ 'secondary' if action == 'watch' else '' }}" href="{{ url_for('game_page', game_id=game.id) }}">{{ {'watch': 'Watch', 'play': 'Continue', 'join': 'Open room'}[action] }}</a>
+          {% endif %}
+          {% if game.status == 'waiting' and (game.white_id == current_user.id or current_user.is_admin) %}
+            <form class="mission-card-tools" action="{{ url_for('game_cancel', game_id=game.id) }}" method="post">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <button class="secondary" type="submit">Cancel</button>
+            </form>
+          {% endif %}
+        </div>
+      </li>
+    {% endmacro %}
+
+    {% if mine %}
+      <section class="mission-section" aria-labelledby="mine-heading">
+        <div class="mission-section-head"><h2 id="mine-heading">Your games</h2></div>
+        <ul class="card-grid">{% for game in mine %}{{ game_card(game, 'play') }}{% endfor %}</ul>
+      </section>
+    {% endif %}
+
+    <section class="mission-section" aria-labelledby="rooms-heading">
+      <div class="mission-section-head">
+        <h2 id="rooms-heading">Rooms waiting for a player</h2>
+      </div>
+      <ul class="card-grid">
+        {% for game in rooms %}{{ game_card(game, 'join') }}{% else %}<li class="mission-empty">No rooms open. Create one above.</li>{% endfor %}
+      </ul>
+    </section>
+
+    <section class="mission-section" aria-labelledby="live-heading">
+      <div class="mission-section-head">
+        <h2 id="live-heading">Watch a game</h2>
+        <p>Games being played right now.</p>
+      </div>
+      <ul class="card-grid">
+        {% for game in live %}{{ game_card(game, 'watch') }}{% else %}<li class="mission-empty">No games on right now.</li>{% endfor %}
+      </ul>
+    </section>
+
+    {% if recent %}
+      <section class="mission-section" aria-labelledby="recent-heading">
+        <div class="mission-section-head"><h2 id="recent-heading">Your recent games</h2></div>
+        <ul class="game-history">
+          {% for game in recent %}
+            <li><a href="{{ url_for('game_page', game_id=game.id) }}">#{{ game.id }}</a>
+              <span>{{ names(game).w }} vs {{ names(game).b or '—' }}</span>
+              <strong>{{ result_text(game) }}</strong>
+              {% if game.bet and game.status == 'finished' %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(game.bet) }}</span>{% endif %}
+              <span class="mission-muted">{{ game.updated_at[:16] }} UTC</span></li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+  </main>
+</body>
+</html>
