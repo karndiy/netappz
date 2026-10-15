@@ -1638,4 +1638,4 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 .mission-proposal.has-cover .mission-card-close { top: 10px; right: 10px; }
 .mission-proposal.has-cover .mission-card-close .mission-icon-button { background: rgba(255, 255, 255, .9); }
 .mission-image-preview { max-width: 100%; max-height: 220px; margin-top: 6px; border-radius: 10px; object-fit: cover; }
-.mission-form-card input[type="file"], .mission-change-dates input[type="file"] { max-width: 100%; font-size: 14px; }
+.mission-form-card input[type="file"], .mission-change-dates input[type="file"], .request-new input[type="file"] { max-width: 100%; font-size: 14px; }

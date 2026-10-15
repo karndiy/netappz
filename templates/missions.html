@@ -158,7 +158,8 @@
       <ul class="card-grid goal-grid">
         {% for offer in rewards %}
           {% set ready = not offer.needed and offer.stock != 0 %}
-          <li class="mission-card goal-card{% if offer.is_goal %} is-goal{% endif %}{% if ready %} is-complete{% endif %}">
+          <li class="mission-card goal-card{% if offer.is_goal %} is-goal{% endif %}{% if ready %} is-complete{% endif %}{% if offer.image %} has-cover{% endif %}" id="reward-{{ offer.id }}">
+            {% if offer.image %}<img class="mission-cover" src="{{ url_for('mission_image', name=offer.image) }}" alt="" loading="lazy">{% endif %}
             <div class="quest-card-top">
               <span class="quest-icon" aria-hidden="true">🎁</span>
               <span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(offer.price) }}</span>
@@ -187,6 +188,17 @@
                 <button class="secondary" type="submit">{{ 'Remove goal' if offer.is_goal else 'Make it my goal' }}</button>
               </form>
               {% if current_user.is_admin %}
+                <details class="mission-change-dates">
+                  <summary>{{ 'Change picture' if offer.image else 'Add picture' }}</summary>
+                  <form action="{{ url_for('wallet_offer_image', offer_id=offer.id) }}" method="post" enctype="multipart/form-data">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="back" value="missions">
+                    <label class="visually-hidden" for="reward-image-{{ offer.id }}">Picture for {{ offer.title }}</label>
+                    <input id="reward-image-{{ offer.id }}" name="image" type="file" accept="image/*,.heic,.heif">
+                    <button class="secondary" type="submit">Save picture</button>
+                    {% if offer.image %}<button class="secondary" type="submit" name="remove" value="1" formnovalidate>Remove</button>{% endif %}
+                  </form>
+                </details>
                 <span class="mission-card-tools">
                   <form action="{{ url_for('wallet_offer_active', offer_id=offer.id) }}" method="post">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
@@ -206,13 +218,16 @@
       {% if current_user.is_admin %}
         <details class="mission-card mission-form-card">
           <summary>＋ New reward</summary>
-          <form class="request-form" action="{{ url_for('wallet_offer_create') }}" method="post">
+          <form class="request-form" action="{{ url_for('wallet_offer_create') }}" method="post" enctype="multipart/form-data">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="back" value="missions">
             <label for="goal-title">Reward</label>
             <input id="goal-title" name="title" type="text" maxlength="120" required placeholder="Travel ticket to Chiang Mai">
             <label for="goal-details">Details <span class="optional">(optional: what it is, dates, where to)</span></label>
             <textarea id="goal-details" name="details" rows="2" maxlength="1000" placeholder="Return flight for one person, any weekend before March"></textarea>
+            <label for="goal-image">Picture <span class="optional">(optional: shown at the top of the reward's card)</span></label>
+            <input id="goal-image" name="image" type="file" accept="image/*,.heic,.heif" data-preview="goal-image-preview">
+            <img class="mission-image-preview" id="goal-image-preview" alt="" hidden>
             <div class="mission-dates">
               <div>
                 <label for="goal-price">Price in points</label>
@@ -457,7 +472,7 @@
     </details>
   </main>
   <script>
-    // Show the chosen picture before the mission is sent.
+    // Show the chosen picture before the mission or reward is sent.
     document.querySelectorAll("input[data-preview]").forEach((input) => {
       const preview = document.getElementById(input.dataset.preview);
       input.addEventListener("change", () => {

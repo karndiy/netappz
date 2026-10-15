@@ -2014,6 +2014,71 @@ class FileManagerTests(unittest.TestCase):
         wallet.delete_offer(coffee["id"])
         self.assertIsNone(wallet.goal(member_id))
 
+    def test_rewards_have_a_picture_on_their_card(self):
+        from PIL import Image
+        token = self._csrf()
+        wallet = self.app.extensions["wallet"]
+        folder = Path(self.temp_dir.name) / "feed" / "missions"
+
+        def picture(size=(2400, 1200), color="teal"):
+            data = io.BytesIO()
+            Image.new("RGB", size, color).save(data, "PNG")
+            data.seek(0)
+            return data
+
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn('id="goal-image"', page)
+        self.assertIn('id="offer-image"', self.client.get("/wallet").get_data(as_text=True))
+
+        # A new reward keeps its picture, resized, and both pages show it across the top of the card.
+        response = self.client.post("/wallet/offers", data={
+            "_csrf_token": token, "back": "missions", "title": "Travel ticket", "price": "3000",
+            "image": (picture(), "trip.png")}, content_type="multipart/form-data")
+        self.assertTrue(response.headers["Location"].endswith("/missions#goals"))
+        offer = wallet.offers()[0]
+        self.assertRegex(offer["image"], r"^[0-9a-f]{32}\.jpg$")
+        with Image.open(folder / offer["image"]) as image:
+            self.assertEqual(image.size, (1600, 800))
+        for url in ("/missions", "/wallet"):
+            page = self.client.get(url).get_data(as_text=True)
+            self.assertIn(f"/missions/images/{offer['image']}", page)
+            self.assertIn("has-cover", page)
+
+        # A file that isn't a picture is refused and the reward isn't added.
+        self.client.post("/wallet/offers", data={"_csrf_token": token, "title": "Bad", "price": "10",
+                                                 "image": (io.BytesIO(b"not an image"), "fake.png")},
+                         content_type="multipart/form-data")
+        self.assertEqual([o["title"] for o in wallet.offers()], ["Travel ticket"])
+
+        # Only administrators change pictures.
+        member_id = self.app.extensions["users"].add("member", "member-password")
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertEqual(self.client.post(f"/wallet/offers/{offer['id']}/image",
+                                          data={"_csrf_token": token, "remove": "1"}).status_code, 403)
+        self.assertNotIn("Change picture", self.client.get("/missions").get_data(as_text=True))
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+
+        # Replacing or removing the picture deletes the old file; so does deleting the reward.
+        old = offer["image"]
+        response = self.client.post(f"/wallet/offers/{offer['id']}/image", data={
+            "_csrf_token": token, "back": "missions", "image": (picture((300, 300)), "new.png")},
+            content_type="multipart/form-data")
+        self.assertTrue(response.headers["Location"].endswith("/missions#goals"))
+        new = wallet.offer(offer["id"])["image"]
+        self.assertNotEqual(new, old)
+        self.assertFalse((folder / old).exists())
+        self.client.post(f"/wallet/offers/{offer['id']}/image", data={"_csrf_token": token, "remove": "1"})
+        self.assertEqual(wallet.offer(offer["id"])["image"], "")
+        self.assertFalse((folder / new).exists())
+        self.client.post(f"/wallet/offers/{offer['id']}/image", data={
+            "_csrf_token": token, "image": (picture(), "again.png")}, content_type="multipart/form-data")
+        again = wallet.offer(offer["id"])["image"]
+        self.client.post(f"/wallet/offers/{offer['id']}/delete", data={"_csrf_token": token})
+        self.assertIsNone(wallet.offer(offer["id"]))
+        self.assertFalse((folder / again).exists())
+
     def test_announcements_float_on_every_page_colored_by_level(self):
         token = self._csrf()
         store = self.app.extensions["announcements"]

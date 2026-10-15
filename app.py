@@ -168,7 +168,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.51.0"
+HELP_VERSION = "1.52.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -256,12 +256,13 @@ HELP_TOPICS = [
             "You are notified when your work is approved (the points go to your Wallet) or sent back with a note. After a send-back you can submit again.",
             "Daily quests, such as posting on the Feed or converting a file, fill in by themselves as you use the app. When one is done, press Claim. Quests start again every day at midnight (Thailand time).",
             "Have an idea for a mission? Press ＋ Propose a mission; it starts once an administrator approves it. Add a picture to promote it: it shows at the top of the mission's card.",
-            "Reward goals show what your points can buy, such as a travel ticket. Press Make it my goal on one to follow how close you are; it shows at the top of the page. When you have enough points, press Exchange.",
+            "Reward goals are cards showing what your points can buy, such as a travel ticket, with a picture when there is one. Press Make it my goal on one to follow how close you are; it shows at the top of the page. When you have enough points, press Exchange.",
         ],
         "admin": [
             "Add missions with an optional reward, dates and picture, approve or send back work and quest claims under Needs your attention, and approve or decline proposed missions.",
             "Change or remove a mission's picture with Change picture on its card.",
-            "Add rewards people can save for under Reward goals with ＋ New reward: a name, details, the price in points and how many there are. Turn one off from its card; turn it back on or delete it under Wallet → Exchange.",
+            "Add rewards people can save for under Reward goals with ＋ New reward: a name, details, a picture, the price in points and how many there are. Turn one off from its card; turn it back on or delete it under Wallet → Exchange.",
+            "Change or remove a reward's picture with Change picture on its card.",
             "Add daily quests with what to do, how many times a day and the reward, and turn them off or delete them.",
         ],
     },
@@ -279,7 +280,7 @@ HELP_TOPICS = [
         ],
         "admin": [
             "Administrators deposit points into anyone's wallet, or take them back, and see everyone's balance and history.",
-            "Under Exchange, add rewards with details, a price and how many there are, and turn them off or delete them. You are notified when someone exchanges.",
+            "Under Exchange, add rewards with details, a picture, a price and how many there are, and turn them off or delete them. You are notified when someone exchanges.",
         ],
     },
     {
@@ -325,6 +326,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.52.0",
+        "date": "2026-10-15",
+        "changes": [
+            "Rewards can have a picture (request #22: add a picture to a new reward and show it as a card). Choose one under ＋ New reward on the Missions page or Add an offer in Wallet → Exchange; you see it before adding.",
+            "The picture shows across the top of the reward's card, on both Reward goals and Exchange.",
+            "Administrators can change or remove a reward's picture with Change picture on its card. Deleting a reward deletes its picture.",
+        ],
+    },
     {
         "version": "1.51.0",
         "date": "2026-10-15",
@@ -1602,6 +1612,9 @@ def create_app(test_config=None):
         # person can pick one reward as the goal they save their points for.
         if "details" not in table_columns(connection, "wallet_offers"):
             connection.execute("ALTER TABLE wallet_offers ADD COLUMN details TEXT NOT NULL DEFAULT ''")
+        # Reward pictures (1.52.0): a cover image on the reward's card, stored with the mission pictures.
+        if "image" not in table_columns(connection, "wallet_offers"):
+            connection.execute("ALTER TABLE wallet_offers ADD COLUMN image TEXT NOT NULL DEFAULT ''")
         connection.execute(
             f"""
             CREATE TABLE IF NOT EXISTS reward_goals (
@@ -1946,7 +1959,7 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 self._add(connection, user_id, amount, "reward", note, admin_id)
 
-        offer_columns = "id, title, details, price, stock, is_active"
+        offer_columns = "id, title, details, price, stock, is_active, image"
 
         def offers(self, active_only=False):
             where = "WHERE is_active = 1 " if active_only else ""
@@ -1963,12 +1976,17 @@ def create_app(test_config=None):
                 ).fetchone()
             return dict(row) if row else None
 
-        def add_offer(self, title, price, stock, admin_id, details=""):
+        def add_offer(self, title, price, stock, admin_id, details="", image=""):
             with notes_connection() as connection:
                 connection.execute(
-                    sql("INSERT INTO wallet_offers (title, details, price, stock, created_by) VALUES (?, ?, ?, ?, ?)"),
-                    (title, details, price, stock, admin_id),
+                    sql("INSERT INTO wallet_offers (title, details, price, stock, created_by, image) "
+                        "VALUES (?, ?, ?, ?, ?, ?)"),
+                    (title, details, price, stock, admin_id, image),
                 )
+
+        def set_offer_image(self, offer_id, image):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE wallet_offers SET image = ? WHERE id = ?"), (image, offer_id))
 
         def set_offer_active(self, offer_id, is_active):
             with notes_connection() as connection:
@@ -3644,10 +3662,17 @@ def create_app(test_config=None):
             error = f"The price is a whole number of points from 1 to {WALLET_MAX:,}."
         elif stock is None:
             error = "How many are available is a whole number, or leave it empty for no limit."
+        image = ""
+        upload = request.files.get("image")
+        if not error and upload and upload.filename:
+            try:
+                image = save_mission_image(upload)
+            except ValueError as image_error:
+                error = str(image_error)
         if error:
             flash(error, "error")
         else:
-            wallet_store.add_offer(title, price, stock, g.user["id"], details)
+            wallet_store.add_offer(title, price, stock, g.user["id"], details, image)
             flash(f"Offer added: {title} for {price:,} points.", "success")
         return exchange_back()
 
@@ -3664,9 +3689,35 @@ def create_app(test_config=None):
     @app.post("/wallet/offers/<int:offer_id>/delete")
     def wallet_offer_delete(offer_id):
         admin_required()
-        if wallet_store.offer(offer_id) is not None:
+        offer = wallet_store.offer(offer_id)
+        if offer is not None:
             wallet_store.delete_offer(offer_id)
+            remove_mission_image(offer["image"])
             flash("Offer deleted.", "success")
+        return exchange_back()
+
+    @app.post("/wallet/offers/<int:offer_id>/image")
+    def wallet_offer_image(offer_id):
+        admin_required()
+        offer = wallet_store.offer(offer_id)
+        upload = request.files.get("image")
+        if offer is None:
+            flash("That reward no longer exists.", "error")
+        elif request.form.get("remove"):
+            wallet_store.set_offer_image(offer_id, "")
+            remove_mission_image(offer["image"])
+            flash("Picture removed.", "success")
+        elif upload and upload.filename:
+            try:
+                name = save_mission_image(upload)
+            except ValueError as error:
+                flash(str(error), "error")
+            else:
+                wallet_store.set_offer_image(offer_id, name)
+                remove_mission_image(offer["image"])
+                flash(f"New picture for “{offer['title']}”.", "success")
+        else:
+            flash("Choose a picture first.", "error")
         return exchange_back()
 
     @app.post("/wallet/offers/<int:offer_id>/exchange")
@@ -3796,14 +3847,14 @@ def create_app(test_config=None):
     mission_image_dir.mkdir(exist_ok=True)
 
     def save_mission_image(upload):
-        """A mission's cover picture, at most 1600 px wide, as JPEG (no location data kept); its file name."""
+        """A mission's or reward's cover picture, at most 1600 px wide, as JPEG (no location data kept); its file name."""
         from PIL import Image, ImageOps, UnidentifiedImageError
         from pillow_heif import register_heif_opener
 
         register_heif_opener()
         data = upload.read(FEED_MAX_IMAGE + 1)
         if len(data) > FEED_MAX_IMAGE:
-            raise ValueError("Mission pictures can be up to 25 MB.")
+            raise ValueError("Pictures can be up to 25 MB.")
         try:
             with Image.open(io.BytesIO(data)) as image:
                 image = ImageOps.exif_transpose(image).convert("RGB")
