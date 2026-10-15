@@ -168,7 +168,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.53.0"
+HELP_VERSION = "1.54.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -189,7 +189,8 @@ HELP_TOPICS = [
         "key": "feed", "title": "Feed", "icon": "📰", "endpoint": "feed",
         "summary": "The home page: share posts with text, photos and videos, then like and comment on them.",
         "steps": [
-            "Write in the new-post box at the top. Add up to 10 photos (JPG, PNG, GIF, WebP, HEIC, up to 25 MB) or videos (MP4, MOV, WebM, up to 500 MB) by choosing, dragging or pasting them.",
+            "The dashboard at the top shows your wallet balance, this month's points in and out and your reward goal, plus how many missions you can still do, today's quests and the next few missions. Tap a card to open it.",
+            "Write in the new-post box under the dashboard. Add up to 10 photos (JPG, PNG, GIF, WebP, HEIC, up to 25 MB) or videos (MP4, MOV, WebM, up to 500 MB) by choosing, dragging or pasting them.",
             "Type @name to mention someone; they are notified.",
             "Press Like or double-tap a photo to like a post. Write a comment under the post, or use Reply to answer someone.",
             "The ⋯ menu on your own posts lets you edit or delete them, and copy a link to any post.",
@@ -328,6 +329,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.54.0",
+        "date": "2026-10-15",
+        "changes": [
+            "The Feed has a dashboard at the top (request #26: upgrade the Feed UX/UI with a modern macOS look and a dashboard showing the wallet and missions). A wallet card shows your balance, this month's points in and out and your reward goal.",
+            "A missions card next to it shows how many missions you can still do, how many of today's quests are done, and the next few missions with their reward and days left.",
+            "The Feed has a fresher macOS look: a soft tinted background, frosted side cards and rounder cards with gentle shadows. On phones the dashboard cards stack in one column.",
+        ],
+    },
     {
         "version": "1.53.0",
         "date": "2026-10-15",
@@ -3928,11 +3938,43 @@ def create_app(test_config=None):
         context.setdefault("profile", None)
         context.setdefault("before", None)
         context.setdefault("older", None)
+        context.setdefault("dashboard", None)
         return render_template(
             "feed.html", posts=posts, people=feed_people(), me_stats=feed_store.stats(g.user["id"]),
             max_files=FEED_MAX_FILES, accept=",".join([*FEED_IMAGES, *FEED_VIDEOS]),
             form=session.pop("feed_form", None), **context,
         )
+
+    def feed_dashboard(user):
+        """The top of the home page: your wallet, and the missions and daily quests you can do."""
+        balance = wallet_store.balance(user["id"])
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        this_month = [entry for entry in wallet_store.history(user["id"]) if entry["created_at"].startswith(month)]
+        goal = wallet_store.offer(wallet_store.goal(user["id"]) or 0)
+        today, since = quest_day()
+        open_missions = []
+        for mission in mission_store.all():
+            if mission["approval"] != "approved" or not mission["is_open"]:
+                continue
+            mission.update(mission_phase(mission, today))
+            if mission["phase"] == "ended":
+                continue
+            mission["done"] = any(item["user_id"] == user["id"] and item["status"] in ("pending", "approved")
+                                  for item in mission["submissions"])
+            open_missions.append(mission)
+        quests = [{**quest, "done": quest_progress(quest, user["id"], since)}
+                  for quest in quest_store.all(active_only=True) if quest["action"] in QUEST_ACTIONS]
+        return {
+            "balance": balance,
+            "month_in": sum(entry["amount"] for entry in this_month if entry["amount"] > 0),
+            "month_out": -sum(entry["amount"] for entry in this_month if entry["amount"] < 0),
+            "goal": {**goal, "progress": min(100, 100 * max(balance, 0) // goal["price"])}
+            if goal and goal["is_active"] and goal["price"] else None,
+            "missions": [m for m in open_missions if not m["done"]][:3],
+            "mission_count": sum(1 for m in open_missions if not m["done"]),
+            "quests": quests,
+            "quests_done": sum(1 for quest in quests if quest["done"] >= quest["target"]),
+        }
 
     def feed_back(post_id=None, single=False):
         if single and post_id:
@@ -3954,7 +3996,7 @@ def create_app(test_config=None):
         if request.args.get("partial"):  # Infinite scroll asks for just the next posts.
             return render_template("_feed_posts.html", posts=posts, single=False, older=older,
                                    next_url=url_for("feed", before=older, partial=1) if older else "")
-        return feed_render(posts, before=before, older=older)
+        return feed_render(posts, before=before, older=older, dashboard=None if before else feed_dashboard(g.user))
 
     @app.get("/feed/u/<username>")
     def feed_profile(username):

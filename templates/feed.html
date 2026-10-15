@@ -66,6 +66,50 @@
             </a>
           {% endfor %}
         </div>
+        {% if dashboard %}
+          {% set d = dashboard %}
+          <section class="feed-dashboard" aria-label="Your dashboard">
+            <a class="feed-dash-card is-wallet" href="{{ url_for('wallet') }}">
+              <span class="feed-dash-label"><span aria-hidden="true">🪙</span> Wallet</span>
+              <strong class="feed-dash-balance">{{ "{:,}".format(d.balance) }} <small>points</small></strong>
+              <span class="feed-dash-flow">
+                <span class="is-in">↓ {{ "{:,}".format(d.month_in) }} in</span>
+                <span class="is-out">↑ {{ "{:,}".format(d.month_out) }} out</span>
+                <span>this month</span>
+              </span>
+              {% if d.goal %}
+                <span class="feed-dash-goal">
+                  <span>Goal: {{ d.goal.title }} · {{ d.goal.progress }}%</span>
+                  <span class="feed-dash-bar"><span style="width: {{ d.goal.progress }}%"></span></span>
+                </span>
+              {% endif %}
+            </a>
+            <div class="feed-dash-card is-missions">
+              <a class="feed-dash-head" href="{{ url_for('missions') }}">
+                <span class="feed-dash-label"><span aria-hidden="true">🚩</span> Missions</span>
+                <span class="feed-dash-more">Open ›</span>
+              </a>
+              <div class="feed-dash-stats">
+                <a href="{{ url_for('missions') }}"><strong>{{ d.mission_count }}</strong><small>to do</small></a>
+                <a href="{{ url_for('missions', _anchor='quests') }}"><strong>{{ d.quests_done }}/{{ d.quests | length }}</strong><small>quests today</small></a>
+              </div>
+              {% if d.missions %}
+                <ul class="feed-dash-list">
+                  {% for mission in d.missions %}
+                    <li>
+                      <a href="{{ url_for('missions', _anchor='mission-' ~ mission.id) }}">
+                        <span class="feed-dash-title">{{ mission.title }}</span>
+                        <small>{% if mission.reward %}🪙 {{ "{:,}".format(mission.reward) }}{% endif %}{% if mission.reward and mission.phase_label %} · {% endif %}{{ mission.phase_label }}</small>
+                      </a>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="feed-dash-empty">You're all caught up.</p>
+              {% endif %}
+            </div>
+          </section>
+        {% endif %}
       {% endif %}
 
       {% if not single and not profile and not before %}

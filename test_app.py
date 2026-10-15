@@ -95,6 +95,35 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/files?path=docs")
 
+    def test_feed_dashboard_shows_wallet_and_missions(self):
+        token = self._csrf()
+        wallet = self.app.extensions["wallet"]
+        missions = self.app.extensions["missions"]
+        wallet.deposit(self.admin_id, 1250, "Start", self.admin_id)
+        page = self.client.get("/").get_data(as_text=True)
+        dashboard = page.split('<section class="feed-dashboard"')[1].split("</section>")[0]
+        self.assertIn("1,250 <small>points</small>", dashboard)
+        self.assertIn("↓ 1,250 in", dashboard)
+        self.assertIn("You're all caught up.", dashboard)
+        self.assertIn("<strong>0</strong><small>to do</small>", dashboard)
+
+        self.client.post("/missions", data={"_csrf_token": token, "title": "Tidy Projects", "reward": "250"})
+        mission_id = missions.all()[0]["id"]
+        dashboard = self.client.get("/").get_data(as_text=True).split('<section class="feed-dashboard"')[1]
+        self.assertIn("<strong>1</strong><small>to do</small>", dashboard)
+        self.assertIn(f'href="/missions#mission-{mission_id}"', dashboard)
+        self.assertIn("Tidy Projects", dashboard)
+        self.assertIn("🪙 250", dashboard)
+
+        # Once your work is sent in, the mission leaves your to-do list.
+        self.client.post(f"/missions/{mission_id}/submit", data={"_csrf_token": token, "body": "Done"})
+        dashboard = self.client.get("/").get_data(as_text=True).split('<section class="feed-dashboard"')[1]
+        self.assertIn("<strong>0</strong><small>to do</small>", dashboard)
+
+        # Profiles, single posts and older pages don't show it.
+        self.assertNotIn("feed-dashboard", self.client.get("/feed/u/admin").get_data(as_text=True))
+        self.assertNotIn("feed-dashboard", self.client.get("/feed?before=999").get_data(as_text=True))
+
     def test_update_log_page_lists_versions_and_changes(self):
         response = self.client.get("/updates?per=0")
         self.assertEqual(response.status_code, 200)
@@ -1766,7 +1795,7 @@ class FileManagerTests(unittest.TestCase):
     def test_wallet_link_before_log_out_shows_points_unless_hidden(self):
         token = self._csrf()
         self.app.extensions["wallet"].deposit(self.admin_id, 1250, "Start", self.admin_id)
-        page = self.client.get("/").get_data(as_text=True)
+        page = self.client.get("/files").get_data(as_text=True)
         self.assertEqual(page.count("href=\"/wallet\""), 1)
         self.assertLess(page.index('class="topbar-link topbar-user"'), page.index("topbar-wallet"))
         self.assertLess(page.index("topbar-wallet"), page.index("Log out"))
