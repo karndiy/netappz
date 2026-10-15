@@ -1160,6 +1160,64 @@ class FileManagerTests(unittest.TestCase):
         self.assertIn('id="notes-body-links"', page)
         self.assertIn('id="notes-link-open"', page)
 
+    def test_notes_can_be_pinned_to_the_top(self):
+        token = self._csrf()
+        for title in ("Older", "Newer"):
+            self.client.post("/notes/create", data={"_csrf_token": token, "title": title, "content": "Body"})
+        connection = sqlite3.connect(self.app.config["NOTES_DATABASE"])
+        try:
+            older_id = connection.execute("SELECT id FROM notes WHERE title = 'Older'").fetchone()[0]
+            before = connection.execute("SELECT updated_at FROM notes WHERE id = ?", (older_id,)).fetchone()[0]
+        finally:
+            connection.close()
+        page = self.client.get("/notes").get_data(as_text=True)
+        self.assertLess(page.index(">Newer<"), page.index(">Older<"))
+        self.assertNotIn('data-group="pinned"', page)
+
+        response = self.client.post(f"/notes/{older_id}/pin", data={"_csrf_token": token, "pinned": "1", "q": "Old"})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(f"id={older_id}", response.headers["Location"])
+        self.assertIn("q=Old", response.headers["Location"])
+        page = self.client.get(f"/notes?id={older_id}").get_data(as_text=True)
+        self.assertIn('data-group="pinned"', page)
+        self.assertIn('data-group="notes"', page)
+        self.assertLess(page.index(">Older<"), page.index(">Newer<"))
+        self.assertIn("Unpin note", page)
+        connection = sqlite3.connect(self.app.config["NOTES_DATABASE"])
+        try:
+            row = connection.execute("SELECT pinned, updated_at FROM notes WHERE id = ?", (older_id,)).fetchone()
+        finally:
+            connection.close()
+        self.assertEqual(row, (1, before))  # pinning is not an edit
+
+        self.client.post(f"/notes/{older_id}/pin", data={"_csrf_token": token, "pinned": "0"})
+        page = self.client.get("/notes").get_data(as_text=True)
+        self.assertNotIn('data-group="pinned"', page)
+        self.assertLess(page.index(">Newer<"), page.index(">Older<"))
+
+        # Only the owner can pin a note.
+        other_id = self.app.extensions["users"].add("someone", "someone-password")
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = other_id
+        response = self.client.post(f"/notes/{older_id}/pin", data={"_csrf_token": token, "pinned": "1"})
+        self.assertEqual(response.status_code, 404)
+        connection = sqlite3.connect(self.app.config["NOTES_DATABASE"])
+        try:
+            self.assertEqual(connection.execute("SELECT pinned FROM notes WHERE id = ?", (older_id,)).fetchone()[0], 0)
+        finally:
+            connection.close()
+
+    def test_note_editor_can_find_text_in_the_note(self):
+        token = self._csrf()
+        self.client.post("/notes/create", data={"_csrf_token": token, "title": "Trip", "content": "Pack the tent"})
+        page = self.client.get("/notes?new=1").get_data(as_text=True)
+        self.assertIn('id="notes-find-toggle"', page)
+        self.assertIn('id="notes-find-input"', page)
+        # A list search carries into the note's find box so the words are highlighted.
+        page = self.client.get("/notes?q=tent").get_data(as_text=True)
+        self.assertIn('id="notes-find-input" type="search" placeholder="Find in note" aria-label="Find in note"', page)
+        self.assertRegex(page, r'id="notes-find-input"[^>]*value="tent"')
+
     def test_healthz_reports_ok(self):
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)

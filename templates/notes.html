@@ -36,12 +36,21 @@
       <p class="notes-count">{{ total }} note{{ '' if total == 1 else 's' }} · only you can see them. Administrators see a log of note titles added, changed and deleted.</p>
 
       <ul class="notes-list" id="notes-list">
+        {% set has_pinned = notes | selectattr("pinned") | list %}
         {% for note in notes %}
-          <li data-search="{{ (note.title ~ ' ' ~ note.content) | lower }}">
+          {% if has_pinned and loop.first %}
+            <li class="notes-group" data-group="pinned">Pinned</li>
+          {% elif has_pinned and not note.pinned and loop.previtem.pinned %}
+            <li class="notes-group" data-group="notes">Notes</li>
+          {% endif %}
+          <li data-pinned="{{ 1 if note.pinned else 0 }}" data-search="{{ (note.title ~ ' ' ~ note.content) | lower }}">
             <a class="notes-item{% if selected and note.id == selected.id %} is-selected{% endif %}"
                href="{{ url_for('notes', id=note.id, q=query or None) }}"
                {% if selected and note.id == selected.id %}aria-current="true"{% endif %}>
-              <strong class="notes-item-title" data-note-title="{{ note.id }}">{{ note.title }}</strong>
+              <strong class="notes-item-title">
+                {%- if note.pinned %}<svg class="notes-pin-mark" viewBox="0 0 20 20" aria-label="Pinned" role="img"><path d="M7 3h6l-1 5 3 3v1H5v-1l3-3zM10 12v5"/></svg>{% endif -%}
+                <span data-note-title="{{ note.id }}">{{ note.title }}</span>
+              </strong>
               <span class="notes-item-meta">
                 <time datetime="{{ note.updated_at | note_iso }}" data-format="short">{{ note.updated_at | note_short_date }}</time>
                 <span class="notes-item-preview" data-note-preview="{{ note.id }}">{{ note.content.splitlines()[0] if note.content else '' }}</span>
@@ -79,6 +88,25 @@
             <svg class="icon-exit" viewBox="0 0 20 20" aria-hidden="true" hidden><path d="M7.5 3v4.5H3M17 7.5h-4.5V3M12.5 17v-4.5H17M3 12.5h4.5V17"/></svg>
           </button>
           {% if selected or creating %}
+            <button class="notes-icon-button" id="notes-find-toggle" type="button" aria-controls="notes-find"
+                    title="Find in note (⌘F)" aria-label="Find in note" aria-pressed="false">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 3.5h7l4 4V11M15 7.5h-4v-4M4 3.5v13h5"/><circle cx="13" cy="14" r="2.6"/><path d="m15 16 2 2"/></svg>
+            </button>
+          {% endif %}
+          {% if selected %}
+            <form action="{{ url_for('pin_note', note_id=selected.id) }}" method="post">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="pinned" value="{{ 0 if selected.pinned else 1 }}">
+              {% if query %}<input type="hidden" name="q" value="{{ query }}">{% endif %}
+              <button class="notes-icon-button{% if selected.pinned %} is-on{% endif %}" id="notes-pin" type="submit"
+                      title="{{ 'Unpin note' if selected.pinned else 'Pin note' }}"
+                      aria-label="{{ 'Unpin note' if selected.pinned else 'Pin note' }}"
+                      aria-pressed="{{ 'true' if selected.pinned else 'false' }}">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3h6l-1 5 3 3v1H5v-1l3-3zM10 12v5"/></svg>
+              </button>
+            </form>
+          {% endif %}
+          {% if selected or creating %}
             <button class="notes-icon-button" id="notes-insert-link" type="button"
                     title="Insert link (⌘K)" aria-label="Insert link">
               <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3.5 3.5 0 0 0 5 0l2.5-2.5a3.5 3.5 0 0 0-5-5L9.8 5.2M11.5 8.5a3.5 3.5 0 0 0-5 0L4 11a3.5 3.5 0 0 0 5 5l1.2-1.2"/></svg>
@@ -101,6 +129,19 @@
       </div>
 
       {% if selected or creating %}
+        <div class="notes-find" id="notes-find" role="search" hidden>
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+          <input id="notes-find-input" type="search" placeholder="Find in note" aria-label="Find in note"
+                 maxlength="100" autocomplete="off" value="{{ query }}">
+          <span class="notes-find-count" id="notes-find-count" aria-live="polite"></span>
+          <button class="notes-icon-button" id="notes-find-prev" type="button" title="Previous match (⇧Enter)" aria-label="Previous match">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12.5 5-5 5 5"/></svg>
+          </button>
+          <button class="notes-icon-button" id="notes-find-next" type="button" title="Next match (Enter)" aria-label="Next match">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg>
+          </button>
+          <button class="notes-find-done" id="notes-find-close" type="button">Done</button>
+        </div>
         <form class="notes-sheet" id="note-form" method="post"
               action="{{ url_for('edit_note', note_id=selected.id) if selected else url_for('create_note') }}"
               {% if selected %}data-autosave="true" data-note-id="{{ selected.id }}"{% endif %}>
@@ -150,7 +191,8 @@
 
     // Filter the list instantly while typing; Enter still runs a server search.
     var search = document.getElementById("notes-search");
-    var items = document.querySelectorAll("#notes-list li");
+    var items = document.querySelectorAll("#notes-list li:not(.notes-group)");
+    var groups = document.querySelectorAll("#notes-list .notes-group");
     var noMatch = document.getElementById("notes-no-match");
     search.addEventListener("input", function () {
       var needle = search.value.trim().toLowerCase();
@@ -161,6 +203,12 @@
         if (show) visible++;
       });
       noMatch.hidden = visible > 0 || items.length === 0;
+      groups.forEach(function (group) {
+        var flag = group.dataset.group === "pinned" ? "1" : "0";
+        group.hidden = !Array.prototype.some.call(items, function (li) {
+          return !li.hidden && li.dataset.pinned === flag;
+        });
+      });
     });
 
     // Sidebar toggle for tablets and desktops; phones use the back button instead.
@@ -261,18 +309,59 @@
         linkLayer.style[name] = style[name];
       });
     }
+    // Find in note: matches are highlighted in the same layer as the links.
+    var findBar = document.getElementById("notes-find");
+    var findInput = document.getElementById("notes-find-input");
+    var findCount = document.getElementById("notes-find-count");
+    var findToggle = document.getElementById("notes-find-toggle");
+    var matches = [];
+    var current = -1;
+    function findMatches(text) {
+      var needle = findBar.hidden ? "" : findInput.value.trim().toLowerCase();
+      var found = [];
+      if (!needle) return found;
+      var haystack = text.toLowerCase();
+      var at = haystack.indexOf(needle);
+      while (at !== -1) {
+        found.push({ start: at, end: at + needle.length });
+        at = haystack.indexOf(needle, at + needle.length);
+      }
+      return found;
+    }
+    // Wrap text in find marks, splitting them where they cross a link.
+    function markText(text, from, to) {
+      var html = "";
+      var at = from;
+      matches.forEach(function (match, index) {
+        var start = Math.max(match.start, at);
+        var end = Math.min(match.end, to);
+        if (start >= end) return;
+        html += escapeText(text.slice(at, start)) +
+          '<mark class="notes-find-mark' + (index === current ? " is-current" : "") + '" data-match="' + index + '">' +
+          escapeText(text.slice(start, end)) + "</mark>";
+        at = end;
+      });
+      return html + escapeText(text.slice(at, to));
+    }
     function drawLinks() {
       var text = body.value;
       links = findLinks(text);
+      matches = findMatches(text);
+      if (current >= matches.length) current = matches.length ? 0 : -1;
+      if (current < 0 && matches.length) current = 0;
       var html = "";
       var at = 0;
       links.forEach(function (link, index) {
-        html += escapeText(text.slice(at, link.start)) +
-          '<span class="notes-link" data-index="' + index + '">' + escapeText(text.slice(link.start, link.end)) + "</span>";
+        html += markText(text, at, link.start) +
+          '<span class="notes-link" data-index="' + index + '">' + markText(text, link.start, link.end) + "</span>";
         at = link.end;
       });
       // A trailing space keeps a final empty line the same height as in the text box.
-      linkLayer.innerHTML = html + escapeText(text.slice(at)) + " ";
+      linkLayer.innerHTML = html + markText(text, at, text.length) + " ";
+      if (!findBar.hidden) {
+        findCount.textContent = !findInput.value.trim() ? "" :
+          matches.length ? (current + 1) + " of " + matches.length : "Not found";
+      }
       linkLayer.style.width = body.clientWidth + "px";
       linkLayer.scrollTop = body.scrollTop;
     }
@@ -331,6 +420,68 @@
     }
     document.getElementById("notes-insert-link").addEventListener("click", insertLink);
 
+    function showCurrentMatch() {
+      drawLinks();
+      var mark = linkLayer.querySelector('[data-match="' + current + '"]');
+      if (!mark) return;
+      // Scroll the note so the match sits in view, without moving focus out of the find box.
+      var top = mark.offsetTop - body.scrollTop;
+      if (top < 0 || top > body.clientHeight - mark.offsetHeight) {
+        body.scrollTop = Math.max(0, mark.offsetTop - body.clientHeight / 3);
+        linkLayer.scrollTop = body.scrollTop;
+      }
+      var markTop = body.getBoundingClientRect().top + mark.offsetTop - body.scrollTop;
+      var sheetBox = form.getBoundingClientRect();
+      if (markTop < sheetBox.top || markTop > sheetBox.bottom - 40) {
+        form.scrollTop += markTop - sheetBox.top - form.clientHeight / 3;
+      }
+    }
+    function stepMatch(delta) {
+      if (!matches.length) return;
+      current = (current + delta + matches.length) % matches.length;
+      showCurrentMatch();
+    }
+    function openFind() {
+      findBar.hidden = false;
+      findToggle.setAttribute("aria-pressed", "true");
+      var picked = body.value.slice(body.selectionStart, body.selectionEnd).trim();
+      if (document.activeElement === body && picked && picked.indexOf("\n") === -1) findInput.value = picked;
+      findInput.focus();
+      findInput.select();
+      current = 0;
+      showCurrentMatch();
+    }
+    function closeFind() {
+      var match = matches[current];
+      findBar.hidden = true;
+      findToggle.setAttribute("aria-pressed", "false");
+      findCount.textContent = "";
+      drawLinks();
+      body.focus();
+      // Leave the cursor on the match that was showing, like Find in macOS Notes.
+      if (match) body.setSelectionRange(match.start, match.end);
+    }
+    findToggle.addEventListener("click", function () { if (findBar.hidden) { openFind(); } else { closeFind(); } });
+    document.getElementById("notes-find-close").addEventListener("click", closeFind);
+    document.getElementById("notes-find-next").addEventListener("click", function () { stepMatch(1); });
+    document.getElementById("notes-find-prev").addEventListener("click", function () { stepMatch(-1); });
+    findInput.addEventListener("input", function () { current = 0; showCurrentMatch(); });
+    findInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.isComposing) {
+        event.preventDefault();
+        stepMatch(event.shiftKey ? -1 : 1);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeFind();
+      }
+    });
+    // Opening a note from a list search shows where the words are.
+    if (findInput.value.trim() && form.dataset.noteId) {
+      findBar.hidden = false;
+      findToggle.setAttribute("aria-pressed", "true");
+      showCurrentMatch();
+    }
+
     document.addEventListener("keydown", function (event) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
@@ -338,6 +489,9 @@
       } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         insertLink();
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        openFind();
       }
     });
 

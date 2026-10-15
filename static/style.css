@@ -498,6 +498,39 @@ select {
   text-decoration: underline; text-decoration-color: var(--notes-accent);
   text-decoration-thickness: 1.5px; text-underline-offset: 3px;
 }
+/* Find in note: matches are marked in the layer behind the text. */
+.notes-find-mark { border-radius: 3px; color: transparent; background: color-mix(in srgb, #ffd60a 45%, transparent); }
+.notes-find-mark.is-current { background: #ffd60a; box-shadow: 0 0 0 1px #e0b800; }
+.notes-find {
+  display: flex; align-items: center; gap: 4px; flex: none;
+  padding: 6px 12px; border-bottom: 1px solid var(--notes-line); background: var(--notes-sidebar);
+}
+.notes-find[hidden] { display: none; }
+.notes-find > svg { flex: none; width: 15px; height: 15px; fill: none; stroke: var(--notes-muted); stroke-width: 1.8; stroke-linecap: round; }
+.notes-find input[type="search"] {
+  flex: 1; min-width: 0; min-height: 32px; padding: 5px 10px; border: 1px solid transparent; border-radius: 8px;
+  background: var(--notes-field); color: var(--notes-text); font-size: 14px;
+}
+.notes-find input[type="search"]:focus {
+  outline: none; background: var(--notes-field-focus);
+  border-color: var(--notes-accent); box-shadow: 0 0 0 3px var(--mac-focus);
+}
+.notes-find-count { flex: none; min-width: 4.5em; color: var(--notes-muted); font-size: 12px; text-align: right; white-space: nowrap; }
+.notes-page .notes-find-done {
+  flex: none; min-height: 30px; padding: 3px 10px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--notes-accent); font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.notes-icon-button.is-on, .notes-icon-button[aria-pressed="true"] { background: var(--notes-hover); }
+.notes-icon-button.is-on svg { fill: currentColor; }
+.notes-pin-mark {
+  width: 12px; height: 12px; margin-right: 4px; vertical-align: -1px;
+  fill: var(--notes-accent); stroke: var(--notes-accent); stroke-width: 1.6; stroke-linejoin: round;
+}
+.notes-group {
+  padding: 12px 12px 4px; color: var(--notes-muted); font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.notes-group[hidden] { display: none; }
 .notes-link-open {
   position: absolute; z-index: 2; display: inline-flex; align-items: center; gap: 5px; max-width: min(320px, 100%);
   padding: 5px 10px; border-radius: 999px; background: var(--notes-accent); color: #fff;

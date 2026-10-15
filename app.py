@@ -168,7 +168,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.48.0"
+HELP_VERSION = "1.49.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -212,6 +212,8 @@ HELP_TOPICS = [
         "steps": [
             "Press the compose button to start a note. Notes save by themselves as you type; ⌘-S or Ctrl-S saves at once.",
             "Search finds notes by their words. The sidebar button hides the note list; full screen gives you more room.",
+            "Press the pin button to keep a note at the top of the list under Pinned; press it again to unpin.",
+            "Press Find in note (⌘F or Ctrl-F) and type to highlight words inside the open note. Enter or the arrows jump between matches.",
             "Web addresses become links. Select text and press Insert link (⌘K) to turn it into a named link; put the cursor on a link and press Open to visit it.",
             "Delete a note with the bin button at the top.",
         ],
@@ -320,6 +322,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.49.0",
+        "date": "2026-10-15",
+        "changes": [
+            "Notes can be pinned (request #19: pin notes and search for text inside a note). The pin button at the top keeps a note at the top of the list under Pinned until you unpin it.",
+            "New Find in note: press the magnifier or ⌘F / Ctrl-F and type to highlight every match in the open note, with a match count. Enter or the arrows jump to the next and previous match.",
+            "Opening a note from the list search highlights the words you searched for inside it.",
+        ],
+    },
     {
         "version": "1.48.0",
         "date": "2026-10-15",
@@ -994,11 +1005,14 @@ def create_app(test_config=None):
         if "user_id" not in table_columns(connection, "notes"):
             connection.execute("ALTER TABLE notes ADD COLUMN user_id INTEGER")
         connection.execute("CREATE INDEX IF NOT EXISTS notes_user ON notes (user_id)")
+        # Pinned notes (1.49.0) stay at the top of the list.
+        if "pinned" not in table_columns(connection, "notes"):
+            connection.execute("ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
 
     notes_query = (
-        "SELECT id, title, content, "
+        "SELECT id, title, content, pinned, "
         f"{timestamp_select.format('created_at')}, {timestamp_select.format('updated_at')} "
-        "FROM notes WHERE user_id = ? ORDER BY notes.updated_at DESC, id DESC"
+        "FROM notes WHERE user_id = ? ORDER BY pinned DESC, notes.updated_at DESC, id DESC"
     )
 
     # Redis keeps sessions server-side and caches the notes list when configured.
@@ -4089,6 +4103,22 @@ def create_app(test_config=None):
         activity_log.add(g.user["id"], "notes", "deleted", row["title"])
         flash("Note deleted.", "success")
         return redirect(url_for("notes"))
+
+    @app.post("/notes/<int:note_id>/pin")
+    def pin_note(note_id):
+        # Pinning keeps the note's date, so it doesn't count as an edit.
+        pinned = 1 if request.form.get("pinned") == "1" else 0
+        with notes_connection() as connection:
+            cursor = connection.execute(
+                sql("UPDATE notes SET pinned = ? WHERE id = ? AND user_id = ?"),
+                (pinned, note_id, g.user["id"]),
+            )
+        if cursor.rowcount == 0:
+            abort(404)
+        invalidate_notes(g.user["id"])
+        flash("Note pinned." if pinned else "Note unpinned.", "success")
+        query = request.form.get("q", "").strip()[:100]
+        return redirect(url_for("notes", id=note_id, q=query or None))
 
     @app.post("/folder")
     def create_folder():
