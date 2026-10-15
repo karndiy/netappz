@@ -1522,6 +1522,63 @@ class FileManagerTests(unittest.TestCase):
         self.client.post(f"/missions/{later['id']}/submit", data={"_csrf_token": token, "body": "Now I can"})
         self.assertEqual(len(next(m for m in store.all() if m["title"] == "Later")["submissions"]), 1)
 
+    def test_missions_have_a_promotional_picture(self):
+        from PIL import Image
+        token = self._csrf()
+        store = self.app.extensions["missions"]
+        member_id = self.app.extensions["users"].add("member", "member-password")
+
+        def picture(size=(2400, 1200), color="orange"):
+            data = io.BytesIO()
+            Image.new("RGB", size, color).save(data, "PNG")
+            data.seek(0)
+            return data
+
+        # A proposed mission keeps its picture, resized, and shows it as the card's cover.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.client.post("/missions", data={"_csrf_token": token, "title": "Clean-up day", "image": (picture(), "promo.png")},
+                         content_type="multipart/form-data")
+        mission = store.all()[0]
+        self.assertRegex(mission["image"], r"^[0-9a-f]{32}\.jpg$")
+        page = self.client.get("/missions").get_data(as_text=True)
+        self.assertIn(f"/missions/images/{mission['image']}", page)
+        response = self.client.get(f"/missions/images/{mission['image']}")
+        self.assertEqual(response.mimetype, "image/jpeg")
+        with Image.open(io.BytesIO(response.data)) as image:
+            self.assertEqual(image.size, (1600, 800))
+        response.close()
+        self.assertEqual(self.client.get("/missions/images/nothing.jpg").status_code, 404)
+
+        # A file that isn't a picture is refused and nothing is saved.
+        self.client.post("/missions", data={"_csrf_token": token, "title": "Bad picture",
+                                            "image": (io.BytesIO(b"not an image"), "fake.png")},
+                         content_type="multipart/form-data")
+        self.assertIn("not a picture the server can read", self.client.get("/missions").get_data(as_text=True))
+        self.assertEqual([m["title"] for m in store.all()], ["Clean-up day"])
+        self.assertEqual(self.client.post(f"/missions/{mission['id']}/image", data={"_csrf_token": token, "remove": "1"}).status_code, 403)
+
+        # An administrator can replace or remove it; the old file goes.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        folder = Path(self.temp_dir.name) / "feed" / "missions"
+        old = mission["image"]
+        self.client.post(f"/missions/{mission['id']}/image", data={"_csrf_token": token, "image": (picture((300, 300), "blue"), "new.png")},
+                         content_type="multipart/form-data")
+        new = store.mission(mission["id"])["image"]
+        self.assertNotEqual(new, old)
+        self.assertFalse((folder / old).exists())
+        self.client.post(f"/missions/{mission['id']}/image", data={"_csrf_token": token, "remove": "1"})
+        self.assertEqual(store.mission(mission["id"])["image"], "")
+        self.assertFalse((folder / new).exists())
+
+        # Deleting a mission deletes its picture.
+        self.client.post("/missions", data={"_csrf_token": token, "title": "With picture", "image": (picture(), "p.png")},
+                         content_type="multipart/form-data")
+        with_picture = next(m for m in store.all() if m["title"] == "With picture")
+        self.client.post(f"/missions/{with_picture['id']}/delete", data={"_csrf_token": token})
+        self.assertFalse((folder / with_picture["image"]).exists())
+
     def test_daily_quests_count_actions_and_pay_after_approval(self):
         token = self._csrf()
         quests = self.app.extensions["quests"]

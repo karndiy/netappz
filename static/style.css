@@ -1579,3 +1579,11 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 .help-admin { padding: 10px 12px; border-radius: 10px; background: var(--mac-fill); }
 .help-admin h3 { margin: 0 0 6px; font-size: 14px; }
 .help-open { align-self: flex-start; margin-top: 4px; }
+
+/* Mission pictures */
+.mission-card.has-cover { padding-top: 0; overflow: hidden; }
+.mission-cover { display: block; width: calc(100% + 36px); max-width: none; height: 170px; margin: 0 -18px 4px; object-fit: cover; background: var(--mac-fill); }
+.mission-proposal.has-cover .mission-card-close { top: 10px; right: 10px; }
+.mission-proposal.has-cover .mission-card-close .mission-icon-button { background: rgba(255, 255, 255, .9); }
+.mission-image-preview { max-width: 100%; max-height: 220px; margin-top: 6px; border-radius: 10px; object-fit: cover; }
+.mission-form-card input[type="file"], .mission-change-dates input[type="file"] { max-width: 100%; font-size: 14px; }

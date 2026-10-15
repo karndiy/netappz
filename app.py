@@ -168,7 +168,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.47.0"
+HELP_VERSION = "1.48.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -253,10 +253,11 @@ HELP_TOPICS = [
             "Open missions are cards showing the reward, the dates and the days left. Write what you did on its card and press Submit for approval.",
             "You are notified when your work is approved (the points go to your Wallet) or sent back with a note. After a send-back you can submit again.",
             "Daily quests, such as posting on the Feed or converting a file, fill in by themselves as you use the app. When one is done, press Claim. Quests start again every day at midnight (Thailand time).",
-            "Have an idea for a mission? Press ＋ Propose a mission; it starts once an administrator approves it.",
+            "Have an idea for a mission? Press ＋ Propose a mission; it starts once an administrator approves it. Add a picture to promote it: it shows at the top of the mission's card.",
         ],
         "admin": [
-            "Add missions with an optional reward and dates, approve or send back work and quest claims under Needs your attention, and approve or decline proposed missions.",
+            "Add missions with an optional reward, dates and picture, approve or send back work and quest claims under Needs your attention, and approve or decline proposed missions.",
+            "Change or remove a mission's picture with Change picture on its card.",
             "Add daily quests with what to do, how many times a day and the reward, and turn them off or delete them.",
         ],
     },
@@ -319,6 +320,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.48.0",
+        "date": "2026-10-15",
+        "changes": [
+            "Missions can have a picture to promote them (request: add a picture when proposing a mission). Choose one when you add or propose a mission; it shows across the top of the mission's card, and you see it before sending.",
+            "Pictures can be JPG, PNG, WebP, GIF or iPhone HEIC up to 25 MB. They're resized for the page, and location data is removed.",
+            "Administrators can change or remove a mission's picture with Change picture on its card. Deleting a mission deletes its picture.",
+        ],
+    },
     {
         "version": "1.47.0",
         "date": "2026-10-15",
@@ -1492,7 +1502,9 @@ def create_app(test_config=None):
         for column, definition in (("approval", "TEXT NOT NULL DEFAULT 'approved'"),
                                    ("approval_note", "TEXT NOT NULL DEFAULT ''"),
                                    ("starts_on", "TEXT NOT NULL DEFAULT ''"),
-                                   ("ends_on", "TEXT NOT NULL DEFAULT ''")):
+                                   ("ends_on", "TEXT NOT NULL DEFAULT ''"),
+                                   # Mission pictures (1.48.0): a cover image that promotes the mission.
+                                   ("image", "TEXT NOT NULL DEFAULT ''")):
             if column not in existing:
                 connection.execute(f"ALTER TABLE missions ADD COLUMN {column} {definition}")
         # Wallet (1.37.0): every change to someone's points is a row; the balance is their sum.
@@ -1668,7 +1680,7 @@ def create_app(test_config=None):
 
         mission_columns = (
             "missions.id, missions.title, missions.details, missions.created_by, missions.is_open, missions.reward, "
-            "missions.approval, missions.approval_note, missions.starts_on, missions.ends_on, "
+            "missions.approval, missions.approval_note, missions.starts_on, missions.ends_on, missions.image, "
             f"users.username AS creator, {time_as('missions.created_at')}"
         )
         submission_columns = (
@@ -1705,14 +1717,18 @@ def create_app(test_config=None):
                 ).fetchone()
             return dict(row) if row else None
 
-        def add(self, title, details, user_id, reward=0, approval="approved", starts_on="", ends_on=""):
+        def add(self, title, details, user_id, reward=0, approval="approved", starts_on="", ends_on="", image=""):
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO missions (title, details, created_by, reward, approval, starts_on, ends_on) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)") + returning_id,
-                    (title, details, user_id, reward, approval, starts_on, ends_on),
+                    sql("INSERT INTO missions (title, details, created_by, reward, approval, starts_on, ends_on, image) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)") + returning_id,
+                    (title, details, user_id, reward, approval, starts_on, ends_on, image),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def set_image(self, mission_id, image):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE missions SET image = ? WHERE id = ?"), (image, mission_id))
 
         def set_dates(self, mission_id, starts_on, ends_on):
             with notes_connection() as connection:
@@ -3096,6 +3112,13 @@ def create_app(test_config=None):
             error = f"The reward is a whole number of points from 0 to {WALLET_MAX:,}."
         elif date_error:
             error = date_error
+        image = ""
+        upload = request.files.get("image")
+        if not error and upload and upload.filename:
+            try:
+                image = save_mission_image(upload)
+            except ValueError as image_error:
+                error = str(image_error)
         if error:
             flash(error, "error")
             session["mission_form"] = {"title": title[:120], "details": details[:MISSION_TEXT_LIMIT],
@@ -3104,13 +3127,13 @@ def create_app(test_config=None):
                                        "ends_on": request.form.get("ends_on", "")[:10]}
             return redirect(url_for("missions"), code=303)
         if not g.user["is_admin"]:
-            mission_id = mission_store.add(title, details, g.user["id"], reward, "proposed", starts_on, ends_on)
+            mission_id = mission_store.add(title, details, g.user["id"], reward, "proposed", starts_on, ends_on, image)
             notification_store.add(user_store.admin_ids(), g.user["id"], "mission",
                                    f"{g.user['username']} proposed a mission: “{title}”",
                                    url_for("missions", _anchor="mission-proposals"))
             flash("Mission proposed. An administrator will approve it or decline it with a note.", "success")
             return redirect(url_for("missions", _anchor=f"mission-{mission_id}"), code=303)
-        mission_store.add(title, details, g.user["id"], reward, "approved", starts_on, ends_on)
+        mission_store.add(title, details, g.user["id"], reward, "approved", starts_on, ends_on, image)
         announce_mission(title, g.user["id"])
         flash("Mission added. Everyone can now submit their work for it.", "success")
         return redirect(url_for("missions"), code=303)
@@ -3175,6 +3198,7 @@ def create_app(test_config=None):
             abort(403, "You can only withdraw your own mission before it's approved.")
         if mission is not None:
             mission_store.delete(mission_id)
+            remove_mission_image(mission["image"])
             flash("Mission deleted, with the work submitted for it." if mission["approval"] == "approved"
                   else "Mission proposal removed.", "success")
         return redirect(url_for("missions"), code=303)
@@ -3630,6 +3654,65 @@ def create_app(test_config=None):
         response = send_file(avatar_dir / name, mimetype="image/jpeg", max_age=365 * 24 * 3600)
         response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
         return response
+
+    mission_image_dir = feed_media_dir / "missions"
+    mission_image_dir.mkdir(exist_ok=True)
+
+    def save_mission_image(upload):
+        """A mission's cover picture, at most 1600 px wide, as JPEG (no location data kept); its file name."""
+        from PIL import Image, ImageOps, UnidentifiedImageError
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+        data = upload.read(FEED_MAX_IMAGE + 1)
+        if len(data) > FEED_MAX_IMAGE:
+            raise ValueError("Mission pictures can be up to 25 MB.")
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image = ImageOps.exif_transpose(image).convert("RGB")
+                image.thumbnail((1600, 1600), Image.LANCZOS)
+        except (UnidentifiedImageError, OSError, SyntaxError, Image.DecompressionBombError):
+            raise ValueError("That file is not a picture the server can read. Try a JPG or PNG.")
+        name = f"{secrets.token_hex(16)}.jpg"
+        image.save(mission_image_dir / name, "JPEG", quality=86)
+        return name
+
+    def remove_mission_image(name):
+        if name and AVATAR_NAME.fullmatch(name):
+            (mission_image_dir / name).unlink(missing_ok=True)
+
+    @app.get("/missions/images/<name>")
+    def mission_image(name):
+        if not AVATAR_NAME.fullmatch(name) or not (mission_image_dir / name).is_file():
+            abort(404)
+        response = send_file(mission_image_dir / name, mimetype="image/jpeg", max_age=365 * 24 * 3600)
+        response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        return response
+
+    @app.post("/missions/<int:mission_id>/image")
+    def mission_set_image(mission_id):
+        admin_required()
+        mission = mission_store.mission(mission_id)
+        if mission is None:
+            flash("That mission no longer exists.", "error")
+            return redirect(url_for("missions"), code=303)
+        upload = request.files.get("image")
+        if request.form.get("remove"):
+            mission_store.set_image(mission_id, "")
+            remove_mission_image(mission["image"])
+            flash("Picture removed.", "success")
+        elif upload and upload.filename:
+            try:
+                name = save_mission_image(upload)
+            except ValueError as error:
+                flash(str(error), "error")
+            else:
+                mission_store.set_image(mission_id, name)
+                remove_mission_image(mission["image"])
+                flash(f"New picture for “{mission['title']}”.", "success")
+        else:
+            flash("Choose a picture first.", "error")
+        return redirect(url_for("missions", _anchor=f"mission-{mission_id}"), code=303)
 
     @app.template_filter("hue")
     def name_hue(name):

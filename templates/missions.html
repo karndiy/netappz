@@ -210,7 +210,8 @@
         </div>
         <ul class="card-grid">
           {% for mission in proposals + declined %}
-            <li class="mission-card mission-proposal is-{{ mission.approval }}" id="mission-{{ mission.id }}">
+            <li class="mission-card mission-proposal is-{{ mission.approval }}{% if mission.image %} has-cover{% endif %}" id="mission-{{ mission.id }}">
+              {% if mission.image %}<img class="mission-cover" src="{{ url_for('mission_image', name=mission.image) }}" alt="" loading="lazy">{% endif %}
               <div class="quest-card-top">
                 <span class="request-status">{{ approvals[mission.approval] }}</span>
                 {% if mission.reward %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(mission.reward) }} points suggested</span>{% endif %}
@@ -253,7 +254,8 @@
           {% for mission in group %}
             {% set state = 'closed' if not mission.is_open else mission.phase %}
             {% set latest = mission.mine[-1] if mission.mine else None %}
-            <article class="mission-card mission is-{{ state }}" id="mission-{{ mission.id }}">
+            <article class="mission-card mission is-{{ state }}{% if mission.image %} has-cover{% endif %}" id="mission-{{ mission.id }}">
+              {% if mission.image %}<img class="mission-cover" src="{{ url_for('mission_image', name=mission.image) }}" alt="" loading="lazy">{% endif %}
               <div class="quest-card-top">
                 <span class="request-status mission-phase is-{{ state }}">{{ {'closed': 'Closed', 'upcoming': 'Upcoming', 'running': 'Open', 'ended': 'Ended'}[state] }}</span>
                 {% if mission.reward %}<span class="request-kind-tag mission-reward">🪙 {{ "{:,}".format(mission.reward) }} points</span>{% endif %}
@@ -307,6 +309,16 @@
                       <button class="secondary" type="submit">Save dates</button>
                     </form>
                   </details>
+                  <details class="mission-change-dates">
+                    <summary>{{ 'Change picture' if mission.image else 'Add picture' }}</summary>
+                    <form action="{{ url_for('mission_set_image', mission_id=mission.id) }}" method="post" enctype="multipart/form-data">
+                      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                      <label class="visually-hidden" for="image-{{ mission.id }}">Picture for {{ mission.title }}</label>
+                      <input id="image-{{ mission.id }}" name="image" type="file" accept="image/*,.heic,.heif">
+                      <button class="secondary" type="submit">Save picture</button>
+                      {% if mission.image %}<button class="secondary" type="submit" name="remove" value="1" formnovalidate>Remove</button>{% endif %}
+                    </form>
+                  </details>
                   <span class="mission-card-tools">
                     <form action="{{ url_for('mission_open', mission_id=mission.id) }}" method="post">
                       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
@@ -332,7 +344,7 @@
     {# ------------------------------------------------------------- new mission #}
     <details class="mission-card mission-form-card mission-new" id="mission-new" {% if form or (current_user.is_admin and not (missions or closed)) %}open{% endif %}>
       <summary>{{ '＋ New mission' if current_user.is_admin else '＋ Propose a mission' }}</summary>
-      <form class="request-form" action="{{ url_for('create_mission') }}" method="post">
+      <form class="request-form" action="{{ url_for('create_mission') }}" method="post" enctype="multipart/form-data">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
         <label for="mission-title">Title</label>
         <input id="mission-title" name="title" type="text" maxlength="120" required
@@ -350,6 +362,9 @@
             <input id="mission-ends" name="ends_on" type="date" value="{{ form.ends_on if form else '' }}">
           </div>
         </div>
+        <label for="mission-image">Picture <span class="optional">(optional: shown at the top of the mission to promote it)</span></label>
+        <input id="mission-image" name="image" type="file" accept="image/*,.heic,.heif" data-preview="mission-image-preview">
+        <img class="mission-image-preview" id="mission-image-preview" alt="" hidden>
         <label for="mission-reward">Reward in points <span class="optional">(optional: paid into the wallet when work is approved{% if not current_user.is_admin %}; an administrator decides the final amount{% endif %})</span></label>
         <input id="mission-reward" name="reward" type="text" inputmode="numeric" maxlength="12"
                placeholder="0" value="{{ form.reward if form else '' }}">
@@ -357,5 +372,17 @@
       </form>
     </details>
   </main>
+  <script>
+    // Show the chosen picture before the mission is sent.
+    document.querySelectorAll("input[data-preview]").forEach((input) => {
+      const preview = document.getElementById(input.dataset.preview);
+      input.addEventListener("change", () => {
+        const file = input.files && input.files[0];
+        if (preview.src) URL.revokeObjectURL(preview.src);
+        preview.hidden = !file || !file.type.startsWith("image/") || /hei[cf]$/i.test(file.name);
+        if (!preview.hidden) preview.src = URL.createObjectURL(file);
+      });
+    });
+  </script>
 </body>
 </html>
