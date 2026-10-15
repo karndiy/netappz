@@ -226,7 +226,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.55.0"
+HELP_VERSION = "1.56.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -237,6 +237,8 @@ HELP_TOPICS = [
             "The menu down the left side (across the top on phones) takes you to each part of the app. Hold the pointer over an icon to see its name.",
             "After you sign in you land on the Feed, the home page. The logo at the top of the menu always brings you back to it.",
             "At the bottom of the menu are Notifications, your profile, Wallet with your points, Settings and Log out.",
+            "The app is in Thai until you choose another language under Settings → Appearance → Language. The menu is translated so far; other pages are still in English and are being translated a few at a time.",
+            "Help (the ? icon in the menu) explains every part of the app and says which version it covers. Press a topic at the top to jump to it.",
             "Messages floating across the top of the page are announcements from an administrator. Press ✕ to close one on this device.",
         ],
         "admin": [
@@ -251,8 +253,9 @@ HELP_TOPICS = [
             "Write in the new-post box under the dashboard. Add up to 10 photos (JPG, PNG, GIF, WebP, HEIC, up to 25 MB) or videos (MP4, MOV, WebM, up to 500 MB) by choosing, dragging or pasting them.",
             "Type @name to mention someone; they are notified.",
             "Press Like or double-tap a photo to like a post. Write a comment under the post, or use Reply to answer someone.",
-            "The ⋯ menu on your own posts lets you edit or delete them, and copy a link to any post.",
-            "Click someone's name or photo to see their profile and all their posts.",
+            "Swipe or use the arrows to move between photos in a post; tap a photo to see it full size. Long posts fold with See more, and older posts load as you scroll.",
+            "The ⋯ menu on your own posts lets you edit or delete them, and copy a link to any post. You can delete your own comments, and comments on your posts.",
+            "Members are listed on the right on a computer, and in a row at the top on phones. Click someone's name or photo to see their profile and all their posts.",
         ],
     },
     {
@@ -275,7 +278,7 @@ HELP_TOPICS = [
             "Search finds notes by their words. The sidebar button hides the note list; full screen gives you more room.",
             "Press the pin button to keep a note at the top of the list under Pinned; press it again to unpin.",
             "Press Find in note (⌘F or Ctrl-F) and type to highlight words inside the open note. Enter or the arrows jump between matches.",
-            "Web addresses become links. Select text and press Insert link (⌘K) to turn it into a named link; put the cursor on a link and press Open to visit it.",
+            "Web addresses become links. Select text and press Insert link (⌘K) to turn it into a named link; put the cursor on a link and press Open to visit it, or ⌘-click / Ctrl-click it.",
             "Delete a note with the bin button at the top.",
         ],
         "admin": [
@@ -299,10 +302,10 @@ HELP_TOPICS = [
         "key": "convert", "title": "Convert", "icon": "🔄", "endpoint": "convert_page",
         "summary": "Change files from one type to another, merge PDFs and edit PDFs.",
         "steps": [
-            "Word to PDF and PDF to Word: choose or drop a file and press Convert; the result downloads. PDF to Word reads Thai and English, including scanned pages.",
+            "Word to PDF and PDF to Word: choose or drop a file and press Convert; the result downloads. PDF to Word reads Thai and English, including scanned pages; choose whether scanned pages are read automatically, always or never.",
             "Image to PDF puts several pictures into one PDF. PDF to Image saves each page as PNG or JPG (a ZIP when there is more than one page).",
             "Merge PDFs joins up to 50 PDFs. Drag them, or use the arrows, to set the order.",
-            "Edit PDF opens a PDF in the editor: change text, add text, pictures, a signature, shapes and comments, cover or redact content, and rotate, reorder or delete pages. Download the result or save it into Files.",
+            "Edit PDF opens a PDF in the editor: change text, add text, pictures, a signature, shapes and comments, cover or redact content, add a watermark or page numbers, and rotate, reorder or delete pages. Undo and redo are there too, and your edits are kept for 12 hours if the page reloads. Download the result or save it into Files.",
             "The Conversion log lists what you converted and whether it worked. Delete single entries or clear it.",
         ],
         "admin": [
@@ -314,13 +317,15 @@ HELP_TOPICS = [
         "summary": "Tasks that earn points. Do the work, send it in, and get paid when it's approved.",
         "steps": [
             "Open missions are cards showing the reward, the dates and the days left. Write what you did on its card and press Submit for approval.",
-            "You are notified when your work is approved (the points go to your Wallet) or sent back with a note. After a send-back you can submit again.",
-            "Daily quests, such as posting on the Feed or converting a file, fill in by themselves as you use the app. When one is done, press Claim. Quests start again every day at midnight (Thailand time).",
-            "Have an idea for a mission? Press ＋ Propose a mission; it starts once an administrator approves it. Add a picture to promote it: it shows at the top of the mission's card.",
+            "A mission with a start date shows as Upcoming until then. After its end date it moves to Closed missions as Ended.",
+            "You are notified when your work is approved (the points go to your Wallet) or sent back with a note. After a send-back you can submit again. You can withdraw work until it's approved.",
+            "Daily quests, such as posting or commenting on the Feed, converting a file, uploading files, writing a note or sending a Chat message, fill in by themselves as you use the app. When one is done, press Claim. Quests start again every day at midnight (Thailand time).",
+            "Have an idea for a mission? Press ＋ Propose a mission; it starts once an administrator approves it. Add dates if you like, and a picture to promote it: it shows at the top of the mission's card. You can remove your proposal until it's approved.",
             "Reward goals are cards showing what your points can buy, such as a travel ticket, with a picture when there is one. Press Make it my goal on one to follow how close you are; it shows at the top of the page. When you have enough points, press Exchange.",
         ],
         "admin": [
             "Add missions with an optional reward, dates and picture, approve or send back work and quest claims under Needs your attention, and approve or decline proposed missions.",
+            "Change a mission's dates with Change dates, and close, reopen or delete a mission from its card.",
             "Change or remove a mission's picture with Change picture on its card.",
             "Add rewards people can save for under Reward goals with ＋ New reward: a name, details, a picture, the price in points and how many there are. Turn one off from its card; turn it back on or delete it under Wallet → Exchange.",
             "Change or remove a reward's picture with Change picture on its card.",
@@ -350,7 +355,7 @@ HELP_TOPICS = [
         "steps": [
             "The bell at the bottom of the menu shows how many are unread. New ones also pop up while the app is open.",
             "Click a notification to go to what it is about; that marks it as read.",
-            "Mark all as read, or remove the ones you have read.",
+            "Mark one as read or unread, mark all as read, or remove the ones you have read.",
             "Choose which kinds you get, and turn pop-ups off, under Settings → Notifications.",
         ],
     },
@@ -359,7 +364,8 @@ HELP_TOPICS = [
         "summary": "Ask for a change, report a problem, and read what's new in each version.",
         "steps": [
             "Open New request, choose Feature or Problem, write a short title and the details, and press Send request.",
-            "Each request shows its status: Waiting, Sent to Claude, In progress or Done. You are notified when it changes.",
+            "Each request shows its status: Waiting, Sent to Claude, In progress or Done. You are notified when it changes. Filter the list by status.",
+            "A Done request shows the version that has the change, with a link to its patch notes, and a note from Claude about what was changed.",
             "The patch notes below list every version, newest first. Search finds both requests and patch notes.",
             "Requests and patch notes come a page at a time. Use the page numbers under each list, and Show … per page to see 5, 10, 20, 50 or all. Your choice is remembered.",
         ],
@@ -371,7 +377,7 @@ HELP_TOPICS = [
         "key": "settings", "title": "Settings", "icon": "⚙️", "endpoint": "settings_page",
         "summary": "Your profile, password, notifications and the look of the app.",
         "steps": [
-            "Profile & password: add a profile photo and a few words about you, and change your password.",
+            "Profile & password: add a profile photo and a few words about you, and change your password. Your profile page shows these with your Feed posts.",
             "Notifications: choose what you're told about, whether alerts pop up, and whether your points show next to Wallet.",
             "Appearance: choose Light, Dark or Match my device, and the language: ไทย (Thai, the main language), English, ລາວ (Lao), 中文 (Chinese), Русский (Russian), Español (Spanish) or Latina (Latin). Both apply wherever you sign in.",
         ],
@@ -379,7 +385,7 @@ HELP_TOPICS = [
             "Users & sign-up: add people, approve new accounts, make someone an administrator, set passwords and choose who can sign up.",
             "Chat AI and Telegram bot: the AI behind Chat, and the bot for chatting from Telegram.",
             "Announcements: messages that float at the top of every page, colored by how important they are.",
-            "Activity log: what people do in the app. System & backups: automatic checks, and database backups to download or make now.",
+            "Activity log: what people do in the app, filtered by person or kind. System & backups: checks every 15 minutes (you are notified when something needs attention), database backups to download or make now, and how often backups are made and kept.",
             "Server: where files are stored, the database and the version. These are changed in the server's files.",
         ],
     },
@@ -387,6 +393,14 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.56.0",
+        "date": "2026-10-15",
+        "changes": [
+            "The Help page is brought up to date with the latest version (request #28: update help to the last version).",
+            "Getting started now explains choosing a language and finding Help. Feed, Notes, Convert, Missions, Notifications, the Update log and Settings gained steps they were missing, such as mission dates, withdrawing work, PDF editor undo and watermarks, and backup schedules.",
+        ],
+    },
     {
         "version": "1.55.0",
         "date": "2026-10-15",

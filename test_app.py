@@ -1893,6 +1893,10 @@ class FileManagerTests(unittest.TestCase):
         for section in app_module.SETTINGS_SECTIONS:
             self.assertIn(section["title"].split(" & ")[0], page)
         self.assertIn("For administrators", page)
+        # Features from recent versions are explained: languages, mission dates, the PDF editor's extras.
+        self.assertIn("Settings → Appearance → Language", page)
+        self.assertIn("Upcoming", page)
+        self.assertIn("watermark", page)
 
         # People who aren't administrators get only the parts they can use.
         member_id = self.app.extensions["users"].add("member", "member-password")
