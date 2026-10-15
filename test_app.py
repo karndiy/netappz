@@ -83,7 +83,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(self.client.get("/?path=../outside").status_code, 400)
 
     def test_update_log_page_lists_versions_and_changes(self):
-        response = self.client.get("/updates")
+        response = self.client.get("/updates?per=0")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Update log", response.data)
         self.assertIn(b"Version 1.3.0", response.data)
@@ -105,6 +105,55 @@ class FileManagerTests(unittest.TestCase):
 
         response = self.client.get("/updates?q=nothing-matches-this")
         self.assertIn(b"No updates match", response.data)
+
+    def test_update_log_pages_and_remembers_page_size(self):
+        import app as app_module
+
+        newest, total = app_module.UPDATE_LOG[0]["version"], len(app_module.UPDATE_LOG)
+        page = self.client.get("/updates").get_data(as_text=True)
+        self.assertIn(f"Version {newest}<", page)
+        self.assertNotIn("Version 1.0.0<", page)
+        self.assertIn(f"1–10 of {total} versions", page)
+        self.assertIn('aria-current="page">1<', page)
+        self.assertIn("page=2#patch-notes", page)
+
+        # The last page holds the oldest version; a page past the end shows the last page.
+        last = -(-total // 10)
+        for url in (f"/updates?page={last}", "/updates?page=999", "/updates?page=nope"):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertIn("Version 1.0.0<", self.client.get("/updates?page=999").get_data(as_text=True))
+        self.assertIn(f"Version {newest}<", self.client.get("/updates?page=nope").get_data(as_text=True))
+
+        # The chosen size sticks for later visits; sizes that aren't offered are ignored.
+        page = self.client.get("/updates?per=5").get_data(as_text=True)
+        self.assertIn(f"1–5 of {total} versions", page)
+        self.assertIn(f"1–5 of {total} versions", self.client.get("/updates").get_data(as_text=True))
+        self.assertIn(f"1–5 of {total} versions", self.client.get("/updates?per=7").get_data(as_text=True))
+        page = self.client.get("/updates?per=0").get_data(as_text=True)
+        self.assertIn(f"1–{total} of {total} versions", page)
+        self.assertIn("Version 1.0.0<", page)
+        self.assertNotIn("page=2#patch-notes", page)
+
+    def test_update_log_requests_come_in_pages(self):
+        token = self._csrf()
+        store = self.app.extensions["requests"]
+        ids = [store.add("feature", f"Request number {n:02d}", "", "member") for n in range(12)]
+        page = self.client.get("/updates?rper=5").get_data(as_text=True)
+        self.assertIn("1–5 of 12 requests", page)
+        self.assertEqual(page.count('class="request-item'), 5)
+        page = self.client.get("/updates?rpage=3").get_data(as_text=True)
+        self.assertIn("11–12 of 12 requests", page)
+        self.assertEqual(page.count('class="request-item'), 2)
+        # Other lists' pages and the search stay in the links.
+        self.assertIn('name="rper"', page)
+        self.assertIn("rpage=2", self.client.get("/updates?rpage=3&page=2").get_data(as_text=True))
+
+        # Changing a request's status brings you back to the same page.
+        response = self.client.post(f"/updates/requests/{ids[0]}/status", data={
+            "_csrf_token": token, "status": "done", "shown_page": "3",
+        })
+        self.assertIn("rpage=3", response.headers["Location"])
 
     def test_pages_include_mobile_viewport(self):
         for url in ("/", "/updates", "/notes"):

@@ -168,7 +168,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.49.0"
+HELP_VERSION = "1.50.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -297,6 +297,7 @@ HELP_TOPICS = [
             "Open New request, choose Feature or Problem, write a short title and the details, and press Send request.",
             "Each request shows its status: Waiting, Sent to Claude, In progress or Done. You are notified when it changes.",
             "The patch notes below list every version, newest first. Search finds both requests and patch notes.",
+            "Requests and patch notes come a page at a time. Use the page numbers under each list, and Show … per page to see 5, 10, 20, 50 or all. Your choice is remembered.",
         ],
         "admin": [
             "Administrators change a request's status, delete it, or press Send to Claude to have the change made automatically.",
@@ -322,6 +323,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.50.0",
+        "date": "2026-10-15",
+        "changes": [
+            "The Update log comes in pages (request #20: pagination you can adjust). Requests and patch notes each show 10 at a time, with page numbers and Previous / Next under the list.",
+            "Choose how many to show with Show … per page: 5, 10, 20, 50 or All. Your choice is remembered next time.",
+            "Searching, filtering requests and changing a request's status keep you on the page you were on.",
+        ],
+    },
     {
         "version": "1.49.0",
         "date": "2026-10-15",
@@ -871,6 +881,32 @@ ANNOUNCEMENT_LEVELS = {"info": "Information", "success": "Good news", "warning":
 ANNOUNCEMENT_LIMIT = 300
 ANNOUNCEMENTS_SHOWN = 3
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
+# How many requests and patch notes the Update log shows on a page. 0 means all of them.
+PAGE_SIZES = (5, 10, 20, 50, 0)
+PAGE_SIZE_DEFAULT = 10
+
+
+def paginate(items, page, per_page):
+    """One page of items, with what the page links need. per_page 0 shows everything on one page."""
+    total = len(items)
+    pages = max(1, -(-total // per_page)) if per_page else 1
+    try:
+        page = min(max(int(page), 1), pages)
+    except (TypeError, ValueError):
+        page = 1
+    start = (page - 1) * per_page if per_page else 0
+    end = min(start + per_page, total) if per_page else total
+    return {"items": items[start:end], "page": page, "pages": pages, "per_page": per_page,
+            "total": total, "first": start + 1 if total else 0, "last": end}
+
+
+def chosen_page_size(arg, session_key):
+    """The page size asked for in the link, else the one this person chose last time."""
+    asked = request.args.get(arg, "")
+    if asked.isdigit() and int(asked) in PAGE_SIZES:
+        session[session_key] = int(asked)
+    size = session.get(session_key, PAGE_SIZE_DEFAULT)
+    return size if size in PAGE_SIZES else PAGE_SIZE_DEFAULT
 # Photos and videos on the Feed. HEIC photos from iPhones are turned into JPEG.
 FEED_IMAGES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif",
                ".webp": "image/webp", ".heic": "image/jpeg", ".heif": "image/jpeg"}
@@ -2934,8 +2970,11 @@ def create_app(test_config=None):
             needle = query.lower()
             shown = [r for r in shown if needle in r["title"].lower() or needle in r["details"].lower()
                      or needle in r["requested_by"].lower() or needle == r["done_version"]]
+        notes_page = paginate(entries, request.args.get("page"), chosen_page_size("per", "updates_per_page"))
+        requests_page = paginate(shown, request.args.get("rpage"), chosen_page_size("rper", "requests_per_page"))
         return render_template(
-            "updates.html", entries=entries, query=query, requests=shown, counts=counts,
+            "updates.html", entries=notes_page["items"], notes_page=notes_page, query=query,
+            requests=requests_page["items"], requests_page=requests_page, page_sizes=PAGE_SIZES, counts=counts,
             total=len(requests_all), shown_status=shown_status, statuses=REQUEST_STATUSES,
             kinds=REQUEST_KINDS, form=session.pop("request_form", None),
         )
@@ -3013,14 +3052,16 @@ def create_app(test_config=None):
             return redirect(url_for("updates", _anchor="requests"), code=303)
         update_request_status(item, status, g.user)
         flash(f"“{item['title']}” is now {REQUEST_STATUSES[status].lower()}.", "success")
-        return redirect(url_for("updates", status=request.form.get("shown_status") or None, _anchor="requests"), code=303)
+        return redirect(url_for("updates", status=request.form.get("shown_status") or None,
+                                rpage=request.form.get("shown_page") or None, _anchor="requests"), code=303)
 
     @app.post("/updates/requests/<int:request_id>/delete")
     def delete_request(request_id):
         if request_store.get(request_id) is not None:
             request_store.delete(request_id)
             flash("Request deleted.", "success")
-        return redirect(url_for("updates", status=request.form.get("shown_status") or None, _anchor="requests"), code=303)
+        return redirect(url_for("updates", status=request.form.get("shown_status") or None,
+                                rpage=request.form.get("shown_page") or None, _anchor="requests"), code=303)
 
     # --------------------------------------------------------------- missions
 

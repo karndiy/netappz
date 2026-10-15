@@ -178,6 +178,19 @@ small { display: block; margin-top: 9px; color: var(--mac-muted); }
 .update-heading time, .update-note { color: var(--mac-muted); font-size: 14px; }
 .update-entry ul { margin: 12px 0 0; padding-left: 21px; color: var(--mac-text-2); line-height: 1.7; }
 .update-note { margin-top: 16px; }
+.update-list { scroll-margin-top: 16px; }
+
+/* Page links and page size under the requests and patch notes */
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-top: 14px; font-size: 14px; }
+.pager-count { margin: 0; color: var(--mac-muted); }
+.pager-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pager-pages a, .pager-pages span { min-width: 34px; padding: 5px 9px; border: 1px solid transparent; border-radius: 6px; text-align: center; text-decoration: none; }
+.pager-pages a { border-color: var(--mac-separator); background: var(--mac-surface); color: var(--mac-text-2); }
+.pager-pages a:hover { border-color: var(--mac-accent); color: var(--mac-accent); }
+.pager-pages .pager-current { border-color: var(--mac-accent); background: var(--mac-accent-tint); color: var(--mac-accent); font-weight: 600; }
+.pager-pages .pager-off, .pager-pages .pager-gap { color: var(--mac-muted); opacity: .6; }
+.pager-size { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--mac-muted); }
+.pager-size select { min-height: 32px; padding: 3px 8px; border: 1px solid var(--mac-border); border-radius: 6px; font-size: 14px; }
 
 /* Requests on the Update log page */
 .requests { margin-top: 22px; padding: 20px 22px; background: var(--mac-surface); border: 1px solid var(--mac-separator); border-radius: 10px; scroll-margin-top: 16px; }
@@ -265,6 +278,8 @@ small { display: block; margin-top: 9px; color: var(--mac-muted); }
   .rename-form input { flex: 1; width: auto; min-width: 90px; font-size: 16px; }
   .file-actions button { min-height: 44px; }
   .update-entry { padding: 17px 15px; }
+  .pager { flex-direction: column; align-items: stretch; }
+  .pager-pages a, .pager-pages span { min-height: 40px; padding: 9px 11px; }
   .update-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
 }
 
