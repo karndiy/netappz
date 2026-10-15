@@ -2,25 +2,25 @@
 {% if current_user %}
   <a class="topbar-link topbar-bell" href="{{ url_for('notifications') }}" id="topbar-bell"
      data-poll="{{ url_for('notifications_poll') }}" data-latest="{{ latest_alert or 0 }}" data-popups="{{ 1 if alert_popups else 0 }}"
-     title="Notifications" aria-label="Notifications{% if unread_alerts %}, {{ unread_alerts }} unread{% endif %}"{% if request.endpoint == 'notifications' %} aria-current="page"{% endif %}>
+     title="{{ t('Notifications') }}" aria-label="{{ t('Notifications') }}{% if unread_alerts %}, {{ t('{count} unread', count=unread_alerts) }}{% endif %}"{% if request.endpoint == 'notifications' %} aria-current="page"{% endif %}>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15L6 16Z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg>
     <span class="topbar-badge" {% if not unread_alerts %}hidden{% endif %}>{{ unread_alerts if unread_alerts < 100 else "99+" }}</span>
   </a>
-  <a class="topbar-link topbar-user" href="{{ url_for('feed_profile', username=current_user.username) }}" title="Your profile">{{ avatar(current_user.username, current_user.avatar, "is-xs") }}<span>{{ current_user.username }}</span></a>
+  <a class="topbar-link topbar-user" href="{{ url_for('feed_profile', username=current_user.username) }}" title="{{ t('Your profile') }}">{{ avatar(current_user.username, current_user.avatar, "is-xs") }}<span>{{ current_user.username }}</span></a>
   <a class="topbar-link topbar-wallet" href="{{ url_for('wallet') }}"{% if request.endpoint == 'wallet' %} aria-current="page"{% endif %}
-     title="Wallet{% if wallet_balance is number %}: {{ '{:,}'.format(wallet_balance) }} points{% endif %}">
+     title="{{ t('Wallet') }}{% if wallet_balance is number %}: {{ t('{count} points', count='{:,}'.format(wallet_balance)) }}{% endif %}">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2ZM4 7l11-3v3M16 13.5h.5"/></svg>
-    <span>Wallet</span>{% if wallet_balance is number %} <small class="topbar-coins">🪙 {{ "{:,}".format(wallet_balance) }}</small>{% endif %}
+    <span>{{ t('Wallet') }}</span>{% if wallet_balance is number %} <small class="topbar-coins">🪙 {{ "{:,}".format(wallet_balance) }}</small>{% endif %}
   </a>
-  <a class="topbar-link topbar-settings" href="{{ url_for('settings_page') }}" title="Settings"{% if (request.endpoint or '').startswith('settings') %} aria-current="page"{% endif %}>
+  <a class="topbar-link topbar-settings" href="{{ url_for('settings_page') }}" title="{{ t('Settings') }}"{% if (request.endpoint or '').startswith('settings') %} aria-current="page"{% endif %}>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4"/></svg>
-    <span>Settings</span>
+    <span>{{ t('Settings') }}</span>
   </a>
   <form class="topbar-logout" action="{{ url_for('logout') }}" method="post">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-    <button class="topbar-link" type="submit" title="Log out">
+    <button class="topbar-link" type="submit" title="{{ t('Log out') }}">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 8l-4 4 4 4M6 12h10"/></svg>
-      <span>Log out</span>
+      <span>{{ t('Log out') }}</span>
     </button>
   </form>
 {% endif %}

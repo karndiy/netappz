@@ -1,6 +1,6 @@
 {% from "_avatar.html" import avatar %}
 <!doctype html>
-<html lang="en" data-theme="{{ theme }}">
+<html lang="{{ lang }}" data-theme="{{ theme }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -194,6 +194,23 @@
               {% endfor %}
             </div>
             <div class="settings-actions"><button type="submit">Save</button></div>
+          </form>
+
+          <form class="settings-card" id="language" action="{{ url_for('save_language') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <div class="settings-card-head">
+              <h2>{{ t("Language") }}</h2>
+              <p>{{ t("Used for the menu, the top bar and this page, on every device you sign in with.") }}</p>
+            </div>
+            <div class="language-choices" role="radiogroup" aria-label="{{ t('Language') }}">
+              {% for key, label in languages.items() %}
+                <label class="language-choice">
+                  <input type="radio" name="language" value="{{ key }}" {% if prefs.language == key %}checked{% endif %}>
+                  <span lang="{{ key }}">{{ label }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            <div class="settings-actions"><button type="submit">{{ t("Save") }}</button></div>
           </form>
 
         {% elif section.key == "users" %}

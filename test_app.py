@@ -85,7 +85,7 @@ class FileManagerTests(unittest.TestCase):
     def test_feed_is_the_home_page_and_files_sits_below_it(self):
         (self.root / "docs").mkdir()
         page = self.client.get("/").get_data(as_text=True)
-        self.assertIn('class="sidebar-link" href="/feed" title="Feed" aria-current="page"', page)
+        self.assertIn('class="sidebar-link" href="/feed" title="ฟีด" aria-current="page"', page)
         self.assertIn('class="sidebar-brand" href="/feed"', page)
         menu = page.split('<nav class="sidebar-nav"')[1].split("</nav>")[0]
         self.assertEqual(re.findall(r'class="sidebar-link" href="([^"]+)"', menu)[:2], ["/feed", "/files"])
@@ -1798,7 +1798,7 @@ class FileManagerTests(unittest.TestCase):
         page = self.client.get("/files").get_data(as_text=True)
         self.assertEqual(page.count("href=\"/wallet\""), 1)
         self.assertLess(page.index('class="topbar-link topbar-user"'), page.index("topbar-wallet"))
-        self.assertLess(page.index("topbar-wallet"), page.index("Log out"))
+        self.assertLess(page.index("topbar-wallet"), page.index("ออกจากระบบ"))  # Log out, in Thai.
         self.assertIn('<small class="topbar-coins">🪙 1,250</small>', page)
         self.assertIn('href="/wallet" aria-current="page"', self.client.get("/wallet").get_data(as_text=True))
         self.assertIn('name="show_balance" value="1" checked',
@@ -1817,9 +1817,9 @@ class FileManagerTests(unittest.TestCase):
         page = self.client.get("/notes").get_data(as_text=True)
         self.assertIn('<header class="sidebar">', page)
         self.assertNotIn('<header class="topbar">', page)
-        self.assertIn('class="sidebar-link" href="/notes" title="Notes" aria-current="page"', page)
-        self.assertIn('class="sidebar-link" href="/feed" title="Feed">', page)
-        self.assertIn('<html lang="en" data-theme="auto">', page)
+        self.assertIn('class="sidebar-link" href="/notes" title="โน้ต" aria-current="page"', page)
+        self.assertIn('class="sidebar-link" href="/feed" title="ฟีด">', page)
+        self.assertIn('<html lang="th" data-theme="auto">', page)
         self.assertIn('href="/settings/appearance"', self.client.get("/settings").get_data(as_text=True))
         self.assertIn('name="theme" value="auto" checked',
                       self.client.get("/settings/appearance").get_data(as_text=True))
@@ -1838,6 +1838,44 @@ class FileManagerTests(unittest.TestCase):
         self.client.post("/settings/appearance", data={"_csrf_token": token, "theme": "light"})
         self.assertIn('data-theme="light"', self.client.get("/wallet").get_data(as_text=True))
 
+    def test_language_setting_translates_the_menu_and_top_bar(self):
+        import app as app_module
+
+        token = self._csrf()
+        # Thai is the main language until someone picks another.
+        page = self.client.get("/settings/appearance").get_data(as_text=True)
+        self.assertIn('<html lang="th"', page)
+        self.assertIn('name="language" value="th" checked', page)
+        for key in ("th", "en", "lo", "zh", "ru", "es", "la"):
+            self.assertIn(f'name="language" value="{key}"', page)
+        self.assertIn("<span>ตั้งค่า</span>", page)
+
+        response = self.client.post("/settings/appearance/language", data={"_csrf_token": token, "language": "en"})
+        self.assertEqual(response.status_code, 303)
+        page = self.client.get("/notes").get_data(as_text=True)
+        self.assertIn('<html lang="en"', page)
+        self.assertIn('class="sidebar-link" href="/notes" title="Notes" aria-current="page"', page)
+        self.assertIn("<span>Log out</span>", page)
+
+        self.client.post("/settings/appearance/language", data={"_csrf_token": token, "language": "ru"})
+        page = self.client.get("/settings/appearance").get_data(as_text=True)
+        self.assertIn("Язык изменён: Русский.", page)
+        self.assertIn("<span>Выйти</span>", page)
+        self.assertIn('title="Справка"', page)
+        # The theme is kept, and an unknown language is refused.
+        self.client.post("/settings/appearance", data={"_csrf_token": token, "theme": "dark"})
+        self.client.post("/settings/appearance/language", data={"_csrf_token": token, "language": "xx"})
+        page = self.client.get("/settings/appearance").get_data(as_text=True)
+        self.assertIn('<html lang="ru" data-theme="dark">', page)
+        self.assertIn('name="language" value="ru" checked', page)
+        self.assertIn("Выберите язык из списка.", page)
+
+        # Every word has every language, and words without a translation fall back to English.
+        for words in app_module.TRANSLATIONS.values():
+            self.assertEqual(set(words), set(app_module.LANGUAGES) - {"en"})
+        self.assertEqual(app_module.translate("Not translated yet", "lo"), "Not translated yet")
+        self.assertEqual(app_module.translate("{count} points", "es", count="1,250"), "1,250 puntos")
+
     def test_help_page_covers_every_part_of_the_app(self):
         import app as app_module
 
@@ -1845,7 +1883,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(app_module.HELP_VERSION, app_module.APP_VERSION,
                          "Update HELP_TOPICS for this change, then set HELP_VERSION to the new version.")
         page = self.client.get("/help").get_data(as_text=True)
-        self.assertIn('class="sidebar-link" href="/help" title="Help" aria-current="page"', page)
+        self.assertIn('class="sidebar-link" href="/help" title="ช่วยเหลือ" aria-current="page"', page)
         self.assertIn(f"Up to date with version {app_module.APP_VERSION}", page)
         # Every page in the side menu and every Settings category has its help.
         menu = self.client.get("/").get_data(as_text=True).split('<nav class="sidebar-nav"')[1].split("</nav>")[0]
@@ -2248,7 +2286,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(response.headers["Location"], "/notes")
         page = client.get("/").get_data(as_text=True)
         self.assertIn("<span>admin</span></a>", page)  # Name and Log out in the top bar.
-        self.assertIn("Log out", page)
+        self.assertIn("ออกจากระบบ", page)
 
         # Links back to another site are ignored after signing in.
         client2, token2 = self._fresh_client()

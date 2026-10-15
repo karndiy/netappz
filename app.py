@@ -128,7 +128,7 @@ SETTINGS_SECTIONS = [
     {"key": "notifications", "title": "Notifications", "icon": "🔔", "admin": False,
      "description": "Choose what you're told about, whether alerts pop up, and whether the top bar shows your points."},
     {"key": "appearance", "title": "Appearance", "icon": "🎨", "admin": False,
-     "description": "A light or dark look for every page."},
+     "description": "A light or dark look and the language for every page."},
     {"key": "users", "title": "Users & sign-up", "icon": "👥", "admin": True,
      "description": "Add people, approve new accounts, and choose who can sign up."},
     {"key": "ai", "title": "Chat AI", "icon": "🤖", "admin": True,
@@ -147,6 +147,64 @@ SETTINGS_SECTIONS = [
 SECTION_KEYS = {section["key"]: section for section in SETTINGS_SECTIONS}
 # Looks people can choose under Settings → Appearance; "auto" follows the device.
 THEMES = {"auto": "Match my device", "light": "Light", "dark": "Dark"}
+# Languages people can choose under Settings → Appearance, each named in its own language.
+# Thai is the main language: it is used until someone picks another.
+LANGUAGES = {"th": "ไทย", "en": "English", "lo": "ລາວ", "zh": "中文", "ru": "Русский", "es": "Español", "la": "Latina"}
+DEFAULT_LANGUAGE = "th"
+# Words shown around the app, by their English text. Anything missing here is shown in English,
+# so pages can be translated a few at a time: add the English text and the other languages below.
+TRANSLATIONS = {
+    "Network Files": {"th": "Network Files", "lo": "Network Files", "zh": "Network Files", "ru": "Network Files",
+                      "es": "Network Files", "la": "Network Files"},
+    "Feed": {"th": "ฟีด", "lo": "ຟີດ", "zh": "动态", "ru": "Лента", "es": "Novedades", "la": "Nuntii"},
+    "Files": {"th": "ไฟล์", "lo": "ໄຟລ໌", "zh": "文件", "ru": "Файлы", "es": "Archivos", "la": "Fasciculi"},
+    "Notes": {"th": "โน้ต", "lo": "ບັນທຶກ", "zh": "笔记", "ru": "Заметки", "es": "Notas", "la": "Notae"},
+    "Chat": {"th": "แชท", "lo": "ແຊັດ", "zh": "聊天", "ru": "Чат", "es": "Chat", "la": "Colloquium"},
+    "Convert": {"th": "แปลงไฟล์", "lo": "ແປງໄຟລ໌", "zh": "转换", "ru": "Конвертер", "es": "Convertir",
+                "la": "Convertere"},
+    "Missions": {"th": "ภารกิจ", "lo": "ພາລະກິດ", "zh": "任务", "ru": "Миссии", "es": "Misiones", "la": "Munera"},
+    "Update log": {"th": "บันทึกอัปเดต", "lo": "ບັນທຶກການອັບເດດ", "zh": "更新日志", "ru": "Журнал обновлений",
+                   "es": "Registro de cambios", "la": "Acta renovationum"},
+    "Help": {"th": "ช่วยเหลือ", "lo": "ຊ່ວຍເຫຼືອ", "zh": "帮助", "ru": "Справка", "es": "Ayuda", "la": "Auxilium"},
+    "Main navigation": {"th": "เมนูหลัก", "lo": "ເມນູຫຼັກ", "zh": "主导航", "ru": "Главное меню",
+                        "es": "Navegación principal", "la": "Navigatio principalis"},
+    "Notifications": {"th": "การแจ้งเตือน", "lo": "ການແຈ້ງເຕືອນ", "zh": "通知", "ru": "Уведомления",
+                      "es": "Notificaciones", "la": "Nuntiationes"},
+    "{count} unread": {"th": "ยังไม่อ่าน {count}", "lo": "ຍັງບໍ່ໄດ້ອ່ານ {count}", "zh": "{count} 条未读",
+                       "ru": "непрочитанных: {count}", "es": "{count} sin leer", "la": "{count} non lecta"},
+    "Your profile": {"th": "โปรไฟล์ของคุณ", "lo": "ໂປຣໄຟລ໌ຂອງທ່ານ", "zh": "我的资料", "ru": "Ваш профиль",
+                     "es": "Tu perfil", "la": "Pagina tua"},
+    "Wallet": {"th": "กระเป๋าเงิน", "lo": "ກະເປົາເງິນ", "zh": "钱包", "ru": "Кошелёк", "es": "Billetera",
+               "la": "Crumena"},
+    "{count} points": {"th": "{count} แต้ม", "lo": "{count} ຄະແນນ", "zh": "{count} 积分", "ru": "{count} баллов",
+                       "es": "{count} puntos", "la": "{count} puncta"},
+    "Settings": {"th": "ตั้งค่า", "lo": "ຕັ້ງຄ່າ", "zh": "设置", "ru": "Настройки", "es": "Ajustes", "la": "Optiones"},
+    "Log out": {"th": "ออกจากระบบ", "lo": "ອອກຈາກລະບົບ", "zh": "退出登录", "ru": "Выйти", "es": "Cerrar sesión",
+                "la": "Exire"},
+    "Language": {"th": "ภาษา", "lo": "ພາສາ", "zh": "语言", "ru": "Язык", "es": "Idioma", "la": "Lingua"},
+    "Used for the menu, the top bar and this page, on every device you sign in with.": {
+        "th": "ใช้กับเมนู แถบด้านบน และหน้านี้ ในทุกอุปกรณ์ที่คุณลงชื่อเข้าใช้",
+        "lo": "ໃຊ້ກັບເມນູ, ແຖບດ້ານເທິງ ແລະ ໜ້ານີ້ ໃນທຸກອຸປະກອນທີ່ທ່ານເຂົ້າສູ່ລະບົບ",
+        "zh": "用于菜单、顶栏和本页，适用于你登录的所有设备。",
+        "ru": "Для меню, верхней панели и этой страницы на всех устройствах, где вы входите.",
+        "es": "Se usa en el menú, la barra superior y esta página, en todos los dispositivos donde inicias sesión.",
+        "la": "Ad indicem, ad tabulam superiorem et ad hanc paginam in omnibus machinis tuis adhibetur."},
+    "Save": {"th": "บันทึก", "lo": "ບັນທຶກ", "zh": "保存", "ru": "Сохранить", "es": "Guardar", "la": "Servare"},
+    "Language set to {name}.": {"th": "ตั้งภาษาเป็น{name}แล้ว", "lo": "ຕັ້ງພາສາເປັນ{name}ແລ້ວ",
+                                "zh": "语言已设为{name}。", "ru": "Язык изменён: {name}.",
+                                "es": "Idioma cambiado a {name}.", "la": "Lingua mutata: {name}."},
+    "Choose one of the languages in the list.": {
+        "th": "เลือกภาษาจากรายการ", "lo": "ເລືອກພາສາຈາກລາຍການ", "zh": "请从列表中选择一种语言。",
+        "ru": "Выберите язык из списка.", "es": "Elige uno de los idiomas de la lista.",
+        "la": "Linguam ex indice elige."},
+}
+
+
+def translate(text, language, **values):
+    """The words for this English text in the language, or the English text when there is no translation yet."""
+    words = TRANSLATIONS.get(text, {}).get(language, text)
+    return words.format(**values) if values else words
+
 # Alerts people can turn off. Sign-up and approval alerts are always sent.
 NOTIFY_KINDS = {
     "mention": "Someone @mentions you in a post or comment",
@@ -168,7 +226,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.54.0"
+HELP_VERSION = "1.55.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -315,7 +373,7 @@ HELP_TOPICS = [
         "steps": [
             "Profile & password: add a profile photo and a few words about you, and change your password.",
             "Notifications: choose what you're told about, whether alerts pop up, and whether your points show next to Wallet.",
-            "Appearance: choose Light, Dark or Match my device. It applies wherever you sign in.",
+            "Appearance: choose Light, Dark or Match my device, and the language: ไทย (Thai, the main language), English, ລາວ (Lao), 中文 (Chinese), Русский (Russian), Español (Spanish) or Latina (Latin). Both apply wherever you sign in.",
         ],
         "admin": [
             "Users & sign-up: add people, approve new accounts, make someone an administrator, set passwords and choose who can sign up.",
@@ -329,6 +387,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.55.0",
+        "date": "2026-10-15",
+        "changes": [
+            "The app can now be shown in other languages (request #27: support Thai as the main language plus English, Lao, Chinese, Russian, Spanish and Latin). Choose yours under Settings → Appearance → Language.",
+            "Thai is the main language: it is used until you pick another. Your choice applies wherever you sign in.",
+            "The side menu, the top bar (notifications, wallet, settings, log out) and the language picker are translated so far. The rest of the pages are still in English and will be translated a few at a time.",
+        ],
+    },
     {
         "version": "1.54.0",
         "date": "2026-10-15",
@@ -2322,7 +2389,8 @@ def create_app(test_config=None):
         prefs = saved_prefs(user)
         return {"mute": [k for k in prefs.get("mute", []) if k in NOTIFY_KINDS], "popups": prefs.get("popups", True),
                 "show_balance": prefs.get("show_balance", True),
-                "theme": prefs.get("theme") if prefs.get("theme") in THEMES else "auto"}
+                "theme": prefs.get("theme") if prefs.get("theme") in THEMES else "auto",
+                "language": prefs.get("language") if prefs.get("language") in LANGUAGES else DEFAULT_LANGUAGE}
 
     def update_prefs(user, **changes):
         """Save some choices without forgetting the others."""
@@ -2733,8 +2801,10 @@ def create_app(test_config=None):
                 alerts["announcements"] = announcement_store.active()
             except Exception:
                 app.logger.exception("Could not load announcements")
-        theme = user_prefs(user)["theme"] if user else "auto"
-        return {"current_user": user, "announcement_levels": ANNOUNCEMENT_LEVELS, "theme": theme, **alerts}
+        prefs = user_prefs(user) if user else {"theme": "auto", "language": DEFAULT_LANGUAGE}
+        language = prefs["language"]
+        return {"current_user": user, "announcement_levels": ANNOUNCEMENT_LEVELS, "theme": prefs["theme"],
+                "lang": language, "t": lambda text, **values: translate(text, language, **values), **alerts}
 
     @app.before_request
     def require_login():
@@ -4923,7 +4993,7 @@ def create_app(test_config=None):
             "account": "Profile photo set" if g.user["avatar"] else "No profile photo yet",
             "notifications": (f"{len(NOTIFY_KINDS) - len(prefs['mute'])} of {len(NOTIFY_KINDS)} kinds on"
                               + ("" if prefs["popups"] else " · pop-ups off")),
-            "appearance": THEMES[prefs["theme"]],
+            "appearance": f"{THEMES[prefs['theme']]} · {LANGUAGES[prefs['language']]}",
         }
         if g.user["is_admin"]:
             summary.update({
@@ -4979,7 +5049,7 @@ def create_app(test_config=None):
         if section == "notifications":
             return {"prefs": user_prefs(g.user), "kinds": NOTIFY_KINDS}
         if section == "appearance":
-            return {"prefs": user_prefs(g.user), "themes": THEMES}
+            return {"prefs": user_prefs(g.user), "themes": THEMES, "languages": LANGUAGES}
         if section == "account":
             return {"stats": feed_store.stats(g.user["id"])}
         return {}
@@ -5113,6 +5183,16 @@ def create_app(test_config=None):
         else:
             update_prefs(g.user, theme=theme)
             flash(f"Appearance set to {THEMES[theme]}.", "success")
+        return redirect(url_for("settings_section", section="appearance"), code=303)
+
+    @app.post("/settings/appearance/language")
+    def save_language():
+        language = request.form.get("language", "")
+        if language not in LANGUAGES:
+            flash(translate("Choose one of the languages in the list.", user_prefs(g.user)["language"]), "error")
+        else:
+            update_prefs(g.user, language=language)
+            flash(translate("Language set to {name}.", language, name=LANGUAGES[language]), "success")
         return redirect(url_for("settings_section", section="appearance"), code=303)
 
     @app.post("/settings/account/profile")

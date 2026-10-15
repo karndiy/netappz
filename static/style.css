@@ -1673,6 +1673,13 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 .theme-preview.is-auto b { background: linear-gradient(135deg, #fff 50%, #2c2c2e 50%); }
 .theme-choice input:checked + .theme-preview { border-color: var(--mac-accent); box-shadow: 0 0 0 3px var(--mac-accent-tint); }
 .theme-choice input:focus-visible + .theme-preview { outline: 3px solid var(--mac-focus); outline-offset: 2px; }
+/* Settings → Appearance → Language: one button per language, named in that language */
+.language-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; padding: 4px 18px 6px; }
+.language-choice { position: relative; margin: 0; font-weight: 500; cursor: pointer; }
+.language-choice input { position: absolute; opacity: 0; }
+.language-choice span { display: block; padding: 10px 12px; border: 2px solid var(--mac-separator); border-radius: 10px; text-align: center; }
+.language-choice input:checked + span { border-color: var(--mac-accent); box-shadow: 0 0 0 3px var(--mac-accent-tint); }
+.language-choice input:focus-visible + span { outline: 3px solid var(--mac-focus); outline-offset: 2px; }
 
 /* Help: one card per part of the app, with numbered steps. */
 .help-contents { margin-top: 18px; }
