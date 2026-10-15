@@ -168,7 +168,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.46.0"
+HELP_VERSION = "1.47.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -262,14 +262,19 @@ HELP_TOPICS = [
     },
     {
         "key": "wallet", "title": "Wallet", "icon": "🪙", "endpoint": "wallet",
-        "summary": "Your points: what you have, and every change to it.",
+        "summary": "Your points account: balance, deposits, transfers, exchanges and the coin economy.",
         "steps": [
-            "Wallet at the bottom of the menu shows your points. Open it to see the full history.",
-            "To send points to someone, choose the person, enter the amount and press Send. They are notified.",
+            "Wallet at the bottom of the menu shows your points. The account card at the top shows your balance and what came in and went out this month.",
+            "Use the Deposit, Transfer, Exchange and History buttons under the card to jump to each part.",
+            "Deposit: points come in when mission work or a quest is approved, or when an administrator deposits them.",
+            "Transfer: choose the person, enter the amount and press Send. They are notified.",
+            "Exchange: press Exchange on a reward to trade your points for it. An administrator hands it over.",
+            "Coin supply and demand shows how many points exist, how many were created and used up in the last 30 days, and a chart of the last 14 days.",
             "To hide your points from the menu, turn off \"Show my points next to Wallet\" under Settings → Notifications.",
         ],
         "admin": [
-            "Administrators deposit points into anyone's wallet, or take them back, and see everyone's balance.",
+            "Administrators deposit points into anyone's wallet, or take them back, and see everyone's balance and history.",
+            "Under Exchange, add rewards with a price and how many there are, and turn them off or delete them. You are notified when someone exchanges.",
         ],
     },
     {
@@ -314,6 +319,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.47.0",
+        "date": "2026-10-15",
+        "changes": [
+            "The Wallet looks like a bank dashboard: an account card with your balance and this month's money in and out, and big Deposit, Transfer, Exchange and History buttons (request #18: upgrade the wallet to look like a trustworthy bank).",
+            "New Exchange: administrators offer rewards for points, and anyone can trade their points for one. Administrators are notified to hand it over.",
+            "New coin supply and demand panel: points in circulation, how many were created and used up in the last 30 days, how often they change hands, and a 14-day chart with a plain reading of the balance.",
+        ],
+    },
     {
         "version": "1.46.0",
         "date": "2026-10-14",
@@ -822,8 +836,13 @@ QUEST_UTC_OFFSET = int(os.environ.get("QUEST_UTC_OFFSET", "7"))
 MISSION_APPROVALS = {"proposed": "Waiting for approval", "approved": "Approved", "declined": "Declined"}
 # Wallet: points people hold. Administrators deposit them, people transfer them, approved missions pay them.
 WALLET_KINDS = {"deposit": "Deposit", "withdraw": "Taken away", "transfer_in": "Received",
-                "transfer_out": "Sent", "reward": "Mission reward"}
+                "transfer_out": "Sent", "reward": "Mission reward", "exchange": "Exchanged"}
 WALLET_MAX = 1_000_000  # the most points in one deposit, transfer or mission reward
+# Supply and demand: deposits and rewards create points; taking back and exchanging use them up.
+WALLET_CREATED = ("deposit", "reward")
+WALLET_USED = ("withdraw", "exchange")
+WALLET_TREND_DAYS = 14
+WALLET_PERIOD_DAYS = 30
 WALLET_NOTE = 200
 WALLET_SHOWN = 100
 # Announcements float at the top of every page; the level picks the color.
@@ -1491,6 +1510,20 @@ def create_app(test_config=None):
             )
             """
         )
+        # Exchange (1.47.0): things administrators offer for points; stock -1 means no limit.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS wallet_offers (
+                {id_column},
+                title TEXT NOT NULL,
+                price INTEGER NOT NULL,
+                stock INTEGER NOT NULL DEFAULT -1,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_by INTEGER,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         # Announcements (1.38.0): floating messages for everyone, set by administrators.
         connection.execute(
             f"""
@@ -1822,12 +1855,110 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 self._add(connection, user_id, amount, "reward", note, admin_id)
 
+        offer_columns = "id, title, price, stock, is_active"
+
+        def offers(self, active_only=False):
+            where = "WHERE is_active = 1 " if active_only else ""
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    f"SELECT {self.offer_columns} FROM wallet_offers {where}ORDER BY is_active DESC, price, id"
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def offer(self, offer_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(f"SELECT {self.offer_columns} FROM wallet_offers WHERE id = ?"), (offer_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def add_offer(self, title, price, stock, admin_id):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("INSERT INTO wallet_offers (title, price, stock, created_by) VALUES (?, ?, ?, ?)"),
+                    (title, price, stock, admin_id),
+                )
+
+        def set_offer_active(self, offer_id, is_active):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE wallet_offers SET is_active = ? WHERE id = ?"),
+                                   (1 if is_active else 0, offer_id))
+
+        def delete_offer(self, offer_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM wallet_offers WHERE id = ?"), (offer_id,))
+
+        def exchange(self, user_id, offer_id):
+            """Spend points on an offer; the points leave the system. Returns the offer."""
+            with notes_connection() as connection:
+                self.lock(connection)
+                row = connection.execute(
+                    sql(f"SELECT {self.offer_columns} FROM wallet_offers WHERE id = ?"), (offer_id,)
+                ).fetchone()
+                if row is None or not row["is_active"]:
+                    raise ValueError("That offer isn't available.")
+                if row["stock"] == 0:
+                    raise ValueError("That offer is sold out.")
+                if self._balance(connection, user_id) < row["price"]:
+                    raise ValueError("You don't have enough points for that exchange.")
+                self._add(connection, user_id, -row["price"], "exchange", row["title"][:WALLET_NOTE], user_id)
+                if row["stock"] > 0:
+                    connection.execute(sql("UPDATE wallet_offers SET stock = stock - 1 WHERE id = ?"), (offer_id,))
+            return dict(row)
+
+        def economy(self, today=None):
+            """Supply and demand for points across everyone: how many exist, are made, used up and change hands."""
+            today = today or datetime.now(timezone.utc).date()
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    f"SELECT user_id, amount, kind, {time_as('created_at')} FROM wallet_entries"
+                ).fetchall()
+            period_start = (today - timedelta(days=WALLET_PERIOD_DAYS - 1)).isoformat()
+            days = [(today - timedelta(days=back)).isoformat() for back in range(WALLET_TREND_DAYS - 1, -1, -1)]
+            trend = {day: {"day": day, "created": 0, "used": 0} for day in days}
+            balances = {}
+            created = used = moved = 0
+            for row in rows:
+                balances[row["user_id"]] = balances.get(row["user_id"], 0) + row["amount"]
+                day = row["created_at"][:10]
+                key = ("created" if row["kind"] in WALLET_CREATED
+                       else "used" if row["kind"] in WALLET_USED else None)
+                if day >= period_start:
+                    if key == "created":
+                        created += row["amount"]
+                    elif key == "used":
+                        used -= row["amount"]
+                    elif row["kind"] == "transfer_in":
+                        moved += row["amount"]
+                if key and day in trend:
+                    trend[day][key] += abs(row["amount"])
+            supply = sum(balances.values())
+            holders = [points for points in balances.values() if points > 0]
+            if not created and not used:
+                reading = "quiet"
+            elif used > created * 1.2:
+                reading = "demand"  # people use points up faster than they are made: points are scarce
+            elif created > used * 2:
+                reading = "supply"  # far more points are made than used: they pile up
+            else:
+                reading = "balanced"
+            return {
+                "supply": supply, "holders": len(holders),
+                "average": supply // len(holders) if holders else 0,
+                "top_share": round(100 * max(holders) / supply) if holders and supply else 0,
+                "created": created, "used": used, "moved": moved, "net": created - used,
+                "velocity": round(moved / supply, 2) if supply else 0,
+                "reading": reading, "trend": list(trend.values()),
+                "trend_max": max([1] + [max(day["created"], day["used"]) for day in trend.values()]),
+            }
+
         def delete_user_content(self, user_id):
             """When an account is deleted, its points go; the other side of its transfers keeps theirs."""
             with notes_connection() as connection:
                 connection.execute(sql("DELETE FROM wallet_entries WHERE user_id = ?"), (user_id,))
                 connection.execute(sql("UPDATE wallet_entries SET other_id = NULL WHERE other_id = ?"), (user_id,))
                 connection.execute(sql("UPDATE wallet_entries SET created_by = NULL WHERE created_by = ?"), (user_id,))
+                connection.execute(sql("UPDATE wallet_offers SET created_by = NULL WHERE created_by = ?"), (user_id,))
 
     class QuestStore:
         """Daily quests and the rewards people claim for them."""
@@ -3270,13 +3401,18 @@ def create_app(test_config=None):
         user = g.user
         people = [person for person in user_store.all() if person["is_active"]]
         balances = wallet_store.balances() if user["is_admin"] else {}
+        history = wallet_store.history(user["id"])
+        month = datetime.now(timezone.utc).strftime("%Y-%m")
+        this_month = [entry for entry in history if entry["created_at"].startswith(month)]
         return render_template(
-            "wallet.html", balance=wallet_store.balance(user["id"]),
-            history=wallet_store.history(user["id"]),
+            "wallet.html", balance=wallet_store.balance(user["id"]), history=history,
+            month_in=sum(entry["amount"] for entry in this_month if entry["amount"] > 0),
+            month_out=-sum(entry["amount"] for entry in this_month if entry["amount"] < 0),
             everyone=wallet_store.history() if user["is_admin"] else [],
             recipients=[person for person in people if person["id"] != user["id"]],
             people=[{**person, "balance": balances.get(person["id"], 0)} for person in people],
-            kinds=WALLET_KINDS, max_amount=WALLET_MAX,
+            offers=wallet_store.offers(active_only=not user["is_admin"]),
+            economy=wallet_store.economy(), kinds=WALLET_KINDS, max_amount=WALLET_MAX,
         )
 
     @app.post("/wallet/transfer")
@@ -3331,7 +3467,60 @@ def create_app(test_config=None):
                                        + (f": {note}" if note else ""), url_for("wallet"))
             flash(f"{'Took' if take else 'Deposited'} {amount:,} points {'from' if take else 'for'} "
                   f"{person['username']}.", "success")
-        return redirect(url_for("wallet"), code=303)
+        return redirect(url_for("wallet", _anchor="deposit"), code=303)
+
+    @app.post("/wallet/offers")
+    def wallet_offer_create():
+        admin_required()
+        title = " ".join(request.form.get("title", "").split())
+        price = wallet_amount(request.form.get("price", ""))
+        stock = request.form.get("stock", "").strip()
+        stock = -1 if not stock else wallet_amount(stock)
+        error = None
+        if not title or len(title) > 120:
+            error = "Give the offer a name under 120 characters."
+        elif price is None:
+            error = f"The price is a whole number of points from 1 to {WALLET_MAX:,}."
+        elif stock is None:
+            error = "How many are available is a whole number, or leave it empty for no limit."
+        if error:
+            flash(error, "error")
+        else:
+            wallet_store.add_offer(title, price, stock, g.user["id"])
+            flash(f"Offer added: {title} for {price:,} points.", "success")
+        return redirect(url_for("wallet", _anchor="exchange"), code=303)
+
+    @app.post("/wallet/offers/<int:offer_id>/active")
+    def wallet_offer_active(offer_id):
+        admin_required()
+        offer = wallet_store.offer(offer_id)
+        if offer is not None:
+            is_active = request.form.get("active") == "1"
+            wallet_store.set_offer_active(offer_id, is_active)
+            flash(f"“{offer['title']}” is {'on' if is_active else 'off: people no longer see it'}.", "success")
+        return redirect(url_for("wallet", _anchor="exchange"), code=303)
+
+    @app.post("/wallet/offers/<int:offer_id>/delete")
+    def wallet_offer_delete(offer_id):
+        admin_required()
+        if wallet_store.offer(offer_id) is not None:
+            wallet_store.delete_offer(offer_id)
+            flash("Offer deleted.", "success")
+        return redirect(url_for("wallet", _anchor="exchange"), code=303)
+
+    @app.post("/wallet/offers/<int:offer_id>/exchange")
+    def wallet_exchange(offer_id):
+        try:
+            offer = wallet_store.exchange(g.user["id"], offer_id)
+        except ValueError as exc:
+            flash(str(exc), "error")
+        else:
+            notification_store.add(user_store.admin_ids(), g.user["id"], "wallet",
+                                   f"{g.user['username']} exchanged {offer['price']:,} points for “{offer['title']}”",
+                                   url_for("wallet", _anchor="wallet-all"))
+            flash(f"Exchanged {offer['price']:,} points for {offer['title']}. An administrator will hand it over.",
+                  "success")
+        return redirect(url_for("wallet", _anchor="exchange"), code=303)
 
     # ------------------------------------------------------------------- feed
 

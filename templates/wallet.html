@@ -13,7 +13,7 @@
       <div>
         <h1>Wallet</h1>
         <p class="page-description">
-          Points you earn from approved missions or get from an administrator. Send them to other people whenever you like.
+          Your points account: earn them from missions and quests, send them to people, and exchange them for rewards.
         </p>
       </div>
     </section>
@@ -35,11 +35,11 @@
                   {% if show_owner %}{{ entry.owner or 'Deleted account' }} · {% endif %}
                   {% if entry.kind == 'transfer_in' %}from {{ entry.other or 'a deleted account' }}
                   {% elif entry.kind == 'transfer_out' %}to {{ entry.other or 'a deleted account' }}
-                  {% elif entry.kind == 'reward' %}{{ entry.note }}
+                  {% elif entry.kind in ('reward', 'exchange') %}{{ entry.note }}
                   {% else %}{{ kinds.get(entry.kind, entry.kind) }}{% endif %}
                 </h3>
               </div>
-              {% if entry.note and entry.kind != 'reward' %}<p class="request-details">{{ entry.note }}</p>{% endif %}
+              {% if entry.note and entry.kind not in ('reward', 'exchange') %}<p class="request-details">{{ entry.note }}</p>{% endif %}
               <p class="request-meta">{{ entry.created_at[:16] }} UTC</p>
             </div>
             <span class="wallet-amount {{ 'is-in' if entry.amount > 0 else 'is-out' }}">{{ "{:+,}".format(entry.amount) }}</span>
@@ -50,64 +50,201 @@
       </ul>
     {% endmacro %}
 
-    <section class="requests wallet-summary" aria-labelledby="wallet-balance-heading">
-      <h2 id="wallet-balance-heading" class="visually-hidden">Your balance</h2>
-      <p class="wallet-balance"><span>🪙</span> {{ "{:,}".format(balance) }} <small>points</small></p>
-      <details class="request-new" {% if not recipients %}hidden{% endif %}>
-        <summary>Send points</summary>
-        <form class="request-form" action="{{ url_for('wallet_transfer') }}" method="post">
-          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-          <label for="transfer-to">To</label>
-          <select id="transfer-to" name="to" required>
-            <option value="">Choose a person</option>
-            {% for person in recipients %}<option value="{{ person.username }}">{{ person.username }}</option>{% endfor %}
-          </select>
-          <label for="transfer-amount">Points</label>
-          <input id="transfer-amount" name="amount" type="text" inputmode="numeric" maxlength="12" required placeholder="100">
-          <label for="transfer-note">Note <span class="optional">(optional)</span></label>
-          <input id="transfer-note" name="note" type="text" maxlength="200" placeholder="What it's for">
-          <div class="request-actions"><button type="submit">Send</button></div>
-        </form>
-      </details>
+    <section class="wallet-dashboard" aria-labelledby="wallet-balance-heading">
+      <div class="wallet-card">
+        <div class="wallet-card-top">
+          <span class="wallet-card-bank">🪙 Network Files Wallet</span>
+          <span class="wallet-card-number">Account •••• {{ "%04d" % current_user.id }}</span>
+        </div>
+        <h2 id="wallet-balance-heading" class="wallet-card-label">Available balance</h2>
+        <p class="wallet-balance">{{ "{:,}".format(balance) }} <small>points</small></p>
+        <div class="wallet-card-foot">
+          <span>{{ current_user.username }}</span>
+          <span>This month <b class="is-in">+{{ "{:,}".format(month_in) }}</b> <b class="is-out">−{{ "{:,}".format(month_out) }}</b></span>
+        </div>
+      </div>
+      <nav class="wallet-actions" aria-label="Wallet actions">
+        <a class="wallet-action" href="#deposit"><span aria-hidden="true">⬇️</span>Deposit</a>
+        <a class="wallet-action" href="#transfer"><span aria-hidden="true">↗️</span>Transfer</a>
+        <a class="wallet-action" href="#exchange"><span aria-hidden="true">🔁</span>Exchange</a>
+        <a class="wallet-action" href="#history"><span aria-hidden="true">🧾</span>History</a>
+      </nav>
+    </section>
+
+    <div class="wallet-panels">
+      <section class="requests wallet-panel" id="deposit" aria-labelledby="deposit-heading">
+        <div class="requests-head">
+          <h2 id="deposit-heading">Deposit</h2>
+          {% if current_user.is_admin %}
+            <p>Add points to someone's wallet, or take them back.</p>
+          {% else %}
+            <p>Points come in when an administrator approves your mission work or quest, or deposits them for you.</p>
+          {% endif %}
+        </div>
+        {% if current_user.is_admin %}
+          <form class="request-form" action="{{ url_for('wallet_deposit') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <label for="deposit-person">Account</label>
+            <select id="deposit-person" name="user_id" required>
+              <option value="">Choose a person</option>
+              {% for person in people %}<option value="{{ person.id }}">{{ person.username }} · {{ "{:,}".format(person.balance) }}</option>{% endfor %}
+            </select>
+            <label for="deposit-amount">Points</label>
+            <input id="deposit-amount" name="amount" type="text" inputmode="numeric" maxlength="12" required placeholder="100">
+            <label for="deposit-note">Note <span class="optional">(optional)</span></label>
+            <input id="deposit-note" name="note" type="text" maxlength="200" placeholder="What it's for">
+            <div class="request-actions">
+              <button type="submit" name="action" value="deposit">Deposit</button>
+              <button class="secondary" type="submit" name="action" value="take">Take back</button>
+            </div>
+          </form>
+        {% else %}
+          <p class="request-actions"><a class="button" href="{{ url_for('missions') }}">Find missions and quests</a></p>
+        {% endif %}
+      </section>
+
+      <section class="requests wallet-panel" id="transfer" aria-labelledby="transfer-heading">
+        <div class="requests-head">
+          <h2 id="transfer-heading">Transfer</h2>
+          <p>Send points from your wallet. The person is notified.</p>
+        </div>
+        {% if recipients %}
+          <form class="request-form" action="{{ url_for('wallet_transfer') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <label for="transfer-to">To</label>
+            <select id="transfer-to" name="to" required>
+              <option value="">Choose a person</option>
+              {% for person in recipients %}<option value="{{ person.username }}">{{ person.username }}</option>{% endfor %}
+            </select>
+            <label for="transfer-amount">Points</label>
+            <input id="transfer-amount" name="amount" type="text" inputmode="numeric" maxlength="12" required placeholder="100">
+            <label for="transfer-note">Note <span class="optional">(optional)</span></label>
+            <input id="transfer-note" name="note" type="text" maxlength="200" placeholder="What it's for">
+            <div class="request-actions"><button type="submit">Send</button></div>
+          </form>
+        {% else %}
+          <p class="empty">There's nobody else to send points to yet.</p>
+        {% endif %}
+      </section>
+    </div>
+
+    <section class="requests" id="exchange" aria-labelledby="exchange-heading">
+      <div class="requests-head">
+        <h2 id="exchange-heading">Exchange</h2>
+        <p>Trade your points for rewards. The points are used up and an administrator hands the reward over.</p>
+      </div>
+      <ul class="card-grid wallet-offers">
+        {% for offer in offers %}
+          <li class="mission-card wallet-offer {{ '' if offer.is_active else 'is-off' }}">
+            <h3>{{ offer.title }}</h3>
+            <p class="wallet-offer-price">🪙 {{ "{:,}".format(offer.price) }} <small>points</small></p>
+            <p class="request-meta">
+              {% if offer.stock < 0 %}No limit{% elif offer.stock == 0 %}Sold out{% else %}{{ offer.stock }} left{% endif %}
+              {% if not offer.is_active %} · Off{% endif %}
+            </p>
+            <div class="mission-card-foot">
+              {% if offer.is_active %}
+                <form action="{{ url_for('wallet_exchange', offer_id=offer.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" {% if offer.stock == 0 or balance < offer.price %}disabled{% endif %}>Exchange</button>
+                </form>
+              {% endif %}
+              {% if current_user.is_admin %}
+                <span class="mission-card-tools">
+                  <form action="{{ url_for('wallet_offer_active', offer_id=offer.id) }}" method="post">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="active" value="{{ '0' if offer.is_active else '1' }}">
+                    <button class="secondary" type="submit">{{ 'Turn off' if offer.is_active else 'Turn on' }}</button>
+                  </form>
+                  <form action="{{ url_for('wallet_offer_delete', offer_id=offer.id) }}" method="post">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <button class="secondary" type="submit">Delete</button>
+                  </form>
+                </span>
+              {% endif %}
+            </div>
+          </li>
+        {% else %}
+          <li class="empty">Nothing to exchange yet.</li>
+        {% endfor %}
+      </ul>
+      {% if current_user.is_admin %}
+        <details class="request-new">
+          <summary>Add an offer</summary>
+          <form class="request-form" action="{{ url_for('wallet_offer_create') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <label for="offer-title">Reward</label>
+            <input id="offer-title" name="title" type="text" maxlength="120" required placeholder="Coffee voucher">
+            <label for="offer-price">Price in points</label>
+            <input id="offer-price" name="price" type="text" inputmode="numeric" maxlength="12" required placeholder="500">
+            <label for="offer-stock">How many <span class="optional">(empty for no limit)</span></label>
+            <input id="offer-stock" name="stock" type="text" inputmode="numeric" maxlength="12" placeholder="10">
+            <div class="request-actions"><button type="submit">Add offer</button></div>
+          </form>
+        </details>
+      {% endif %}
+    </section>
+
+    <section class="requests" id="economy" aria-labelledby="economy-heading">
+      <div class="requests-head">
+        <h2 id="economy-heading">Coin supply and demand</h2>
+        <p>Points across everyone. Deposits and rewards create points; taking back and exchanging use them up.</p>
+      </div>
+      <ul class="wallet-stats">
+        <li><span>In circulation</span><b>{{ "{:,}".format(economy.supply) }}</b><small>held by {{ economy.holders }} {{ 'person' if economy.holders == 1 else 'people' }}</small></li>
+        <li><span>Created · 30 days</span><b>{{ "{:,}".format(economy.created) }}</b><small>supply</small></li>
+        <li><span>Used up · 30 days</span><b>{{ "{:,}".format(economy.used) }}</b><small>demand</small></li>
+        <li><span>Net change · 30 days</span><b>{{ "{:+,}".format(economy.net) }}</b><small>created − used</small></li>
+        <li><span>Changed hands · 30 days</span><b>{{ "{:,}".format(economy.moved) }}</b><small>{{ economy.velocity }}× the supply</small></li>
+        <li><span>Largest holder</span><b>{{ economy.top_share }}%</b><small>average {{ "{:,}".format(economy.average) }}</small></li>
+      </ul>
+      <p class="wallet-reading is-{{ economy.reading }}">
+        {% if economy.reading == 'demand' %}📈 Demand is high: people use points faster than they are created, so points are scarce. Consider more missions or deposits.
+        {% elif economy.reading == 'supply' %}📉 Supply is high: far more points are created than used, so they pile up. Consider adding rewards to exchange.
+        {% elif economy.reading == 'balanced' %}⚖️ Balanced: points are created and used at a similar pace.
+        {% else %}💤 Quiet: no points were created or used in the last 30 days.{% endif %}
+      </p>
+      <figure class="wallet-trend">
+        <figcaption>
+          Points created and used up, last {{ economy.trend|length }} days
+          <span class="wallet-legend"><i class="is-created"></i>Created <i class="is-used"></i>Used up</span>
+        </figcaption>
+        <div class="wallet-trend-bars">
+          {% for day in economy.trend %}
+            <div class="wallet-trend-day" title="{{ day.day }}: {{ '{:,}'.format(day.created) }} created, {{ '{:,}'.format(day.used) }} used up">
+              <span class="is-created" style="height: {{ (100 * day.created / economy.trend_max)|round(1) }}%"></span>
+              <span class="is-used" style="height: {{ (100 * day.used / economy.trend_max)|round(1) }}%"></span>
+              <em>{{ day.day[8:] }}</em>
+            </div>
+          {% endfor %}
+        </div>
+      </figure>
     </section>
 
     {% if current_user.is_admin %}
       <section class="requests" id="wallet-everyone" aria-labelledby="wallet-everyone-heading">
         <div class="requests-head">
           <h2 id="wallet-everyone-heading">Everyone's balance</h2>
-          <p>Deposit points into someone's wallet, or take them back.</p>
+          <p>Use Deposit above to add points to an account or take them back.</p>
         </div>
         <ul class="request-list">
           {% for person in people %}
             <li class="request-item">
-              <div class="request-main">
-                <div class="request-title-row"><h3>{{ person.username }}</h3></div>
-                <p class="request-meta">🪙 {{ "{:,}".format(person.balance) }} points</p>
-              </div>
-              <form class="mission-review-form" action="{{ url_for('wallet_deposit') }}" method="post">
-                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="user_id" value="{{ person.id }}">
-                <label class="visually-hidden" for="deposit-amount-{{ person.id }}">Points for {{ person.username }}</label>
-                <input id="deposit-amount-{{ person.id }}" name="amount" type="text" inputmode="numeric" maxlength="12"
-                       required placeholder="Points">
-                <label class="visually-hidden" for="deposit-note-{{ person.id }}">Note for {{ person.username }}</label>
-                <input id="deposit-note-{{ person.id }}" name="note" type="text" maxlength="200" placeholder="Note (optional)">
-                <button type="submit" name="action" value="deposit">Deposit</button>
-                <button class="secondary" type="submit" name="action" value="take">Take back</button>
-              </form>
+              <div class="request-main"><div class="request-title-row"><h3>{{ person.username }}</h3></div></div>
+              <span class="wallet-amount">🪙 {{ "{:,}".format(person.balance) }}</span>
             </li>
           {% endfor %}
         </ul>
       </section>
     {% endif %}
 
-    <section class="requests" aria-labelledby="wallet-history-heading">
+    <section class="requests" id="history" aria-labelledby="wallet-history-heading">
       <div class="requests-head"><h2 id="wallet-history-heading">Your history</h2></div>
       {{ entry_rows(history, False) }}
     </section>
 
     {% if current_user.is_admin %}
-      <section class="requests" aria-labelledby="wallet-all-heading">
+      <section class="requests" id="wallet-all" aria-labelledby="wallet-all-heading">
         <div class="requests-head">
           <h2 id="wallet-all-heading">Everyone's history</h2>
           <p>The latest changes to anyone's wallet.</p>

@@ -1728,6 +1728,72 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(wallet.balance(other_id), 550)
         self.assertIn("from a deleted account", self.client.get("/wallet").get_data(as_text=True))
 
+    def test_wallet_dashboard_exchange_and_supply_demand(self):
+        token = self._csrf()
+        wallet = self.app.extensions["wallet"]
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        member_id = users.add("member", "member-password")
+        wallet.deposit(member_id, 1000, "Start", self.admin_id)
+
+        page = self.client.get("/wallet").get_data(as_text=True)
+        for text in ("Available balance", 'href="#deposit"', 'href="#transfer"', 'href="#exchange"',
+                     "Coin supply and demand", "Nothing to exchange yet.", "Add an offer"):
+            self.assertIn(text, page)
+
+        # Administrators add offers; bad ones are refused.
+        for form in ({"title": "", "price": "10"}, {"title": "Mug", "price": "0"}, {"title": "Mug", "price": "10",
+                                                                                   "stock": "x"}):
+            self.client.post("/wallet/offers", data={"_csrf_token": token, **form})
+        self.assertEqual(wallet.offers(), [])
+        self.client.post("/wallet/offers", data={"_csrf_token": token, "title": "Coffee", "price": "400", "stock": "1"})
+        self.client.post("/wallet/offers", data={"_csrf_token": token, "title": "Holiday", "price": "5000"})
+        coffee, holiday = wallet.offers()
+        self.assertEqual((coffee["stock"], holiday["stock"]), (1, -1))
+
+        # Members exchange points; the stock runs out and the balance can't go below zero.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertEqual(self.client.post("/wallet/offers", data={
+            "_csrf_token": token, "title": "Free", "price": "1"}).status_code, 403)
+        page = self.client.get("/wallet").get_data(as_text=True)
+        self.assertIn("Coffee", page)
+        self.assertNotIn("Add an offer", page)
+        self.client.post(f"/wallet/offers/{holiday['id']}/exchange", data={"_csrf_token": token})
+        self.assertEqual(wallet.balance(member_id), 1000)
+        self.client.post(f"/wallet/offers/{coffee['id']}/exchange", data={"_csrf_token": token})
+        self.assertEqual(wallet.balance(member_id), 600)
+        self.assertIn("member exchanged 400 points for “Coffee”", notifications.for_user(self.admin_id)[0]["message"])
+        self.client.post(f"/wallet/offers/{coffee['id']}/exchange", data={"_csrf_token": token})
+        self.assertIn("sold out", self.client.get("/wallet").get_data(as_text=True))
+        self.assertEqual(wallet.balance(member_id), 600)
+        self.assertEqual(wallet.history(member_id)[0]["kind"], "exchange")
+
+        # Turned-off offers are hidden from members and can't be exchanged.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post(f"/wallet/offers/{holiday['id']}/active", data={"_csrf_token": token, "active": "0"})
+        self.assertIn("is off", self.client.get("/wallet").get_data(as_text=True))
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertNotIn("Holiday", self.client.get("/wallet").get_data(as_text=True))
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = self.admin_id
+        self.client.post(f"/wallet/offers/{holiday['id']}/delete", data={"_csrf_token": token})
+        self.assertEqual([offer["title"] for offer in wallet.offers()], ["Coffee"])
+
+        # Supply and demand: 1,000 created, 400 used up, 100 changed hands.
+        self.client.post("/wallet/transfer", data={"_csrf_token": token, "to": "member", "amount": "100"})
+        wallet.deposit(self.admin_id, 200, "", self.admin_id)
+        self.client.post("/wallet/transfer", data={"_csrf_token": token, "to": "member", "amount": "100"})
+        economy = wallet.economy()
+        self.assertEqual((economy["supply"], economy["created"], economy["used"], economy["moved"]), (800, 1200, 400, 100))
+        self.assertEqual((economy["holders"], economy["top_share"], economy["net"]), (2, 88, 800))
+        self.assertEqual(economy["reading"], "supply")
+        self.assertEqual(len(economy["trend"]), 14)
+        self.assertEqual((economy["trend"][-1]["created"], economy["trend"][-1]["used"]), (1200, 400))
+        self.assertIn("Supply is high", self.client.get("/wallet").get_data(as_text=True))
+
     def test_announcements_float_on_every_page_colored_by_level(self):
         token = self._csrf()
         store = self.app.extensions["announcements"]

@@ -1284,6 +1284,58 @@ body.is-locked { overflow: hidden; }
 .wallet-amount.is-in { color: var(--mac-green-text); }
 .wallet-amount.is-out { color: var(--mac-red-text); }
 .wallet-entry .request-title-row h3 { font-weight: 600; }
+/* Wallet dashboard (1.47.0): a bank-style account card, quick actions and the coin economy */
+.wallet-dashboard { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 14px; margin-top: 18px; }
+.wallet-card { display: flex; flex-direction: column; gap: 6px; padding: 22px 24px; border-radius: 18px; color: #fff;
+  background: linear-gradient(135deg, #0b3d91 0%, #1d6fd8 55%, #33a1fd 100%); box-shadow: var(--mac-shadow-raised); }
+.wallet-card-top, .wallet-card-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 14px; opacity: .92; }
+.wallet-card-bank { font-weight: 700; letter-spacing: .02em; }
+.wallet-card-number { font-family: var(--mac-mono); }
+.wallet-card-label { margin: 14px 0 0; font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; opacity: .85; }
+.wallet-card .wallet-balance { font-size: 40px; }
+.wallet-card .wallet-balance small { color: rgba(255, 255, 255, .8); }
+.wallet-card-foot { margin-top: 10px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, .25); }
+.wallet-card-foot b { font-weight: 600; }
+.wallet-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.wallet-action { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 80px;
+  padding: 12px; border: 1px solid var(--mac-separator); border-radius: 14px; background: var(--mac-surface); color: var(--mac-text);
+  box-shadow: var(--mac-shadow); font-weight: 600; transition: box-shadow .15s ease; }
+.wallet-action:hover { box-shadow: var(--mac-shadow-raised); text-decoration: none; }
+.wallet-action span { font-size: 22px; }
+.wallet-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 14px; }
+.wallet-panel .request-form { padding: 14px 0 0; }
+.requests:target { border-color: var(--mac-accent); box-shadow: 0 0 0 3px var(--mac-accent-tint); }
+.wallet-offer-price { margin: 0; font-size: 20px; font-weight: 700; }
+.wallet-offer-price small { display: inline; color: var(--mac-muted); font-size: 14px; font-weight: 500; }
+.wallet-offer button[disabled] { opacity: .5; cursor: not-allowed; }
+.wallet-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin: 14px 0 0; padding: 0; list-style: none; }
+.wallet-stats li { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1px solid var(--mac-separator); border-radius: 10px; }
+.wallet-stats span { color: var(--mac-muted); font-size: 13px; }
+.wallet-stats b { font-size: 22px; }
+.wallet-stats small { margin: 0; }
+.wallet-reading { margin: 14px 0 0; padding: 10px 14px; border-radius: 10px; background: var(--mac-fill); }
+.wallet-reading.is-demand { background: var(--mac-orange-tint); }
+.wallet-reading.is-supply { background: var(--mac-accent-tint); }
+.wallet-reading.is-balanced { background: var(--mac-green-tint); }
+.wallet-trend { margin: 16px 0 0; }
+.wallet-trend figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--mac-text-2); font-size: 14px; }
+.wallet-legend { display: inline-flex; align-items: center; gap: 6px; color: var(--mac-muted); }
+.wallet-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-left: 6px; }
+.wallet-trend-bars { display: grid; grid-template-columns: repeat(14, 1fr); gap: 6px; height: 140px; margin-top: 10px;
+  padding-bottom: 18px; border-bottom: 1px solid var(--mac-separator); }
+.wallet-trend-day { position: relative; display: flex; align-items: flex-end; justify-content: center; gap: 2px; }
+.wallet-trend-day:hover { background: var(--mac-fill); border-radius: 4px; }
+.wallet-trend-day span { width: 40%; max-width: 12px; min-height: 0; border-radius: 4px 4px 0 0; }
+.wallet-trend-day em { position: absolute; bottom: -18px; color: var(--mac-muted); font-size: 11px; font-style: normal; }
+.is-created { background: var(--mac-accent); }
+.is-used { background: var(--mac-orange); }
+.wallet-card .is-in { color: #b8f5c8; }
+.wallet-card .is-out { color: #ffd0cc; }
+@media (max-width: 700px) {
+  .wallet-dashboard { grid-template-columns: 1fr; }
+  .wallet-actions { grid-template-columns: repeat(4, 1fr); }
+  .wallet-action { min-height: 70px; font-size: 13px; }
+}
 .mission-reward { background: var(--mac-orange-tint); color: var(--mac-orange-text); }
 
 /* macOS look shared by every page: translucent toolbar, rounded cards with soft
