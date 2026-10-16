@@ -229,7 +229,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.57.0"
+HELP_VERSION = "1.58.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -246,6 +246,7 @@ HELP_TOPICS = [
         ],
         "admin": [
             "The very first visit creates the administrator account. Administrators see extra buttons and the Administration part of Settings.",
+            "To set the app up on a new computer, follow install.md in the project folder. It is written so you, Claude or another AI assistant can follow it step by step.",
         ],
     },
     {
@@ -409,6 +410,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.58.0",
+        "date": "2026-10-16",
+        "changes": [
+            "New installation guide, install.md, in the project folder (request #30: create file install.md that Claude or other AI models can follow to set up the project).",
+            "It goes step by step from requirements to the first administrator account, with a check after each step, plus everyday commands and fixes for common problems.",
+            "Help → Getting started now points administrators to the guide.",
+        ],
+    },
     {
         "version": "1.57.0",
         "date": "2026-10-15",

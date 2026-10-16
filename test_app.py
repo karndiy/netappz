@@ -1966,6 +1966,23 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(app_module.translate("Not translated yet", "lo"), "Not translated yet")
         self.assertEqual(app_module.translate("{count} points", "es", count="1,250"), "1,250 puntos")
 
+    def test_install_guide_matches_the_project(self):
+        guide = (Path(__file__).parent / "install.md").read_text(encoding="utf-8")
+        compose = (Path(__file__).parent / "docker-compose.yml").read_text(encoding="utf-8")
+        example = (Path(__file__).parent / ".env.example").read_text(encoding="utf-8")
+        # The steps run in order, each with a check an AI assistant can verify.
+        steps = re.findall(r"^## (\d+)\. ", guide, re.M)
+        self.assertEqual(steps, [str(n) for n in range(1, len(steps) + 1)])
+        self.assertGreaterEqual(guide.count("Check:"), len(steps))
+        for command in ("cp .env.example .env", "docker-compose up -d --build", "/healthz", '{"status":"ok"}'):
+            self.assertIn(command, guide)
+        # Every setting in .env.example and every container is explained.
+        for name in re.findall(r"^([A-Z_]+)=", example, re.M):
+            self.assertIn(f"`{name}`", guide)
+        for container in re.findall(r"container_name: (\S+)", compose):
+            self.assertIn(f"`{container}`", guide)
+        self.assertEqual(self.client.get("/healthz").get_json(), {"status": "ok"})
+
     def test_help_page_covers_every_part_of_the_app(self):
         import app as app_module
 
