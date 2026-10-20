@@ -229,7 +229,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.58.0"
+HELP_VERSION = "1.59.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -269,9 +269,10 @@ HELP_TOPICS = [
             "Files is the second icon in the menu, just below Feed (the address is /files).",
             "Click a folder to open it. The path at the top takes you back up.",
             "Create folder makes a folder inside the one you are in: type its name and press Create.",
-            "Upload files sends files into the folder you are in; Or upload a folder sends a whole folder.",
-            "Click a file to download it. Downloading a folder gives you a ZIP of everything in it.",
-            "Rename and Delete are next to each file and folder. Delete asks you to confirm first, and can't be undone.",
+            "Upload files sends files into the folder you are in; Or upload a folder sends a whole folder. Who can see them picks Public (everyone) or Private (only you and administrators).",
+            "Files you upload are yours: each one shows who uploaded it and how many times it was downloaded. 🔒 Private marks your private files; Make private and Make public change it later.",
+            "Click a file to download it. Downloading a folder gives you a ZIP of everything in it, without other people's private files.",
+            "Rename and Delete are next to each file and folder. Only the person who uploaded a file (or an administrator) can rename or delete it. Delete asks you to confirm first, and can't be undone.",
         ],
     },
     {
@@ -410,6 +411,16 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.59.0",
+        "date": "2026-10-20",
+        "changes": [
+            "Files now belong to the person who uploaded them (request #31: upgrade Files so files belong to users, can be private or public, and show a download count). Each file shows who uploaded it.",
+            "When you upload, choose Public (everyone can see and download) or Private (only you and administrators). Make private and Make public change it later; private files are also left out of other people's folder ZIPs.",
+            "Each file shows how many times it has been downloaded.",
+            "Only the person who uploaded a file, or an administrator, can rename, replace or delete it. Files from before this update stay open to everyone, as before.",
+        ],
+    },
     {
         "version": "1.58.0",
         "date": "2026-10-16",
@@ -1006,6 +1017,8 @@ ACTIVITY_KEEP_DAYS = 365
 CONVERT_TOOL_NAMES = {"word2pdf": "Word to PDF", "pdf2word": "PDF to Word", "image2pdf": "Image to PDF",
                       "pdf2image": "PDF to Image", "pdfmerge": "Merge PDFs"}
 CONVERT_LOG_SHOWN = 50
+# Files: who can see a file someone uploaded.
+FILE_VISIBILITIES = {"public": "Public", "private": "Private"}
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 MISSION_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "returned": "Sent back"}
@@ -1831,6 +1844,19 @@ def create_app(test_config=None):
             )
             """
         )
+        # File owners (1.59.0): who uploaded each file, whether it's private, and how often it was downloaded.
+        # Files without a row (from before 1.59.0) are public and belong to no one.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS file_meta (
+                path TEXT PRIMARY KEY,
+                user_id INTEGER,
+                visibility TEXT NOT NULL DEFAULT 'public',
+                downloads INTEGER NOT NULL DEFAULT 0,
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         for statement in (
             "CREATE INDEX IF NOT EXISTS games_status ON games (status, id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS quest_claims_once ON quest_claims (quest_id, user_id, day)",
@@ -2475,6 +2501,92 @@ def create_app(test_config=None):
             with notes_connection() as connection:
                 connection.execute(sql("UPDATE announcements SET created_by = NULL WHERE created_by = ?"), (user_id,))
 
+    class FileStore:
+        """Owner, Private or Public, and download count of the files in Files, keyed by their path."""
+
+        def _under(self, path):
+            # The item itself and everything inside it, when it's a folder.
+            return "(path = ? OR substr(path, 1, ?) = ?)", (path, len(path) + 1, path + "/")
+
+        def for_paths(self, paths):
+            paths = list(paths)
+            if not paths:
+                return {}
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(
+                        "SELECT file_meta.path, file_meta.user_id, file_meta.visibility, file_meta.downloads, "
+                        "users.username AS owner FROM file_meta LEFT JOIN users ON users.id = file_meta.user_id "
+                        f"WHERE file_meta.path IN ({placeholders(paths)})"
+                    ),
+                    paths,
+                ).fetchall()
+            return {row["path"]: dict(row) for row in rows}
+
+        def get(self, path):
+            return self.for_paths([path]).get(path)
+
+        def inside(self, path):
+            """Every file with an owner or a count inside a folder."""
+            where, params = self._under(path)
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(f"SELECT path, user_id, visibility, downloads FROM file_meta WHERE {where}"), params
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def claim(self, path, user_id, visibility):
+            """A new or replaced file belongs to whoever uploaded it; the download count carries on."""
+            with notes_connection() as connection:
+                connection.execute(
+                    sql(
+                        "INSERT INTO file_meta (path, user_id, visibility) VALUES (?, ?, ?) ON CONFLICT (path) "
+                        "DO UPDATE SET user_id = excluded.user_id, visibility = excluded.visibility"
+                    ),
+                    (path, user_id, visibility),
+                )
+
+        def set_visibility(self, path, visibility):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql(
+                        "INSERT INTO file_meta (path, visibility) VALUES (?, ?) ON CONFLICT (path) "
+                        "DO UPDATE SET visibility = excluded.visibility"
+                    ),
+                    (path, visibility),
+                )
+
+        def count_download(self, path):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql(
+                        "INSERT INTO file_meta (path, downloads) VALUES (?, 1) ON CONFLICT (path) "
+                        "DO UPDATE SET downloads = file_meta.downloads + 1"
+                    ),
+                    (path,),
+                )
+
+        def move(self, old, new):
+            """A renamed file or folder keeps its owners and counts."""
+            where, params = self._under(old)
+            new_where, new_params = self._under(new)
+            with notes_connection() as connection:
+                connection.execute(sql(f"DELETE FROM file_meta WHERE {new_where}"), new_params)
+                connection.execute(
+                    sql(f"UPDATE file_meta SET path = ? || substr(path, ?) WHERE {where}"),
+                    (new, len(old) + 1, *params),
+                )
+
+        def remove(self, path):
+            where, params = self._under(path)
+            with notes_connection() as connection:
+                connection.execute(sql(f"DELETE FROM file_meta WHERE {where}"), params)
+
+        def delete_user_content(self, user_id):
+            """A deleted account's files stay; private ones can then be opened only by administrators."""
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE file_meta SET user_id = NULL WHERE user_id = ?"), (user_id,))
+
     class UserStore:
         """Accounts for signing in. Passwords are stored only as salted hashes."""
 
@@ -2830,6 +2942,9 @@ def create_app(test_config=None):
 
     user_store = UserStore()
     app.extensions["users"] = user_store
+
+    file_store = FileStore()
+    app.extensions["files"] = file_store
 
     notification_store = NotificationStore()
     app.extensions["notifications"] = notification_store
@@ -3206,6 +3321,7 @@ def create_app(test_config=None):
             game_store.delete_user_content(user_id)
             wallet_store.delete_user_content(user_id)
             announcement_store.delete_user_content(user_id)
+            file_store.delete_user_content(user_id)
             invalidate_notes(user_id)
             remove_avatar(user["avatar"])
             user_store.delete(user_id)
@@ -3246,16 +3362,24 @@ def create_app(test_config=None):
             abort(404)
 
         entries = []
-        for item in sorted(directory.iterdir(), key=lambda entry: (entry.is_file(), entry.name.lower())):
-            if item.is_symlink():
-                continue
+        items = [item for item in directory.iterdir() if not item.is_symlink()]
+        metas = file_store.for_paths(item.relative_to(root).as_posix() for item in items if item.is_file())
+        for item in sorted(items, key=lambda entry: (entry.is_file(), entry.name.lower())):
             item_relative = item.relative_to(root).as_posix()
+            meta = metas.get(item_relative)
+            if item.is_file() and not file_visible(meta):
+                continue  # Someone else's private file.
             entries.append(
                 {
                     "name": item.name,
                     "path": item_relative,
                     "is_dir": item.is_dir(),
                     "size": item.stat().st_size if item.is_file() else None,
+                    "owner": meta["owner"] if meta else None,
+                    "private": bool(meta and meta["visibility"] == "private"),
+                    "downloads": meta["downloads"] if meta else 0,
+                    "can_manage": item.is_dir() or file_manageable(meta),
+                    "can_share": item.is_file() and file_shareable(meta),
                 }
             )
         current = relative.as_posix() if relative.parts else ""
@@ -4831,17 +4955,66 @@ def create_app(test_config=None):
         flash("That item no longer exists. It may have been deleted or renamed already.", "error")
         return redirect(url_for("index", path=parent or None), code=303)
 
+    # Files belong to whoever uploaded them (1.59.0). Private files are only for their owner and
+    # administrators; files from before then belong to no one, so anyone may change them as before.
+    def file_visible(meta):
+        return (meta is None or meta["visibility"] != "private" or meta["user_id"] == g.user["id"]
+                or bool(g.user["is_admin"]))
+
+    def file_manageable(meta):
+        if g.user["is_admin"] or meta is None or meta["user_id"] == g.user["id"]:
+            return True
+        return meta["user_id"] is None and meta["visibility"] != "private"
+
+    def file_shareable(meta):
+        """Only the owner and administrators choose Private or Public."""
+        return bool(g.user["is_admin"]) or (meta is not None and meta["user_id"] == g.user["id"])
+
+    def item_locked(relative, target):
+        """A message when this person may not rename or delete the item, else None."""
+        if target.is_dir():
+            if any(not file_manageable(meta) for meta in file_store.inside(relative)):
+                return "This folder has files that belong to other people, so only an administrator can change it."
+            return None
+        if not file_manageable(file_store.get(relative)):
+            return "Only the person who uploaded this file, or an administrator, can change it."
+        return None
+
+    def hidden_file(relative, target):
+        return target.is_file() and not file_visible(file_store.get(relative))
+
+    @app.post("/files/visibility")
+    def file_visibility():
+        relative = normalized_relative(request.form.get("path", ""))
+        target = resolve_path(relative)
+        if not relative or not target.is_file() or hidden_file(relative, target):
+            return item_gone(relative)
+        parent = PurePosixPath(relative).parent.as_posix()
+        visibility = request.form.get("visibility", "")
+        if visibility not in FILE_VISIBILITIES:
+            flash("Choose Private or Public.", "error")
+        elif not file_shareable(file_store.get(relative)):
+            flash("Only the person who uploaded this file, or an administrator, can change who sees it.", "error")
+        else:
+            file_store.set_visibility(relative, visibility)
+            flash(f"{target.name} is now {FILE_VISIBILITIES[visibility].lower()}.", "success")
+        return redirect(url_for("index", path=parent if parent != "." else None), code=303)
+
     @app.post("/rename")
     def rename_item():
         source_relative = normalized_relative(request.form.get("path", ""))
         source = resolve_path(source_relative)
-        if not source_relative or not source.exists():
+        if not source_relative or not source.exists() or hidden_file(source_relative, source):
             return item_gone(source_relative)
         parent_relative = (
             source.parent.relative_to(root).as_posix()
             if source.parent != root
             else ""
         )
+        locked = item_locked(source_relative, source)
+        if locked:
+            flash(locked, "error")
+            return redirect(url_for("index", path=parent_relative))
 
         new_name = request.form.get("name", "").strip()
         if (
@@ -4866,6 +5039,7 @@ def create_app(test_config=None):
         except OSError as error:
             flash(f"Could not rename item: {error}", "error")
         else:
+            file_store.move(source_relative, destination.relative_to(root).as_posix())
             flash("Item renamed.", "success")
         return redirect(url_for("index", path=parent_relative))
 
@@ -4873,10 +5047,14 @@ def create_app(test_config=None):
     def delete_item():
         relative = normalized_relative(request.form.get("path", ""))
         target = resolve_path(relative)
-        if not relative or not target.exists():
+        if not relative or not target.exists() or hidden_file(relative, target):
             return item_gone(relative)
 
         parent = target.parent.relative_to(root).as_posix()
+        locked = item_locked(relative, target)
+        if locked:
+            flash(locked, "error")
+            return redirect(url_for("index", path=parent if parent != "." else None), code=303)
         try:
             if target.is_dir():
                 shutil.rmtree(target)
@@ -4885,6 +5063,7 @@ def create_app(test_config=None):
         except OSError as error:
             flash(f"Could not delete item: {error}", "error")
         else:
+            file_store.remove(relative)
             flash("Item deleted.", "success")
         # 303 so Back or Reload shows the folder instead of sending the delete again.
         return redirect(url_for("index", path=parent if parent != "." else None), code=303)
@@ -4897,6 +5076,8 @@ def create_app(test_config=None):
             abort(404)
 
         uploads = request.files.getlist("files") + request.files.getlist("folder_files")
+        visibility = request.form.get("visibility", "public")
+        visibility = visibility if visibility in FILE_VISIBILITIES else "public"
         saved = 0
         for upload_file in uploads:
             original = upload_file.filename or ""
@@ -4918,7 +5099,12 @@ def create_app(test_config=None):
             if target.is_dir():
                 flash(f"Skipped a folder named {safe_name}.", "error")
                 continue
+            target_relative = target.relative_to(root).as_posix()
+            if target.is_file() and not file_manageable(file_store.get(target_relative)):
+                flash(f"Skipped {safe_name}: a file with that name belongs to someone else.", "error")
+                continue
             upload_file.save(target)
+            file_store.claim(target_relative, g.user["id"], visibility)
             saved += 1
 
         if saved:
@@ -4931,17 +5117,23 @@ def create_app(test_config=None):
     @app.get("/download/<path:relative>")
     def download(relative):
         target = resolve_path(relative)
+        relative = normalized_relative(relative)
         if target.is_file():
+            if not file_visible(file_store.get(relative)):
+                abort(404)
+            file_store.count_download(relative)
             return send_file(target, as_attachment=True, download_name=target.name)
         if not target.is_dir():
             abort(404)
 
+        # Other people's private files are left out of the ZIP.
+        hidden = {meta["path"] for meta in file_store.inside(relative) if not file_visible(meta)}
         archive_file = tempfile.TemporaryFile()
         with zipfile.ZipFile(archive_file, "w", zipfile.ZIP_DEFLATED) as archive:
             for item in target.rglob("*"):
                 if item.is_symlink():
                     continue
-                if item.is_file():
+                if item.is_file() and item.relative_to(root).as_posix() not in hidden:
                     archive.write(item, item.relative_to(target.parent))
         archive_file.seek(0)
         return send_file(
@@ -5794,6 +5986,7 @@ def create_app(test_config=None):
                 target = root / f"{name}-edited ({counter}).pdf"
                 counter += 1
             target.write_bytes(data)
+            file_store.claim(target.name, g.user["id"], "public")
             return jsonify(saved=target.name, url=url_for("index"))
         return send_file(
             io.BytesIO(data),

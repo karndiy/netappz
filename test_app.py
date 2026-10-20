@@ -333,6 +333,83 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertIn(b"Enter both a title and note text", self.client.get("/notes").data)
 
+    def test_files_belong_to_uploaders_with_private_files_and_download_counts(self):
+        token = self._csrf()
+        users = self.app.extensions["users"]
+        files = self.app.extensions["files"]
+        member_id = users.add("member", "member-password")
+        other_id = users.add("other", "other-password")
+
+        def as_user(user_id):
+            with self.client.session_transaction() as sess:
+                sess["user_id"] = user_id
+
+        def upload(name, data, visibility, path=""):
+            return self.client.post("/upload", data={"_csrf_token": token, "path": path, "visibility": visibility,
+                                                     "files": (io.BytesIO(data), name)},
+                                    content_type="multipart/form-data")
+
+        (self.root / "docs").mkdir()
+        (self.root / "old.txt").write_text("from before")
+        as_user(member_id)
+        upload("secret.txt", b"secret", "private")
+        upload("open.txt", b"open", "public")
+        upload("inner.txt", b"inner", "private", path="docs")
+        self.assertEqual(files.get("secret.txt")["visibility"], "private")
+        self.assertEqual(files.get("open.txt")["user_id"], member_id)
+        page = self.client.get("/files").get_data(as_text=True)
+        self.assertIn("🔒 Private", page)
+        self.assertIn("by member", page)
+        self.assertIn("Make public", page)
+
+        # Downloads are counted.
+        for _ in range(2):
+            self.client.get("/download/open.txt").close()
+        self.assertEqual(files.get("open.txt")["downloads"], 2)
+        self.assertIn("2 downloads", self.client.get("/files").get_data(as_text=True))
+
+        # Someone else doesn't see private files, can't download them, and can't change the member's files.
+        as_user(other_id)
+        page = self.client.get("/files").get_data(as_text=True)
+        self.assertNotIn("secret.txt", page)
+        self.assertIn("open.txt", page)
+        self.assertNotIn("Make private", page.split("open.txt")[2].split("file-row")[0])
+        self.assertEqual(self.client.get("/download/secret.txt").status_code, 404)
+        with zipfile.ZipFile(io.BytesIO(self.client.get("/download/docs").data)) as archive:
+            self.assertEqual(archive.namelist(), [])
+        self.client.post("/delete", data={"_csrf_token": token, "path": "secret.txt"})
+        self.client.post("/delete", data={"_csrf_token": token, "path": "open.txt"})
+        self.client.post("/rename", data={"_csrf_token": token, "path": "open.txt", "name": "mine.txt"})
+        self.client.post("/delete", data={"_csrf_token": token, "path": "docs"})
+        self.client.post("/files/visibility", data={"_csrf_token": token, "path": "open.txt", "visibility": "private"})
+        upload("open.txt", b"replaced", "public")
+        self.assertTrue((self.root / "secret.txt").exists())
+        self.assertEqual((self.root / "open.txt").read_bytes(), b"open")
+        self.assertTrue((self.root / "docs" / "inner.txt").exists())
+        self.assertEqual(files.get("open.txt")["visibility"], "public")
+        # Files from before owners existed are still open to everyone.
+        self.client.post("/rename", data={"_csrf_token": token, "path": "old.txt", "name": "older.txt"})
+        self.assertTrue((self.root / "older.txt").exists())
+
+        # The owner switches a file to public; renames keep the owner and count; deletes forget them.
+        as_user(member_id)
+        self.client.post("/files/visibility", data={"_csrf_token": token, "path": "secret.txt", "visibility": "public"})
+        self.assertEqual(files.get("secret.txt")["visibility"], "public")
+        self.client.post("/rename", data={"_csrf_token": token, "path": "open.txt", "name": "renamed.txt"})
+        self.assertEqual((files.get("renamed.txt")["user_id"], files.get("renamed.txt")["downloads"]), (member_id, 2))
+        self.assertIsNone(files.get("open.txt"))
+        self.client.post("/rename", data={"_csrf_token": token, "path": "docs", "name": "papers"})
+        self.assertEqual(files.get("papers/inner.txt")["visibility"], "private")
+        self.client.post("/delete", data={"_csrf_token": token, "path": "papers"})
+        self.assertEqual(files.inside("papers"), [])
+
+        # Administrators see and manage everyone's files.
+        as_user(self.admin_id)
+        self.client.post("/files/visibility", data={"_csrf_token": token, "path": "renamed.txt", "visibility": "private"})
+        self.assertIn("renamed.txt", self.client.get("/files").get_data(as_text=True))
+        self.client.post("/delete", data={"_csrf_token": token, "path": "renamed.txt"})
+        self.assertFalse((self.root / "renamed.txt").exists())
+
     def test_renames_file_and_folder(self):
         (self.root / "old.txt").write_text("contents")
         (self.root / "old-folder").mkdir()

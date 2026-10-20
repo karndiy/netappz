@@ -45,6 +45,11 @@
         </div>
         <label class="folder-picker" for="folder-files">Or upload a folder</label>
         <input id="folder-files" name="folder_files" type="file" webkitdirectory multiple>
+        <label class="folder-picker" for="upload-visibility">Who can see them</label>
+        <select id="upload-visibility" name="visibility">
+          <option value="public">Public: everyone can see and download</option>
+          <option value="private">Private: only you (and administrators)</option>
+        </select>
         <small>Choose files from your device. Folder selection is available in browsers that support it.</small>
       </form>
       <form action="{{ url_for('create_folder') }}" method="post">
@@ -68,13 +73,25 @@
         <div class="file-row">
           <a class="file-name" href="{% if entry.is_dir %}{{ url_for('index', path=entry.path) }}{% else %}{{ url_for('download', relative=entry.path) }}{% endif %}">
             <span class="icon">{{ '📁' if entry.is_dir else '📄' }}</span>{{ entry.name }}
+            {% if entry.private %}<span class="file-badge private" title="Only the owner and administrators can see this file">🔒 Private</span>{% endif %}
           </a>
           <div class="file-actions">
             {% if entry.is_dir %}
               <a class="download-link" href="{{ url_for('download', relative=entry.path) }}">Download ZIP</a>
             {% else %}
               <span class="size">{{ "{:,}".format(entry.size) }} bytes</span>
+              <span class="size file-downloads">{{ "{:,}".format(entry.downloads) }} download{{ '' if entry.downloads == 1 else 's' }}</span>
+              {% if entry.owner %}<span class="size file-owner">by {{ entry.owner }}</span>{% endif %}
             {% endif %}
+            {% if entry.can_share %}
+              <form action="{{ url_for('file_visibility') }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="path" value="{{ entry.path }}">
+                <input type="hidden" name="visibility" value="{{ 'public' if entry.private else 'private' }}">
+                <button class="secondary" type="submit">{{ 'Make public' if entry.private else 'Make private' }}</button>
+              </form>
+            {% endif %}
+            {% if entry.can_manage %}
             <form class="rename-form" action="{{ url_for('rename_item') }}" method="post">
               <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="path" value="{{ entry.path }}">
@@ -87,6 +104,7 @@
               <input type="hidden" name="path" value="{{ entry.path }}">
               <button class="danger" type="submit">Delete</button>
             </form>
+            {% endif %}
           </div>
         </div>
       {% else %}

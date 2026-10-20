@@ -244,6 +244,8 @@ small { display: block; margin-top: 9px; color: var(--mac-muted); }
 .icon { display: inline-block; width: 28px; }
 .size, .download-link { color: var(--mac-muted); font-size: 13px; white-space: nowrap; }
 .download-link { display: inline-flex; min-height: 40px; align-items: center; }
+.file-badge { margin-left: 8px; padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.file-badge.private { background: var(--mac-separator); color: var(--mac-text-2); }
 .parent-row { color: var(--mac-text-2); }
 .danger { background: var(--mac-red); }
 .danger:hover { background: var(--mac-red-text); }
