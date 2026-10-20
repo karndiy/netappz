@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 import zipfile
 from pathlib import Path
+import urllib.error
 from urllib.parse import unquote
 
 THAI_FONTS = "/usr/share/fonts/truetype/tlwg"
@@ -1223,6 +1224,69 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(sent["messages"][0]["role"], "system")
         self.assertIn("Telegram", sent["messages"][0]["content"])
         self.assertEqual(sent["messages"][-1], {"role": "user", "content": "hi"})
+
+    def test_chat_errors_are_logged_and_shown_to_administrators(self):
+        token = self._csrf()
+        self.app.extensions["settings"].save({"CHAT_PROVIDER": "local", "LOCAL_AI_URL": "https://ai.example.test/api/v1"})
+        refused = urllib.error.URLError("Connection refused")
+        with mock.patch("urllib.request.urlopen", side_effect=refused):
+            with self.assertRaises(chat.ChatError):
+                chat.complete_reply([{"role": "user", "content": "hi"}], for_telegram=True)
+        entry = self.app.extensions["chat_errors"].entries()[0]
+        self.assertEqual((entry["source"], entry["provider"], entry["model"]), ("telegram", "local", chat.DEFAULT_LOCAL_MODEL))
+        self.assertIn("Could not reach the local AI server", entry["message"])
+        self.assertIn("Connection refused", entry["detail"])
+
+        page = self.client.get("/settings/ai").get_data(as_text=True)
+        self.assertIn("Error log", page)
+        self.assertIn("Could not reach the local AI server", page)
+        self.assertIn("1 in the last 24 hours", page)
+
+        response = self.client.post("/settings/ai/errors/clear", data={"_csrf_token": token})
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.app.extensions["chat_errors"].entries(), [])
+
+    def test_chat_connection_test_reports_answer_or_error(self):
+        token = self._csrf()
+        self.app.extensions["settings"].save({"CHAT_PROVIDER": "local"})
+
+        class Response(io.BytesIO):
+            headers = {"Content-Type": "application/json"}
+
+        answer = json.dumps({"choices": [{"message": {"content": "Hello, it works."}, "finish_reason": "stop"}]})
+        with mock.patch("urllib.request.urlopen", return_value=Response(answer.encode())):
+            response = self.client.post("/settings/ai/test", data={"_csrf_token": token}, follow_redirects=True)
+        page = response.get_data(as_text=True)
+        self.assertIn("Hello, it works.", page)
+        self.assertIn("No errors.", page)
+
+        with mock.patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+            response = self.client.post("/settings/ai/test", data={"_csrf_token": token}, follow_redirects=True)
+        self.assertIn("The test failed", response.get_data(as_text=True))
+        self.assertEqual(self.app.extensions["chat_errors"].entries()[0]["source"], "test")
+
+    def test_claude_fallback_only_for_models_that_take_it(self):
+        sent = {}
+
+        class Stream:
+            def __init__(self, **kwargs): sent.clear(); sent.update(kwargs)
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def __iter__(self): return iter([mock.Mock(type="text", text="Hi")])
+            def get_final_message(self): return mock.Mock(stop_reason="end_turn")
+
+        fake = mock.Mock()
+        fake.beta.messages.stream = Stream
+        self.app.extensions["settings"].save({"CHAT_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": "sk-test"})
+        with mock.patch.object(chat, "client", return_value=fake):
+            self.assertEqual(chat.complete_reply([{"role": "user", "content": "hi"}]), "Hi")
+            self.assertEqual(sent["fallbacks"], "default")
+            self.assertEqual(sent["output_config"], {"effort": "medium"})
+            self.app.extensions["settings"].save({"CHAT_MODEL": "claude-haiku-5-5", "CHAT_EFFORT": "xhigh"})
+            chat.complete_reply([{"role": "user", "content": "hi"}])
+        self.assertNotIn("fallbacks", sent)
+        self.assertNotIn("betas", sent)
+        self.assertEqual(sent["output_config"], {"effort": "xhigh"})
 
     def test_settings_validate_local_ai_fields(self):
         token = self._csrf()

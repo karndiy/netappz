@@ -395,6 +395,47 @@
             </div>
           </form>
 
+          {% if section.key == "ai" %}
+            <section class="settings-card" id="chat-test" aria-labelledby="chat-test-heading">
+              <div class="settings-card-head">
+                <h2 id="chat-test-heading">Connection test</h2>
+                <p>Sends a short message to the AI with the saved settings and shows the answer and how long it took. Save your changes first.</p>
+              </div>
+              <form class="settings-actions" action="{{ url_for('chat_test') }}" method="post">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button class="secondary" type="submit">Test now</button>
+              </form>
+            </section>
+
+            <section class="settings-card{% if errors_today %} is-attention{% endif %}" id="chat-errors" aria-labelledby="chat-errors-heading">
+              <div class="settings-card-head">
+                <h2 id="chat-errors-heading">Error log</h2>
+                <p>Replies that failed on the Chat page, in Telegram or in a connection test, with the technical cause. {% if errors_today %}{{ errors_today }} in the last 24 hours. {% endif %}The latest 50 are shown; entries are kept for {{ error_keep_days }} days.</p>
+              </div>
+              <ul class="activity-list">
+                {% for entry in chat_errors %}
+                  <li>
+                    <time datetime="{{ entry.created_at | note_iso }}" title="{{ entry.created_at | note_long_date }}">{{ entry.created_at[:16] }}</time>
+                    <div>
+                      <p><strong>{{ entry.message }}</strong>
+                        <span class="activity-area">{{ error_sources.get(entry.source, entry.source) }}</span></p>
+                      <p class="activity-detail">{{ "Local AI" if entry.provider == "local" else "Claude" }} · {{ entry.model }}{% if entry.detail %} · {{ entry.detail }}{% endif %}</p>
+                    </div>
+                  </li>
+                {% else %}
+                  <li class="empty">No errors. Failed replies will be listed here.</li>
+                {% endfor %}
+              </ul>
+              {% if chat_errors %}
+                <form class="settings-actions" action="{{ url_for('chat_errors_clear') }}" method="post"
+                      onsubmit="return confirm('Clear the whole Chat AI error log?')">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <button class="secondary" type="submit">Clear log</button>
+                </form>
+              {% endif %}
+            </section>
+          {% endif %}
+
         {% elif section.key == "announcements" %}
           {# ---------------------------------------------- announcements #}
           <section class="settings-card" aria-labelledby="announce-heading">

@@ -9,6 +9,7 @@ import json
 import os
 import posixpath
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -24,7 +25,11 @@ USER_AGENT = "NetworkFiles/1.20 (+https://github.com/karndiy/netappz)"
 DEFAULT_MODEL = "claude-opus-5-5"
 # Claude Opus 5.5 defaults to "medium"; set it explicitly so it is easy to tune.
 DEFAULT_EFFORT = "medium"
+EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 MAX_TOKENS = 64000
+# Models that take the server-side refusal fallback; others (Haiku, older models) reject it.
+FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
+TEST_MESSAGE = "This is a connection test from the Network Files settings page. Reply with one short sentence."
 
 SYSTEM_PROMPT = """You are a helpful assistant inside a private home and office app called Network Files. \
 The person you are talking with owns this app and uses it to share files, keep notes, and convert documents on their network.
@@ -109,7 +114,22 @@ def code_zip(files):
 
 
 class ChatError(Exception):
-    pass
+    """A readable message for the person chatting; detail is the technical cause, for the error log."""
+
+    def __init__(self, message, detail=""):
+        super().__init__(message)
+        self.detail = detail
+
+
+def error_detail(error):
+    """The status code, request ID and message of an API error, for the error log."""
+    parts = [type(error).__name__]
+    if getattr(error, "status_code", None):
+        parts.append(f"HTTP {error.status_code}")
+    if getattr(error, "request_id", None):
+        parts.append(f"request {error.request_id}")
+    message = getattr(error, "message", None) or str(error)
+    return " · ".join(parts) + (f": {message}" if message else "")
 
 
 # Values saved on the Settings page; the app installs a lookup that reads them.
@@ -119,6 +139,24 @@ _saved_setting = None
 def use_settings(lookup):
     global _saved_setting
     _saved_setting = lookup
+
+
+# The app installs a function that saves failed replies to the Chat AI error log.
+_error_log = None
+
+
+def use_error_log(record):
+    global _error_log
+    _error_log = record
+
+
+def log_error(source, message, detail=""):
+    if _error_log is None:
+        return
+    try:
+        _error_log(source=source, provider=provider(), model=assistant_model(), message=message, detail=detail)
+    except Exception:
+        pass  # A broken log must never hide the chat error itself.
 
 
 def setting(name, default=""):
@@ -160,6 +198,17 @@ def assistant_name():
     return "Claude"
 
 
+def assistant_model():
+    if provider() == "local":
+        return setting("LOCAL_AI_MODEL", DEFAULT_LOCAL_MODEL)
+    return setting("CHAT_MODEL", DEFAULT_MODEL)
+
+
+def effort():
+    value = setting("CHAT_EFFORT", DEFAULT_EFFORT)
+    return value if value in EFFORTS else DEFAULT_EFFORT
+
+
 _clients = {}
 
 
@@ -185,48 +234,69 @@ def to_api_messages(history, for_telegram=False):
     return messages
 
 
-def stream_reply(history, for_telegram=False):
+def stream_reply(history, for_telegram=False, source=None):
     """Yield {"type": "text"} chunks as the reply arrives, or {"type": "replace"} when the
     partial text must be swapped (a refusal). The generator's return value is the full reply.
 
-    Raises ChatError with a readable message when the reply cannot be produced.
+    Raises ChatError with a readable message when the reply cannot be produced, after
+    saving it to the error log with where it came from (web, telegram or test).
     """
-    if provider() == "local":
-        return (yield from stream_local_reply(history, for_telegram))
+    source = source or ("telegram" if for_telegram else "web")
+    try:
+        if provider() == "local":
+            return (yield from stream_local_reply(history, for_telegram))
+        return (yield from stream_claude_reply(history, for_telegram))
+    except ChatError as error:
+        log_error(source, str(error), error.detail)
+        raise
+    except Exception as error:
+        log_error(source, "Something went wrong while the AI was replying.", f"{type(error).__name__}: {error}")
+        raise
+
+
+def stream_claude_reply(history, for_telegram=False):
     if not is_configured():
         raise ChatError("Chat is not set up yet: add an Anthropic API key on the Settings page.")
+    model = setting("CHAT_MODEL", DEFAULT_MODEL)
+    options = {}
+    if model in FALLBACK_MODELS:
+        # If a safety classifier declines, retry on Anthropic's recommended model.
+        options = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
     parts = []
     try:
         with client().beta.messages.stream(
-            model=setting("CHAT_MODEL", DEFAULT_MODEL),
+            model=model,
             max_tokens=MAX_TOKENS,
             system=system_prompt(),
             messages=to_api_messages(history, for_telegram),
-            output_config={"effort": setting("CHAT_EFFORT", DEFAULT_EFFORT)},
+            output_config={"effort": effort()},
             cache_control={"type": "ephemeral"},
-            # If a safety classifier declines, retry on Anthropic's recommended model.
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
+            **options,
         ) as stream:
             for event in stream:
                 if event.type == "text":
                     parts.append(event.text)
                     yield {"type": "text", "text": event.text}
             message = stream.get_final_message()
-    except anthropic.AuthenticationError:
-        raise ChatError("The Anthropic API key was rejected. Check it on the Settings page.")
-    except anthropic.PermissionDeniedError:
-        raise ChatError("This API key is not allowed to use the chat model.")
-    except anthropic.RateLimitError:
-        raise ChatError("Claude is busy right now (rate limit). Try again in a minute.")
+    except anthropic.AuthenticationError as error:
+        raise ChatError("The Anthropic API key was rejected. Check it on the Settings page.", error_detail(error))
+    except anthropic.PermissionDeniedError as error:
+        raise ChatError("This API key is not allowed to use the chat model.", error_detail(error))
+    except anthropic.NotFoundError as error:
+        raise ChatError(f"Claude has no model called {model}. Pick another model on the Settings page.",
+                        error_detail(error))
+    except anthropic.RateLimitError as error:
+        raise ChatError("Claude is busy right now (rate limit). Try again in a minute.", error_detail(error))
     except anthropic.BadRequestError as error:
-        raise ChatError(f"Claude could not accept this request: {error.message}")
+        raise ChatError(f"Claude could not accept this request: {error.message}", error_detail(error))
     except anthropic.APIStatusError as error:
         if error.status_code >= 500:
-            raise ChatError("Claude is having trouble right now. Try again shortly.")
-        raise ChatError(f"Claude returned an error: {error.message}")
-    except anthropic.APIConnectionError:
-        raise ChatError("Could not reach Claude. Check the server's internet connection.")
+            raise ChatError("Claude is having trouble right now. Try again shortly.", error_detail(error))
+        raise ChatError(f"Claude returned an error: {error.message}", error_detail(error))
+    except anthropic.APITimeoutError as error:
+        raise ChatError("Claude took too long to answer. Try again shortly.", error_detail(error))
+    except anthropic.APIConnectionError as error:
+        raise ChatError("Could not reach Claude. Check the server's internet connection.", error_detail(error))
 
     if message.stop_reason == "refusal":
         notice = "Sorry, I can't help with that request."
@@ -334,7 +404,8 @@ def stream_local_reply(history, for_telegram=False):
                     except ValueError:
                         continue
                     if event.get("error"):
-                        raise ChatError(f"The local AI returned an error: {local_error_text(event)}")
+                        raise ChatError(f"The local AI returned an error: {local_error_text(event)}",
+                                        data[:500])
                     for choice in event.get("choices") or []:
                         text = think.feed((choice.get("delta") or {}).get("content") or "")
                         if text:
@@ -351,16 +422,19 @@ def stream_local_reply(history, for_telegram=False):
             detail = local_error_text(json.loads(raw))
         except ValueError:
             detail = raw.decode("utf-8", "replace").strip()[:200] or error.reason
+        log_detail = f"HTTP {error.code} from {base_url}/chat/completions: {detail}"
         if error.code == 403 and "error code:" in detail:
-            raise ChatError(f"The local AI server's firewall (Cloudflare) blocked this server ({detail}).")
+            raise ChatError(f"The local AI server's firewall (Cloudflare) blocked this server ({detail}).", log_detail)
         if error.code in (401, 403):
-            raise ChatError("The local AI server rejected the API key. Check it on the Settings page.")
+            raise ChatError("The local AI server rejected the API key. Check it on the Settings page.", log_detail)
         if error.code == 404:
-            raise ChatError(f"The local AI server could not find this model or address ({detail}). Check the Settings page.")
-        raise ChatError(f"The local AI server returned an error ({error.code}): {detail}")
+            raise ChatError(f"The local AI server could not find this model or address ({detail}). Check the Settings page.",
+                            log_detail)
+        raise ChatError(f"The local AI server returned an error ({error.code}): {detail}", log_detail)
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         reason = getattr(error, "reason", error)
-        raise ChatError(f"Could not reach the local AI server at {base_url} ({reason}).")
+        raise ChatError(f"Could not reach the local AI server at {base_url} ({reason}).",
+                        f"{type(error).__name__}: {reason}")
 
     if finish_reason == "length":
         notice = "(The reply was cut off because it reached the length limit.)"
@@ -368,7 +442,7 @@ def stream_local_reply(history, for_telegram=False):
         yield {"type": "text", "text": "\n\n" + notice}
     reply = "".join(parts).strip()
     if not reply:
-        raise ChatError("The local AI server sent an empty reply.")
+        raise ChatError("The local AI server sent an empty reply.", f"finish_reason: {finish_reason}")
     return reply
 
 
@@ -379,10 +453,17 @@ def local_error_text(payload):
     return str(error or (payload.get("detail") if isinstance(payload, dict) else payload) or "unknown error")
 
 
-def complete_reply(history, for_telegram=False):
-    generator = stream_reply(history, for_telegram)
+def complete_reply(history, for_telegram=False, source=None):
+    generator = stream_reply(history, for_telegram, source)
     while True:
         try:
             next(generator)
         except StopIteration as done:
             return done.value
+
+
+def test_connection():
+    """Send a short message with the saved settings. Returns (seconds, reply); raises ChatError."""
+    started = time.monotonic()
+    reply = complete_reply([{"role": "user", "content": TEST_MESSAGE}], source="test")
+    return time.monotonic() - started, reply

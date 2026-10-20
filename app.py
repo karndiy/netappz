@@ -70,8 +70,9 @@ SETTING_GROUPS = [
             },
             {
                 "name": "CHAT_EFFORT", "label": "Effort", "default": chat.DEFAULT_EFFORT,
-                "options": [("low", "Low: fastest"), ("medium", "Medium: balanced"), ("high", "High: most thorough")],
-                "help": "How hard Claude thinks before replying. Claude only.",
+                "options": [("low", "Low: fastest"), ("medium", "Medium: balanced"), ("high", "High: thorough"),
+                            ("xhigh", "Extra high: for hard problems"), ("max", "Max: most thorough, slowest")],
+                "help": "How hard Claude thinks before replying. Higher levels cost more. Claude only.",
             },
             {
                 "name": "CHAT_INSTRUCTIONS", "label": "Extra instructions", "multiline": True,
@@ -229,7 +230,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.59.0"
+HELP_VERSION = "1.60.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -301,6 +302,7 @@ HELP_TOPICS = [
         ],
         "admin": [
             "Choose which AI answers (Claude or Local AI) and its model under Settings → Chat AI, and set up the bot under Settings → Telegram bot.",
+            "Settings → Chat AI has Test now, which sends a short message and shows the answer and how long it took, and an Error log of replies that failed, with the technical cause.",
         ],
     },
     {
@@ -401,7 +403,7 @@ HELP_TOPICS = [
         ],
         "admin": [
             "Users & sign-up: add people, approve new accounts, make someone an administrator, set passwords and choose who can sign up.",
-            "Chat AI and Telegram bot: the AI behind Chat, and the bot for chatting from Telegram.",
+            "Chat AI and Telegram bot: the AI behind Chat, a connection test and an error log of failed replies, and the bot for chatting from Telegram.",
             "Announcements: messages that float at the top of every page, colored by how important they are.",
             "Activity log: what people do in the app, filtered by person or kind. System & backups: checks every 15 minutes (you are notified when something needs attention), database backups to download or make now, and how often backups are made and kept.",
             "Server: where files are stored, the database and the version. These are changed in the server's files.",
@@ -411,6 +413,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.60.0",
+        "date": "2026-10-20",
+        "changes": [
+            "Settings → Chat AI has an Error log (request #32: check and upgrade the Chat AI, save a log of errors). Every reply that fails on the Chat page, in Telegram or in a test is saved with the time, the AI and model, and the technical cause, for 90 days. Administrators can clear it.",
+            "New Test now button on Settings → Chat AI: it sends a short message with the saved settings and shows the answer and how long it took, or why it failed.",
+            "Claude upgrades: the Effort setting adds Extra high and Max, a model name that doesn't exist now says so clearly, and the safety fallback is only used with models that support it, so Claude Haiku 5.5 and older models no longer fail.",
+        ],
+    },
     {
         "version": "1.59.0",
         "date": "2026-10-20",
@@ -1013,6 +1024,10 @@ ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat", "feed": "Feed", "convert": "
                   "games": "Games"}
 ACTIVITY_DETAIL = 300  # characters of a note title or chat message kept in the log
 ACTIVITY_KEEP_DAYS = 365
+# Settings → Chat AI: replies that failed, with the technical cause, for administrators.
+CHAT_ERROR_KEEP_DAYS = 90
+CHAT_ERRORS_SHOWN = 50
+CHAT_ERROR_SOURCES = {"web": "Chat page", "telegram": "Telegram", "test": "Connection test"}
 # Convert page: each person's conversion log. Administrators see and can delete everyone's.
 CONVERT_TOOL_NAMES = {"word2pdf": "Word to PDF", "pdf2word": "PDF to Word", "image2pdf": "Image to PDF",
                       "pdf2image": "PDF to Image", "pdfmerge": "Merge PDFs"}
@@ -1336,6 +1351,20 @@ def create_app(test_config=None):
             """
         )
         connection.execute("CREATE INDEX IF NOT EXISTS convert_log_user ON convert_log (user_id)")
+        # Chat AI replies that failed (1.60.0), from the Chat page, Telegram or the connection test.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS chat_error_log (
+                {id_column},
+                source TEXT NOT NULL DEFAULT '',
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                message TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
     class ActivityLog:
         """Who did what in Notes and Chat. The username is copied so entries outlive deleted accounts."""
@@ -1464,6 +1493,47 @@ def create_app(test_config=None):
 
     convert_log = ConvertLog()
     app.extensions["convert_log"] = convert_log
+
+    class ChatErrorLog:
+        """Chat AI replies that failed, so administrators can see what went wrong and when."""
+
+        def add(self, source, provider, model, message, detail=""):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("INSERT INTO chat_error_log (source, provider, model, message, detail) VALUES (?, ?, ?, ?, ?)"),
+                    (source[:20], provider[:20], model[:200], message[:1000], detail[:2000]),
+                )
+
+        def entries(self, limit=CHAT_ERRORS_SHOWN):
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    sql(
+                        f"SELECT id, source, provider, model, message, detail, "
+                        f"{timestamp_select.format('created_at')} FROM chat_error_log ORDER BY id DESC LIMIT ?"
+                    ),
+                    (limit,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+        def count_since(self, hours):
+            since = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql("SELECT COUNT(*) AS n FROM chat_error_log WHERE created_at >= ?"), (since,)
+                ).fetchone()
+            return row["n"]
+
+        def clear(self):
+            with notes_connection() as connection:
+                connection.execute("DELETE FROM chat_error_log")
+
+        def prune(self, days=CHAT_ERROR_KEEP_DAYS):
+            before = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM chat_error_log WHERE created_at < ?"), (before,))
+
+    chat_error_log = ChatErrorLog()
+    app.extensions["chat_errors"] = chat_error_log
 
     class ChatStore:
         """Each person's conversations, from the web chat page and (for the bot's owner) Telegram."""
@@ -2971,6 +3041,7 @@ def create_app(test_config=None):
     settings_store = SettingsStore()
     app.extensions["settings"] = settings_store
     chat.use_settings(settings_store.get)
+    chat.use_error_log(chat_error_log.add)
 
     def parse_note_time(value):
         # Both backends store UTC as "YYYY-MM-DD HH:MM:SS".
@@ -5501,6 +5572,7 @@ def create_app(test_config=None):
         checks = run_system_checks()
         activity_log.prune()  # The check runs regularly, so old activity is cleared here too.
         convert_log.prune()
+        chat_error_log.prune()
         try:
             previous = json.loads(settings_store.get(SYSTEM_CHECK_STATE) or "{}").get("status", {})
         except ValueError:
@@ -5594,7 +5666,11 @@ def create_app(test_config=None):
         ), status
 
     def section_context(section, values=None, errors=None):
-        if section in ("ai", "telegram"):
+        if section == "ai":
+            return {"groups": settings_view(values, errors, section), "chat_errors": chat_error_log.entries(),
+                    "error_sources": CHAT_ERROR_SOURCES, "error_keep_days": CHAT_ERROR_KEEP_DAYS,
+                    "errors_today": chat_error_log.count_since(24)}
+        if section == "telegram":
             return {"groups": settings_view(values, errors, section)}
         if section == "users":
             return {"users": user_store.all(), "signup_mode": signup_mode(), "signup_modes": SIGNUP_MODES,
@@ -5655,6 +5731,30 @@ def create_app(test_config=None):
         settings_store.save(changes)
         flash("Settings saved.", "success")
         return redirect(url_for("settings_section", section=section), code=303)
+
+    @app.post("/settings/ai/test")
+    def chat_test():
+        """Send a short message to the AI with the saved settings and say how it went."""
+        admin_required()
+        try:
+            seconds, reply = chat.test_connection()
+        except chat.ChatError as error:
+            flash(f"The test failed: {error} It was saved to the error log below.", "error")
+        except Exception:
+            app.logger.exception("Chat connection test failed")
+            flash("The test failed with an unexpected error. It was saved to the error log below.", "error")
+        else:
+            reply = " ".join(reply.split())
+            reply = reply if len(reply) <= 200 else reply[:199] + "…"
+            flash(f"{chat.assistant_name()} answered in {seconds:.1f} seconds: {reply}", "success")
+        return redirect(url_for("settings_section", section="ai", _anchor="chat-test"), code=303)
+
+    @app.post("/settings/ai/errors/clear")
+    def chat_errors_clear():
+        admin_required()
+        chat_error_log.clear()
+        flash("Chat AI error log cleared.", "success")
+        return redirect(url_for("settings_section", section="ai", _anchor="chat-errors"), code=303)
 
     @app.post("/settings/system/check")
     def system_check_now():
