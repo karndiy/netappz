@@ -367,7 +367,7 @@ def stream_local_reply(history, for_telegram=False):
     """Stream a reply from an OpenAI-compatible /chat/completions endpoint."""
     base_url = setting("LOCAL_AI_URL", DEFAULT_LOCAL_URL).rstrip("/")
     headers = {"Content-Type": "application/json", "Accept": "text/event-stream", "User-Agent": USER_AGENT}
-    api_key = setting("LOCAL_AI_API_KEY")
+    api_key = local_api_key()
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     body = json.dumps({
@@ -426,7 +426,7 @@ def stream_local_reply(history, for_telegram=False):
         if error.code == 403 and "error code:" in detail:
             raise ChatError(f"The local AI server's firewall (Cloudflare) blocked this server ({detail}).", log_detail)
         if error.code in (401, 403):
-            raise ChatError("The local AI server rejected the API key. Check it on the Settings page.", log_detail)
+            raise ChatError(key_error_message(error.code, api_key, detail), log_detail)
         if error.code == 404:
             raise ChatError(f"The local AI server could not find this model or address ({detail}). Check the Settings page.",
                             log_detail)
@@ -444,6 +444,26 @@ def stream_local_reply(history, for_telegram=False):
     if not reply:
         raise ChatError("The local AI server sent an empty reply.", f"finish_reason: {finish_reason}")
     return reply
+
+
+def local_api_key():
+    """The saved local AI key, without a "Bearer " prefix pasted along with it."""
+    return re.sub(r"(?i)^bearer\s+", "", setting("LOCAL_AI_API_KEY")).strip()
+
+
+def key_error_message(code, api_key, detail):
+    """Explain a 401/403 from the local AI server so the administrator knows what to fix."""
+    reason = f" The server said: {detail}" if detail and detail != "unknown error" else ""
+    if not api_key:
+        return ("The local AI server needs an API key, but none is saved. "
+                "Add one under Local AI → API key on the Settings page." + reason)
+    if code == 401:
+        return ("The local AI server rejected the API key: it may be mistyped, expired or deleted. "
+                "Create a new key on the AI server (Open WebUI: Settings → Account → API keys) "
+                "and save it on the Settings page." + reason)
+    return ("The local AI server accepted the API key but refused the request: the key's account may not be "
+            "allowed to use the API or this model. Check its permissions on the AI server, "
+            "or pick another model on the Settings page." + reason)
 
 
 def local_error_text(payload):

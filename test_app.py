@@ -1225,6 +1225,38 @@ class FileManagerTests(unittest.TestCase):
         self.assertIn("Telegram", sent["messages"][0]["content"])
         self.assertEqual(sent["messages"][-1], {"role": "user", "content": "hi"})
 
+    def test_local_provider_explains_rejected_api_key(self):
+        def refuse(code, body):
+            return urllib.error.HTTPError("url", code, "Refused", {}, io.BytesIO(json.dumps(body).encode()))
+
+        cases = [
+            ("", 401, {"detail": "Not authenticated"}, "none is saved"),
+            ("sk-old", 401, {"detail": "Your session has expired or the token is invalid."}, "expired"),
+            ("sk-old", 403, {"detail": "Model not found"}, "not be allowed"),
+        ]
+        for key, code, body, expected in cases:
+            self.app.extensions["settings"].save({"CHAT_PROVIDER": "local", "LOCAL_AI_API_KEY": key or None})
+            with mock.patch.dict("os.environ", {}, clear=True), \
+                    mock.patch("urllib.request.urlopen", side_effect=refuse(code, body)):
+                with self.assertRaises(chat.ChatError) as raised:
+                    chat.complete_reply([{"role": "user", "content": "hi"}])
+            self.assertIn(expected, str(raised.exception))
+            self.assertIn(f"The server said: {body['detail']}", str(raised.exception))
+            self.assertIn(f"HTTP {code}", raised.exception.detail)
+
+    def test_local_api_key_pasted_with_bearer_prefix_is_cleaned(self):
+        token = self._csrf()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            response = self.client.post("/settings/ai", data={
+                "_csrf_token": token, "CHAT_PROVIDER": "local", "CHAT_EFFORT": "high",
+                "LOCAL_AI_API_KEY": "Bearer sk-new-456",
+            })
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(self.app.extensions["settings"].all()["LOCAL_AI_API_KEY"], "sk-new-456")
+        with mock.patch.dict("os.environ", {"LOCAL_AI_API_KEY": "bearer sk-env-789"}, clear=True):
+            self.app.extensions["settings"].save({"LOCAL_AI_API_KEY": None})
+            self.assertEqual(chat.local_api_key(), "sk-env-789")
+
     def test_chat_errors_are_logged_and_shown_to_administrators(self):
         token = self._csrf()
         self.app.extensions["settings"].save({"CHAT_PROVIDER": "local", "LOCAL_AI_URL": "https://ai.example.test/api/v1"})

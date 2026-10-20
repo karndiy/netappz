@@ -230,7 +230,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.60.0"
+HELP_VERSION = "1.61.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -303,6 +303,7 @@ HELP_TOPICS = [
         "admin": [
             "Choose which AI answers (Claude or Local AI) and its model under Settings → Chat AI, and set up the bot under Settings → Telegram bot.",
             "Settings → Chat AI has Test now, which sends a short message and shows the answer and how long it took, and an Error log of replies that failed, with the technical cause.",
+            "If the local AI refuses the API key, the message says whether no key is saved, the key is wrong or expired (make a new one on the AI server, e.g. Open WebUI: Settings → Account → API keys), or the key isn't allowed to use that model, and shows the server's own reason. Save the new key, then press Test now.",
         ],
     },
     {
@@ -413,6 +414,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.61.0",
+        "date": "2026-10-20",
+        "changes": [
+            "Clearer Chat AI errors when the local AI server refuses the API key (request #33: check and update Chat AI). The message now says whether no key is saved, the key is wrong or expired, or the key isn't allowed to use the API or model, and includes the server's own reason.",
+            "An API key pasted with \"Bearer \" in front of it is now cleaned up when saved on the Settings page, instead of being refused or sent twice.",
+            "Help explains how to fix a rejected key: make a new one on the AI server, save it, then press Test now.",
+        ],
+    },
     {
         "version": "1.60.0",
         "date": "2026-10-20",
@@ -5394,6 +5404,8 @@ def create_app(test_config=None):
                     changes[name] = None
                     continue
                 value = request.form.get(name, "").strip()
+                if name == "LOCAL_AI_API_KEY":
+                    value = re.sub(r"(?i)^bearer\s+", "", value)  # Pasted along with the key.
                 if not value:
                     continue  # Blank keeps the current secret.
             else:
