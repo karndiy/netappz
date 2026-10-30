@@ -235,7 +235,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.64.0"
+HELP_VERSION = "1.65.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -349,7 +349,7 @@ HELP_TOPICS = [
         "key": "support", "title": "IT support", "icon": "🛠️", "endpoint": "support",
         "summary": "Report a computer, network, printer or account problem, and follow it until it's fixed.",
         "steps": [
-            "Press ＋ Ask for help, say what the problem is, choose the kind of problem and how urgent it is, and add where it is and any details. Press Send to IT support.",
+            "Press ＋ Ask for help, say what the problem is, choose the kind of problem and how urgent it is, and add where it is and any details. Add a picture too if it helps, like a screenshot of the error or a photo of the printer. Press Send to IT support.",
             "The tabs pick which jobs to see: To do (waiting and in progress), My requests, My jobs (the ones you're fixing), Done and All. High and Urgent jobs have an orange or red edge and come first.",
             "Can you fix it? Press Get job on a waiting job: it's yours and the person who asked is told. Press Mark as done when it's fixed, with a short note on what you did, or Hand back to let someone else take it.",
             "You're notified when someone takes your job and when it's done. If it still doesn't work, press Still not working to reopen it. You can remove your own job until someone takes it.",
@@ -433,6 +433,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.65.0",
+        "date": "2026-10-30",
+        "changes": [
+            "You can add a picture when you ask IT support for help (request #37: add a picture to Ask IT support for help), like a screenshot of an error or a photo of the problem.",
+            "The picture shows on the job's card for whoever takes the job; tap it to see it full size.",
+            "Pictures can be JPG, PNG, GIF, WebP or iPhone HEIC up to 25 MB. Location data is removed, and the picture is deleted when the job is removed.",
+        ],
+    },
     {
         "version": "1.64.0",
         "date": "2026-10-30",
@@ -1966,6 +1975,9 @@ def create_app(test_config=None):
             )
             """
         )
+        # Support pictures (1.65.0): a screenshot or photo of the problem, stored with the mission pictures.
+        if "image" not in table_columns(connection, "support_jobs"):
+            connection.execute("ALTER TABLE support_jobs ADD COLUMN image TEXT NOT NULL DEFAULT ''")
         # Wallet (1.37.0): every change to someone's points is a row; the balance is their sum.
         connection.execute(
             f"""
@@ -2191,7 +2203,7 @@ def create_app(test_config=None):
         columns = (
             "support_jobs.id, support_jobs.title, support_jobs.details, support_jobs.category, "
             "support_jobs.priority, support_jobs.place, support_jobs.requested_by, support_jobs.assigned_to, "
-            "support_jobs.status, support_jobs.resolution, requesters.username AS requester, "
+            "support_jobs.status, support_jobs.resolution, support_jobs.image, requesters.username AS requester, "
             f"helpers.username AS helper, {time_as('support_jobs.created_at')}, "
             f"{time_as('support_jobs.updated_at', 'updated_at')}"
         )
@@ -2220,12 +2232,12 @@ def create_app(test_config=None):
                 ).fetchone()
             return dict(row) if row else None
 
-        def add(self, title, details, category, priority, place, requested_by):
+        def add(self, title, details, category, priority, place, requested_by, image=""):
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO support_jobs (title, details, category, priority, place, requested_by) "
-                        "VALUES (?, ?, ?, ?, ?, ?)") + returning_id,
-                    (title, details, category, priority, place, requested_by),
+                    sql("INSERT INTO support_jobs (title, details, category, priority, place, requested_by, image) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)") + returning_id,
+                    (title, details, category, priority, place, requested_by, image),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
 
@@ -4169,12 +4181,19 @@ def create_app(test_config=None):
             error = "Keep the title and place under 120 characters and the details under 4,000."
         elif category not in SUPPORT_CATEGORIES or priority not in SUPPORT_PRIORITIES:
             error = "Choose a kind of problem and how urgent it is from the lists."
+        image = ""
+        upload = request.files.get("image")
+        if not error and upload and upload.filename:
+            try:
+                image = save_mission_image(upload)
+            except ValueError as image_error:
+                error = str(image_error)
         if error:
             flash(error, "error")
             session["support_form"] = {"title": title[:120], "details": details[:SUPPORT_TEXT_LIMIT],
                                        "place": place[:120], "category": category[:20], "priority": priority[:20]}
             return redirect(url_for("support", _anchor="job-new"), code=303)
-        job_id = support_store.add(title, details, category, priority, place, g.user["id"])
+        job_id = support_store.add(title, details, category, priority, place, g.user["id"], image)
         notification_store.add(user_store.admin_ids(), g.user["id"], "support",
                                f"{g.user['username']} needs IT support"
                                + (f" ({SUPPORT_PRIORITIES[priority].lower()})" if priority in ("high", "urgent") else "")
@@ -4257,6 +4276,7 @@ def create_app(test_config=None):
             if not g.user["is_admin"] and (job["requested_by"] != g.user["id"] or job["status"] != "open"):
                 abort(403, "You can only remove your own job before someone takes it.")
             support_store.delete(job_id)
+            remove_mission_image(job["image"])
             flash("Job removed.", "success")
         return support_back()
 

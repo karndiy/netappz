@@ -52,6 +52,11 @@
               <span class="request-kind-tag">{{ categories.get(job.category, job.category) }}</span>
             </div>
             <h3>{{ job.title }}</h3>
+            {% if job.image %}
+              <a class="support-picture" href="{{ url_for('mission_image', name=job.image) }}" target="_blank" rel="noopener"
+                 title="See the picture full size">
+                <img src="{{ url_for('mission_image', name=job.image) }}" alt="Picture of the problem" loading="lazy"></a>
+            {% endif %}
             {% if job.details %}<p class="mission-text mission-details">{{ job.details }}</p>{% endif %}
             {% if job.place %}<p class="mission-when">📍 {{ job.place }}</p>{% endif %}
             <p class="mission-muted">#{{ job.id }} · asked by {{ job.requester or 'a deleted account' }} · {{ job.created_at[:16] }} UTC</p>
@@ -125,7 +130,7 @@
     <section class="mission-section" id="job-new" aria-labelledby="job-new-heading">
       <div class="mission-card mission-form-card support-form">
         <h2 id="job-new-heading">Ask IT support for help</h2>
-        <form class="request-form" action="{{ url_for('support_create') }}" method="post">
+        <form class="request-form" action="{{ url_for('support_create') }}" method="post" enctype="multipart/form-data">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
           <label for="job-title">What's the problem?</label>
           <input id="job-title" name="title" type="text" maxlength="120" required placeholder="The printer on floor 2 won't print"
@@ -153,6 +158,8 @@
           <label for="job-details">Details <span class="optional">(optional: what happens, any error message)</span></label>
           <textarea id="job-details" name="details" rows="4" maxlength="4000"
                     placeholder="It shows “Paper jam” but there's no paper stuck.">{{ form.details if form else '' }}</textarea>
+          <label for="job-image">Picture <span class="optional">(optional: a screenshot or photo of the problem)</span></label>
+          <input id="job-image" name="image" type="file" accept="image/*,.heic,.heif">
           <div class="request-actions"><button type="submit">Send to IT support</button></div>
         </form>
       </div>

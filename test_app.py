@@ -1912,6 +1912,24 @@ class FileManagerTests(unittest.TestCase):
                          ("open", "member", "printer", "Room B"))
         self.assertIn("member needs IT support (urgent): “Printer jams”",
                       notifications.for_user(self.admin_id)[0]["message"])
+        # A picture of the problem shows on the job's card; a file that isn't a picture is turned away.
+        self.client.post("/support", data={"_csrf_token": token, "title": "Broken screen",
+                                           "image": (io.BytesIO(b"not a picture"), "screen.png")},
+                         content_type="multipart/form-data")
+        self.assertEqual(len(store.all()), 1)
+        self.assertIn("not a picture the server can read", self.client.get("/support").get_data(as_text=True))
+        self.client.post("/support", data={"_csrf_token": token, "title": "Broken screen",
+                                           "image": (io.BytesIO(self._png_bytes()), "screen.png")},
+                         content_type="multipart/form-data")
+        screen = next(j for j in store.all() if j["title"] == "Broken screen")
+        self.assertRegex(screen["image"], r"^[0-9a-f]{32}\.jpg$")
+        self.assertIn(f'/missions/images/{screen["image"]}', self.client.get("/support").get_data(as_text=True))
+        self.assertEqual(self.client.get(f'/missions/images/{screen["image"]}').status_code, 200)
+        self.assertEqual(job["image"], "")
+        # Removing the job removes its picture.
+        self.client.post(f"/support/{screen['id']}/delete", data={"_csrf_token": token})
+        self.assertIsNone(store.job(screen["id"]))
+        self.assertEqual(self.client.get(f'/missions/images/{screen["image"]}').status_code, 404)
         # Urgent jobs come before older normal ones.
         self.client.post("/support", data={"_csrf_token": token, "title": "New mouse", "category": "computer"})
         self.assertEqual([j["title"] for j in store.all()], ["Printer jams", "New mouse"])
