@@ -34,6 +34,10 @@
           <div><dt>Mode</dt><dd>{{ 'Against the computer · ' + levels.get(game.level, game.level) if game.mode == 'bot' else 'Two players' }}</dd></div>
           <div><dt>Pieces left</dt><dd id="counts"></dd></div>
           <div><dt>Moves</dt><dd id="plies">{{ game.state.plies }}</dd></div>
+          {% if game.mode == 'pvp' %}
+            <div><dt>Time for each move</dt><dd>{{ move_times.get(game.move_seconds, game.move_seconds ~ ' seconds') if game.move_seconds else 'No limit' }}</dd></div>
+            {% if game.room_minutes %}<div><dt>Room open for</dt><dd>{{ room_times.get(game.room_minutes, game.room_minutes ~ ' minutes') }}</dd></div>{% endif %}
+          {% endif %}
         </dl>
         {% if game.status == 'waiting' and game.white_id == current_user.id %}
           <p class="mission-muted">Waiting for someone to join. This page updates by itself. Share the link: <code>{{ request.url }}</code></p>

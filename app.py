@@ -1,6 +1,7 @@
 import hmac
 import io
 import json
+import math
 import mimetypes
 import os
 import re
@@ -235,7 +236,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.65.0"
+HELP_VERSION = "1.66.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -363,7 +364,8 @@ HELP_TOPICS = [
         "summary": "Play หมากฮอส against the computer or another person, bet points on a game, or watch one.",
         "steps": [
             "Open Games in the menu. Under Play the computer, press Easy, Medium or Hard. You play White and move first.",
-            "To play someone here, enter a bet in points if you like and press Create room. The game starts when someone presses Join on your room; you're notified.",
+            "To play someone here, choose how long the room stays open and the time for each move, enter a bet in points if you like and press Create room. The game starts when someone presses Join on your room; you're notified.",
+            "If nobody joins before the room's time is up, it closes by itself and you're told. In a game, the player to move sees a countdown (⏱); running out of time loses the game, and the bet.",
             "With a bet, both players put in the same points when the game starts. The winner gets them all; a draw gives them back. Resigning loses the bet.",
             "On the board, pieces that can move have a green ring. Press one, then the blue dot where it should go. For a double capture, press each landing square in turn.",
             "Capturing is compulsory and continues while you can. A man that reaches the far row becomes a king (ฮอส) that moves any distance and captures by landing right behind the piece.",
@@ -433,6 +435,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.66.0",
+        "date": "2026-10-30",
+        "changes": [
+            "Thai checkers rooms now have clocks (request #38: upgrade games, give rooms a time to stop and games a time for each move).",
+            "When you create a room, choose how long it stays open (5 minutes to 1 hour). If nobody joins in time, it closes by itself and you're told.",
+            "Choose the time for each move too (30 seconds to 5 minutes, or no limit). The player to move sees a countdown, and running out of time loses the game and the bet.",
+        ],
+    },
     {
         "version": "1.65.0",
         "date": "2026-10-30",
@@ -1211,6 +1222,11 @@ WALLET_NOTE = 200
 GAME_POLL_MS = 1500
 GAME_STATUSES = {"waiting": "Waiting for a player", "playing": "Playing", "finished": "Finished",
                  "cancelled": "Cancelled"}
+# Game clocks (1.66.0): a room closes if nobody joins in time, and a player who runs out of time for a move loses.
+GAME_ROOM_MINUTES = {5: "5 minutes", 10: "10 minutes", 30: "30 minutes", 60: "1 hour"}
+GAME_ROOM_DEFAULT = 10
+GAME_MOVE_SECONDS = {30: "30 seconds", 60: "1 minute", 120: "2 minutes", 300: "5 minutes", 0: "No limit"}
+GAME_MOVE_DEFAULT = 60
 WALLET_SHOWN = 100
 # Announcements float at the top of every page; the level picks the color.
 ANNOUNCEMENT_LEVELS = {"info": "Information", "success": "Good news", "warning": "Important", "urgent": "Urgent"}
@@ -2086,6 +2102,10 @@ def create_app(test_config=None):
             )
             """
         )
+        # Game clocks (1.66.0): how long a room waits for a player, and the time for each move (0 = no limit).
+        for column in ("room_minutes", "move_seconds"):
+            if column not in table_columns(connection, "games"):
+                connection.execute(f"ALTER TABLE games ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
         # File owners (1.59.0): who uploaded each file, whether it's private, and how often it was downloaded.
         # Files without a row (from before 1.59.0) are public and belong to no one.
         connection.execute(
@@ -2707,7 +2727,8 @@ def create_app(test_config=None):
 
         columns = (
             "games.id, games.mode, games.level, games.white_id, games.black_id, games.bet, games.status, "
-            "games.winner, games.ending, games.state, games.version, whites.username AS white, "
+            "games.winner, games.ending, games.state, games.version, games.room_minutes, games.move_seconds, "
+            "whites.username AS white, "
             f"blacks.username AS black, {time_as('games.created_at')}, {time_as('games.updated_at', 'updated_at')}"
         )
 
@@ -2739,13 +2760,13 @@ def create_app(test_config=None):
             return self._rows("games.status IN ('finished', 'cancelled') AND (games.white_id = ? OR games.black_id = ?)",
                               (user_id, user_id), limit)
 
-        def create(self, mode, white_id, level="", bet=0):
+        def create(self, mode, white_id, level="", bet=0, room_minutes=0, move_seconds=0):
             status = "playing" if mode == "bot" else "waiting"
             with notes_connection() as connection:
                 cursor = connection.execute(
-                    sql("INSERT INTO games (mode, level, white_id, bet, status, state) VALUES (?, ?, ?, ?, ?, ?)")
-                    + returning_id,
-                    (mode, level, white_id, bet, status, json.dumps(checkers.new_state())),
+                    sql("INSERT INTO games (mode, level, white_id, bet, status, state, room_minutes, move_seconds) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)") + returning_id,
+                    (mode, level, white_id, bet, status, json.dumps(checkers.new_state()), room_minutes, move_seconds),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
 
@@ -4430,11 +4451,12 @@ def create_app(test_config=None):
     def game_result_text(game):
         names = game_names(game)
         if game["status"] == "cancelled":
-            return "Cancelled"
+            return "Room closed: nobody joined in time" if game["ending"] == "expired" else "Cancelled"
         if game["winner"] == "draw":
             return "Draw: 40 king moves in a row without a capture"
         if game["winner"] in ("w", "b"):
             how = {"resigned": f"{names[checkers.other(game['winner'])]} resigned",
+                   "timeout": f"{names[checkers.other(game['winner'])]} ran out of time",
                    "captured_all": "every piece captured",
                    "blocked": "no legal move left"}.get(game["ending"], "")
             return f"{names[game['winner']]} won" + (f" ({how})" if how else "")
@@ -4442,6 +4464,7 @@ def create_app(test_config=None):
 
     def game_payload(game, user):
         state = game["state"]
+        left = game_seconds_left(game)
         side = game_side(game, user)
         my_turn = game["status"] == "playing" and side == state["turn"]
         moves = checkers.legal_moves(state["board"], state["turn"]) if my_turn else []
@@ -4451,8 +4474,40 @@ def create_app(test_config=None):
             "players": game_names(game), "bet": game["bet"], "counts": checkers.counts(state["board"]),
             "winner": game["winner"], "result": game_result_text(game),
             "moves": [move["path"] for move in moves], "must_capture": bool(moves and moves[0]["captured"]),
-            "plies": state.get("plies", 0),
+            "plies": state.get("plies", 0), "room_minutes": game["room_minutes"], "move_seconds": game["move_seconds"],
+            "seconds_left": None if left is None else math.ceil(left),
         }
+
+    def game_seconds_left(game):
+        """Seconds before a waiting room closes or the player to move runs out of time; None without a limit.
+        A player's time starts when the game last changed: the join or the other player's move."""
+        if game["status"] == "waiting" and game["room_minutes"]:
+            start, limit = game["created_at"], game["room_minutes"] * 60
+        elif game["status"] == "playing" and game["mode"] == "pvp" and game["move_seconds"]:
+            start, limit = game["updated_at"], game["move_seconds"]
+        else:
+            return None
+        return max(0.0, limit - (datetime.now(timezone.utc) - parse_note_time(start)).total_seconds())
+
+    def check_game_clock(game):
+        """Closes a room nobody joined in time, or ends a game whose player to move ran out of time.
+        Clocks are checked whenever a game is looked at. Returns the game as it is now."""
+        if game is None or game_seconds_left(game) != 0:
+            return game
+        if game["status"] == "waiting":
+            if game_store.update(game, status="cancelled", ending="expired"):
+                with app.test_request_context():
+                    link = url_for("games_page")
+                notification_store.add([game["white_id"]], None, "game",
+                                       "Your Thai checkers room closed: nobody joined in time.", link)
+        else:
+            winner = checkers.other(game["state"]["turn"])
+            if game_store.update(game, status="finished", winner=winner, ending="timeout"):
+                finish_game(game, winner, "timeout")
+        return game_store.get(game["id"])
+
+    def current_game(game_id):
+        return check_game_clock(game_store.get(game_id))
 
     def finish_game(game, winner, ending):
         """After a game has been saved as finished: pay out the bet, log it and tell the players."""
@@ -4489,11 +4544,15 @@ def create_app(test_config=None):
     @app.get("/games")
     def games_page():
         user = g.user
+        for game in game_store.waiting() + game_store.live():
+            check_game_clock(game)
         mine = [game for game in game_store.live() if game_side(game, user)]
         return render_template(
             "games.html", rooms=game_store.waiting(), live=[game for game in game_store.live() if not game_side(game, user)],
             mine=mine, recent=game_store.recent(user["id"]), levels=checkers.LEVELS, names=game_names,
             result_text=game_result_text, balance=wallet_store.balance(user["id"]), max_bet=WALLET_MAX,
+            room_times=GAME_ROOM_MINUTES, move_times=GAME_MOVE_SECONDS, room_default=GAME_ROOM_DEFAULT,
+            move_default=GAME_MOVE_DEFAULT, seconds_left=game_seconds_left,
         )
 
     @app.post("/games/bot")
@@ -4507,24 +4566,31 @@ def create_app(test_config=None):
     @app.post("/games/room")
     def game_room():
         bet = wallet_amount(request.form.get("bet", ""), allow_zero=True)
+        room_minutes = request.form.get("room_minutes", GAME_ROOM_DEFAULT, type=int)
+        move_seconds = request.form.get("move_seconds", GAME_MOVE_DEFAULT, type=int)
         error = None
-        if bet is None:
+        if room_minutes not in GAME_ROOM_MINUTES:
+            error = "Choose how long the room stays open."
+        elif move_seconds not in GAME_MOVE_SECONDS:
+            error = "Choose the time for each move."
+        elif bet is None:
             error = f"The bet is a whole number of points from 0 to {WALLET_MAX:,}."
         elif bet and wallet_store.balance(g.user["id"]) < bet:
             error = "You don't have enough points for that bet."
-        elif any(game["white_id"] == g.user["id"] for game in game_store.waiting()):
+        elif any(check_game_clock(game)["status"] == "waiting" for game in game_store.waiting()
+                 if game["white_id"] == g.user["id"]):
             error = "You already have a room waiting for a player."
         if error:
             flash(error, "error")
             return redirect(url_for("games_page"), code=303)
-        game_id = game_store.create("pvp", g.user["id"], bet=bet)
-        flash("Room created. The game starts when someone joins." + (f" Each player bets {bet:,} points." if bet else ""),
-              "success")
+        game_id = game_store.create("pvp", g.user["id"], bet=bet, room_minutes=room_minutes, move_seconds=move_seconds)
+        flash(f"Room created. The game starts when someone joins; the room closes after {GAME_ROOM_MINUTES[room_minutes]}"
+              " if nobody does." + (f" Each player bets {bet:,} points." if bet else ""), "success")
         return redirect(url_for("game_page", game_id=game_id), code=303)
 
     @app.post("/games/<int:game_id>/join")
     def game_join(game_id):
-        game = game_store.get(game_id)
+        game = current_game(game_id)
         if game is None or game["status"] != "waiting":
             flash("That room isn't waiting for a player any more.", "error")
             return redirect(url_for("games_page"), code=303)
@@ -4552,7 +4618,7 @@ def create_app(test_config=None):
 
     @app.post("/games/<int:game_id>/cancel")
     def game_cancel(game_id):
-        game = game_store.get(game_id)
+        game = current_game(game_id)
         if game and game["status"] == "waiting" and (game["white_id"] == g.user["id"] or g.user["is_admin"]):
             game_store.update(game, status="cancelled")
             flash("Room cancelled.", "success")
@@ -4560,28 +4626,29 @@ def create_app(test_config=None):
 
     @app.get("/games/<int:game_id>")
     def game_page(game_id):
-        game = game_store.get(game_id)
+        game = current_game(game_id)
         if game is None:
             abort(404)
         return render_template("game.html", game=game, payload=game_payload(game, g.user), poll_ms=GAME_POLL_MS,
-                               levels=checkers.LEVELS, statuses=GAME_STATUSES)
+                               levels=checkers.LEVELS, statuses=GAME_STATUSES, room_times=GAME_ROOM_MINUTES,
+                               move_times=GAME_MOVE_SECONDS)
 
     @app.get("/games/<int:game_id>/state")
     def game_state(game_id):
-        game = game_store.get(game_id)
+        game = current_game(game_id)
         if game is None:
             abort(404)
         return jsonify(game_payload(game, g.user))
 
     @app.post("/games/<int:game_id>/move")
     def game_move(game_id):
-        game = game_store.get(game_id)
+        game = current_game(game_id)
         data = request.get_json(silent=True) or {}
         side = game_side(game, g.user)
         if game is None:
             abort(404)
         if game["status"] != "playing":
-            return game_error("This game isn't being played.")
+            return game_error("Time ran out for that move." if game["ending"] == "timeout" else "This game isn't being played.")
         if side is None:
             return game_error("You're watching this game.", 403)
         if game["state"]["turn"] != side or data.get("version") != game["version"]:
@@ -4601,7 +4668,7 @@ def create_app(test_config=None):
         if winner:
             finish_game(game, winner, changes["ending"])
         elif game["mode"] == "bot":
-            game = game_store.get(game_id)
+            game = current_game(game_id)
             reply = checkers.choose_move(state, game["level"])
             state, winner = checkers.play(state, reply["path"])
             changes = {"state": state}
@@ -4613,7 +4680,7 @@ def create_app(test_config=None):
 
     @app.post("/games/<int:game_id>/resign")
     def game_resign(game_id):
-        game = game_store.get(game_id)
+        game = current_game(game_id)
         side = game_side(game, g.user)
         if game is None:
             abort(404)

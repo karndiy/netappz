@@ -2180,6 +2180,64 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual((done["status"], done["winner"]), ("finished", "draw"))
         self.assertEqual((wallet.balance(self.admin_id), wallet.balance(player_id)), (1100, 400))
 
+    def test_thai_checkers_room_and_move_clocks(self):
+        token = self._csrf()
+        users, wallet, games = self.app.extensions["users"], self.app.extensions["wallet"], self.app.extensions["games"]
+        notifications = self.app.extensions["notifications"]
+        player_id = users.add("player", "player-password")
+
+        def backdate(game_id, column, seconds):
+            with sqlite3.connect(self.app.config["NOTES_DATABASE"]) as db:
+                db.execute(f"UPDATE games SET {column} = datetime('now', '-{seconds} seconds') WHERE id = ?", (game_id,))
+
+        # Rooms pick how long they stay open and the time for each move; odd values are refused.
+        page = self.client.get("/games").get_data(as_text=True)
+        self.assertIn("Room open for", page)
+        self.assertIn("Time for each move", page)
+        self.client.post("/games/room", data={"_csrf_token": token, "room_minutes": "7", "move_seconds": "60"})
+        self.client.post("/games/room", data={"_csrf_token": token, "room_minutes": "5", "move_seconds": "45"})
+        self.assertEqual(games.waiting(), [])
+        self.client.post("/games/room", data={"_csrf_token": token, "room_minutes": "5", "move_seconds": "30"})
+        room = games.waiting()[0]
+        self.assertEqual((room["room_minutes"], room["move_seconds"]), (5, 30))
+        state = self.client.get(f"/games/{room['id']}/state").get_json()
+        self.assertTrue(290 <= state["seconds_left"] <= 300)
+        self.assertIn("closes in 5 min", self.client.get("/games").get_data(as_text=True))
+
+        # A room nobody joins in time closes, and its owner can open another.
+        backdate(room["id"], "created_at", 301)
+        self.assertEqual(self.client.get(f"/games/{room['id']}/state").get_json()["status"], "cancelled")
+        self.assertEqual(games.get(room["id"])["ending"], "expired")
+        self.assertIn("nobody joined in time", notifications.for_user(self.admin_id)[0]["message"])
+        self._as(player_id)
+        self.client.post(f"/games/{room['id']}/join", data={"_csrf_token": token})
+        self.assertIsNone(games.get(room["id"])["black_id"])
+
+        # Running out of time for a move loses the game and the bet.
+        wallet.deposit(self.admin_id, 100, "start", self.admin_id)
+        wallet.deposit(player_id, 100, "start", self.admin_id)
+        self._as(self.admin_id)
+        self.client.post("/games/room", data={"_csrf_token": token, "bet": "40", "move_seconds": "60"})
+        room = games.waiting()[0]
+        self._as(player_id)
+        self.client.post(f"/games/{room['id']}/join", data={"_csrf_token": token})
+        state = self.client.get(f"/games/{room['id']}/state").get_json()
+        self.assertTrue(55 <= state["seconds_left"] <= 60)
+        backdate(room["id"], "updated_at", 61)
+        self._as(self.admin_id)
+        moved = self._game_post(f"/games/{room['id']}/move", token, {"path": [42, 33], "version": state["version"]})
+        self.assertEqual(moved.status_code, 409)
+        self.assertIn("Time ran out", moved.get_json()["error"])
+        done = games.get(room["id"])
+        self.assertEqual((done["status"], done["winner"], done["ending"]), ("finished", "b", "timeout"))
+        self.assertEqual((wallet.balance(self.admin_id), wallet.balance(player_id)), (60, 140))
+        self.assertIn("ran out of time", self.client.get(f"/games/{room['id']}/state").get_json()["result"])
+
+        # Games against the computer have no clock.
+        response = self.client.post("/games/bot", data={"_csrf_token": token, "level": "easy"})
+        game_id = int(response.headers["Location"].rsplit("/", 1)[1])
+        self.assertIsNone(self.client.get(f"/games/{game_id}/state").get_json()["seconds_left"])
+
     def test_daily_quests_count_actions_and_pay_after_approval(self):
         token = self._csrf()
         quests = self.app.extensions["quests"]

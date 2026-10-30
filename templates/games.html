@@ -38,9 +38,21 @@
       <section class="mission-card" aria-labelledby="room-heading">
         <div class="quest-card-top"><span class="quest-icon" aria-hidden="true">👥</span></div>
         <h2 id="room-heading">Create a room</h2>
-        <p class="mission-muted">Someone joins to play you. With a bet, both players put in the same points and the winner takes them all; a draw gives them back. You have 🪙 {{ "{:,}".format(balance) }}.</p>
+        <p class="mission-muted">Someone joins to play you. With a bet, both players put in the same points and the winner takes them all; a draw gives them back. A player who runs out of time for a move loses. You have 🪙 {{ "{:,}".format(balance) }}.</p>
         <form class="game-room-form" action="{{ url_for('game_room') }}" method="post">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <div class="game-clock-fields">
+            <label>Room open for
+              <select name="room_minutes">
+                {% for minutes, label in room_times.items() %}<option value="{{ minutes }}" {{ 'selected' if minutes == room_default }}>{{ label }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Time for each move
+              <select name="move_seconds">
+                {% for seconds, label in move_times.items() %}<option value="{{ seconds }}" {{ 'selected' if seconds == move_default }}>{{ label }}</option>{% endfor %}
+              </select>
+            </label>
+          </div>
           <label for="game-bet">Bet in points <span class="optional">(optional)</span></label>
           <div>
             <input id="game-bet" name="bet" type="text" inputmode="numeric" maxlength="12" placeholder="0">
@@ -59,7 +71,10 @@
         </div>
         <h3><span class="game-dot is-w" aria-hidden="true"></span>{{ who.w }} <span class="mission-muted">vs</span>
           {% if who.b %}<span class="game-dot is-b" aria-hidden="true"></span>{{ who.b }}{% else %}<em class="mission-muted">waiting…</em>{% endif %}</h3>
-        <p class="mission-muted">#{{ game.id }} · {{ game.state.plies }} moves</p>
+        <p class="mission-muted">#{{ game.id }} · {{ game.state.plies }} moves
+          {%- if game.mode == 'pvp' %} · ⏱ {{ move_times.get(game.move_seconds, game.move_seconds ~ ' seconds') if game.move_seconds else 'no limit' }} a move{% endif %}
+          {%- set left = seconds_left(game) %}
+          {%- if game.status == 'waiting' and left is not none %} · closes in {{ (left / 60) | round(0, 'ceil') | int }} min{% endif %}</p>
         <div class="mission-card-foot">
           {% if action == 'join' and game.white_id != current_user.id %}
             <form action="{{ url_for('game_join', game_id=game.id) }}" method="post">

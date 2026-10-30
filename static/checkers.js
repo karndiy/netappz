@@ -13,6 +13,26 @@
   const startStatus = game.status;
   let partial = [];  // the squares picked so far for the move being made
   let busy = false;
+  let deadline = null;  // when the room closes or the player to move runs out of time (this device's clock)
+
+  function setDeadline() {
+    deadline = game.seconds_left == null ? null : Date.now() + game.seconds_left * 1000;
+  }
+  const secondsLeft = () => Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+
+  function clock() {
+    const span = document.createElement("span");
+    span.className = "game-clock";
+    span.dataset.clock = "";
+    showClock(span);
+    return span;
+  }
+
+  function showClock(span) {
+    const left = secondsLeft();
+    span.textContent = `⏱ ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    span.classList.toggle("is-low", left <= 10);
+  }
 
   const flipped = () => game.you === "b";  // Black sees the board from their side.
   const side = (piece) => (piece === "w" || piece === "W" ? "w" : piece === "b" || piece === "B" ? "b" : null);
@@ -67,6 +87,7 @@
       el.append(dot, who);
       el.classList.toggle("is-turn", game.status === "playing" && game.turn === s);
       if (game.you === s) el.append(Object.assign(document.createElement("span"), { className: "mission-muted", textContent: " (you)" }));
+      if (game.status === "playing" && game.turn === s && deadline !== null) el.append(clock());
     }
     document.getElementById("counts").textContent = `White ${game.counts.w} · Black ${game.counts.b}`;
     document.getElementById("plies").textContent = game.plies;
@@ -84,6 +105,7 @@
       else text = `${colour(game.turn)} to move (${name(game.turn)}). You're watching.`;
     } else text = game.result || "Game over.";
     statusEl.textContent = text;
+    if (game.status === "waiting" && deadline !== null) statusEl.append(" Room closes in ", clock());
     statusEl.classList.toggle("is-over", game.status === "finished" || game.status === "cancelled");
     resignBtn.hidden = !(game.status === "playing" && game.you);
     if (againForm) againForm.hidden = game.status !== "finished";
@@ -127,6 +149,7 @@
     }
     const changed = data.version !== game.version;
     game = data;
+    setDeadline();
     if (changed) partial = [];
     render();
   }
@@ -173,7 +196,13 @@
     } catch (err) { /* try again on the next tick */ }
   }
 
+  setDeadline();
   render();
+  setInterval(() => {  // Count down; when time is up, the server ends the turn or closes the room.
+    if (deadline === null) return;
+    document.querySelectorAll("[data-clock]").forEach(showClock);
+    if (secondsLeft() === 0 && !busy) refresh(true);
+  }, 1000);
   const poll = Number(root.dataset.poll) || 1500;
   setInterval(() => {
     if (game.status === "finished" || game.status === "cancelled" || document.hidden) return;
