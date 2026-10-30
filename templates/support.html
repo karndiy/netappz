@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="{{ lang }}" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IT support · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {% include "_sidebar.html" %}
+  <main class="container missions-page support-page">
+    <section class="heading missions-hero">
+      <div>
+        <h1>IT support</h1>
+        <p class="page-description">Something not working? Tell IT support here. Anyone who can help presses
+          <strong>Get job</strong> to take it, then marks it as done when it's fixed. You're notified at each step.</p>
+      </div>
+      <a class="button" href="#job-new">＋ Ask for help</a>
+    </section>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="message {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <ul class="mission-stats" aria-label="Summary">
+      <li class="{% if urgent %}is-attention{% endif %}"><span class="mission-stat-icon" aria-hidden="true">📥</span>
+        <strong>{{ waiting }}</strong><span>waiting for someone{% if urgent %} · {{ urgent }} high or urgent{% endif %}</span></li>
+      <li><span class="mission-stat-icon" aria-hidden="true">🔧</span>
+        <strong>{{ counts.active - waiting }}</strong><span>in progress</span></li>
+      <li><span class="mission-stat-icon" aria-hidden="true">🧑‍💻</span>
+        <strong>{{ counts.taken }}</strong><span>jobs you're working on</span></li>
+      <li><span class="mission-stat-icon" aria-hidden="true">✅</span>
+        <strong>{{ counts.done }}</strong><span>done</span></li>
+    </ul>
+
+    <nav class="support-tabs" aria-label="Which jobs to show">
+      {% for key, label in views.items() %}
+        <a href="{{ url_for('support', show=key) }}"{% if key == show %} aria-current="page"{% endif %}>{{ label }} <span>{{ counts[key] }}</span></a>
+      {% endfor %}
+    </nav>
+
+    <section class="mission-section support-list" aria-label="{{ views[show] }}">
+      <ul class="card-grid support-grid">
+        {% for job in jobs %}
+          {% set working = job.assigned_to == current_user.id %}
+          <li class="mission-card support-job is-{{ job.status }} priority-{{ job.priority }}" id="job-{{ job.id }}">
+            <div class="quest-card-top">
+              <span class="request-status support-status is-{{ job.status }}">{{ statuses[job.status] }}</span>
+              <span class="request-kind-tag support-priority is-{{ job.priority }}">{{ priorities[job.priority] }}</span>
+              <span class="request-kind-tag">{{ categories.get(job.category, job.category) }}</span>
+            </div>
+            <h3>{{ job.title }}</h3>
+            {% if job.details %}<p class="mission-text mission-details">{{ job.details }}</p>{% endif %}
+            {% if job.place %}<p class="mission-when">📍 {{ job.place }}</p>{% endif %}
+            <p class="mission-muted">#{{ job.id }} · asked by {{ job.requester or 'a deleted account' }} · {{ job.created_at[:16] }} UTC</p>
+            {% if job.status != 'open' %}
+              <p class="mission-yours is-{{ job.status }}">{{ '🧑‍💻 Working on it:' if job.status == 'in_progress' else '✅ Done by' }}
+                <strong>{{ 'you' if working else (job.helper or 'a deleted account') }}</strong>
+                {% if job.status == 'done' %}<span class="mission-muted">{{ job.updated_at[:16] }} UTC</span>{% endif %}</p>
+            {% endif %}
+            {% if job.resolution %}<p class="request-note">{{ job.resolution }}</p>{% endif %}
+
+            {% set can_finish = job.status != 'done' and (working or current_user.is_admin) %}
+            {% if can_finish %}
+              <details class="mission-fold mission-submit-fold">
+                <summary><span class="button{% if job.status == 'open' %} secondary{% endif %}">Mark as done</span></summary>
+                <form class="request-form mission-submit" action="{{ url_for('support_done', job_id=job.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="show" value="{{ show }}">
+                  <label class="visually-hidden" for="job-resolution-{{ job.id }}">What was done</label>
+                  <textarea id="job-resolution-{{ job.id }}" name="resolution" rows="2" maxlength="1000"
+                            placeholder="What did you do? (optional, shown to {{ job.requester or 'them' }})"></textarea>
+                  <div class="request-actions"><button type="submit">Mark as done</button></div>
+                </form>
+              </details>
+            {% endif %}
+
+            <div class="mission-card-foot">
+              {% if job.status == 'open' %}
+                <form action="{{ url_for('support_take', job_id=job.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="show" value="{{ show }}">
+                  <button type="submit">Get job</button>
+                </form>
+              {% endif %}
+              {% if job.status == 'in_progress' and (working or current_user.is_admin) %}
+                <form action="{{ url_for('support_release', job_id=job.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="show" value="{{ show }}">
+                  <button class="secondary" type="submit">Hand back</button>
+                </form>
+              {% endif %}
+              {% if job.status == 'done' and (job.requested_by == current_user.id or current_user.is_admin) %}
+                <form action="{{ url_for('support_reopen', job_id=job.id) }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="show" value="{{ show }}">
+                  <button class="secondary" type="submit">Still not working</button>
+                </form>
+              {% endif %}
+              {% if current_user.is_admin or (job.requested_by == current_user.id and job.status == 'open') %}
+                <span class="mission-card-tools">
+                  <form action="{{ url_for('support_delete', job_id=job.id) }}" method="post"
+                        onsubmit="return confirm('Remove this job?');">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="show" value="{{ show }}">
+                    <button class="mission-icon-button" type="submit" title="Remove job" aria-label="Remove job {{ job.title }}">✕</button>
+                  </form>
+                </span>
+              {% endif %}
+            </div>
+          </li>
+        {% else %}
+          <li class="mission-empty">
+            {% if show == 'taken' %}You aren't working on any jobs. Press Get job on one under To do.
+            {% elif show == 'mine' %}You haven't asked IT support for help yet.
+            {% elif show == 'done' %}No finished jobs yet.
+            {% else %}Nothing waiting. Everything is working! 🎉{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="mission-section" id="job-new" aria-labelledby="job-new-heading">
+      <div class="mission-card mission-form-card support-form">
+        <h2 id="job-new-heading">Ask IT support for help</h2>
+        <form class="request-form" action="{{ url_for('support_create') }}" method="post">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <label for="job-title">What's the problem?</label>
+          <input id="job-title" name="title" type="text" maxlength="120" required placeholder="The printer on floor 2 won't print"
+                 value="{{ form.title if form else '' }}">
+          <div class="mission-dates">
+            <div>
+              <label for="job-category">Kind of problem</label>
+              <select id="job-category" name="category">
+                {% for key, label in categories.items() %}
+                  <option value="{{ key }}" {% if form and form.category == key %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label for="job-priority">How urgent?</label>
+              <select id="job-priority" name="priority">
+                {% for key, label in priorities.items() %}
+                  <option value="{{ key }}" {% if (form.priority if form else 'normal') == key %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <label for="job-place">Where? <span class="optional">(optional: room, desk or computer name)</span></label>
+          <input id="job-place" name="place" type="text" maxlength="120" placeholder="Meeting room B" value="{{ form.place if form else '' }}">
+          <label for="job-details">Details <span class="optional">(optional: what happens, any error message)</span></label>
+          <textarea id="job-details" name="details" rows="4" maxlength="4000"
+                    placeholder="It shows “Paper jam” but there's no paper stuck.">{{ form.details if form else '' }}</textarea>
+          <div class="request-actions"><button type="submit">Send to IT support</button></div>
+        </form>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

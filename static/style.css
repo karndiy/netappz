@@ -1761,3 +1761,32 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
   .game-side { position: static; }
   .game-board { border-width: 4px; }
 }
+
+/* IT support jobs: tabs to pick a list, then a card per job colored by how urgent it is. */
+.support-tabs { display: flex; gap: 6px; margin: 22px 0 0; padding: 4px; overflow-x: auto; border-radius: 12px;
+  background: var(--mac-fill); scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+.support-tabs::-webkit-scrollbar { display: none; }
+.support-tabs a { display: inline-flex; flex: 1 0 auto; align-items: center; justify-content: center; gap: 6px; min-height: 38px;
+  padding: 6px 14px; border-radius: 9px; color: var(--mac-text-2); font-size: 14px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.support-tabs a span { min-width: 22px; padding: 0 6px; border-radius: 999px; background: var(--mac-surface); color: var(--mac-muted);
+  font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+.support-tabs a[aria-current="page"] { background: var(--mac-surface); color: var(--mac-accent); box-shadow: var(--mac-shadow-raised); }
+.support-tabs a[aria-current="page"] span { background: var(--mac-accent-tint); color: var(--mac-accent); }
+.support-list { margin-top: 4px; }
+.support-job { border-left: 4px solid var(--mac-border); }
+.support-job.priority-high { border-left-color: var(--mac-orange); }
+.support-job.priority-urgent { border-left-color: var(--mac-red); }
+.support-job.is-done { opacity: .78; }
+.support-priority.is-high { background: var(--mac-orange-tint); color: var(--mac-orange-text); }
+.support-priority.is-urgent { background: var(--mac-red-tint); color: var(--mac-red-text); }
+.support-status.is-in_progress { background: var(--mac-purple-tint); color: var(--mac-purple-text); }
+.support-status.is-done { background: var(--mac-green-tint); color: var(--mac-green-text); }
+.support-job .mission-card-foot button { min-height: 38px; }
+.support-form { padding: 16px 18px; }
+.support-form .request-form { padding: 0; }
+.support-form select { width: 100%; }
+@media (max-width: 560px) {
+  .support-tabs a { flex: 0 0 auto; }
+  .support-job .mission-card-foot > form { flex: 1 1 auto; }
+  .support-job .mission-card-foot > form button { width: 100%; }
+}

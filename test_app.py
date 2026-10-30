@@ -1803,6 +1803,102 @@ class FileManagerTests(unittest.TestCase):
         self.client.post(f"/missions/{lunch['id']}/delete", data={"_csrf_token": token})
         self.assertIsNone(store.mission(lunch["id"]))
 
+    def test_it_support_jobs_are_taken_and_finished(self):
+        token = self._csrf()
+        store = self.app.extensions["support"]
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        member_id = users.add("member", "member-password")
+        helper_id = users.add("helper", "helper-password")
+        other_id = users.add("other", "other-password")
+
+        def as_user(user_id):
+            with self.client.session_transaction() as sess:
+                sess["user_id"] = user_id
+
+        # Support is in the menu; a job needs a title and a known kind and urgency.
+        as_user(member_id)
+        page = self.client.get("/support").get_data(as_text=True)
+        self.assertIn('class="sidebar-link" href="/support" title="แจ้งซ่อม IT" aria-current="page"', page)
+        self.assertIn("Nothing waiting.", page)
+        self.client.post("/support", data={"_csrf_token": token, "title": " ", "details": "Keep me"})
+        page = self.client.get("/support").get_data(as_text=True)
+        self.assertIn("Say in a few words what the problem is.", page)
+        self.assertIn("Keep me", page)
+        self.client.post("/support", data={"_csrf_token": token, "title": "Printer", "priority": "whenever"})
+        self.assertEqual(store.all(), [])
+        response = self.client.post("/support", data={
+            "_csrf_token": token, "title": "Printer jams", "details": "Floor 2", "category": "printer",
+            "priority": "urgent", "place": "Room B"})
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("show=mine", response.headers["Location"])
+        job = store.all()[0]
+        self.assertEqual((job["status"], job["requester"], job["category"], job["place"]),
+                         ("open", "member", "printer", "Room B"))
+        self.assertIn("member needs IT support (urgent): “Printer jams”",
+                      notifications.for_user(self.admin_id)[0]["message"])
+        # Urgent jobs come before older normal ones.
+        self.client.post("/support", data={"_csrf_token": token, "title": "New mouse", "category": "computer"})
+        self.assertEqual([j["title"] for j in store.all()], ["Printer jams", "New mouse"])
+        mouse_id = store.all()[1]["id"]
+
+        # Someone else can't finish, hand back or remove a job they don't have.
+        as_user(other_id)
+        for action in ("done", "release", "delete"):
+            self.assertEqual(self.client.post(f"/support/{job['id']}/{action}",
+                                              data={"_csrf_token": token}).status_code, 403)
+
+        # The helper gets the job; nobody else can get it after that.
+        as_user(helper_id)
+        self.assertIn("Get job", self.client.get("/support").get_data(as_text=True))
+        self.client.post(f"/support/{job['id']}/take", data={"_csrf_token": token, "show": "taken"})
+        job = store.job(job["id"])
+        self.assertEqual((job["status"], job["helper"]), ("in_progress", "helper"))
+        self.assertIn("helper is working on your IT support job", notifications.for_user(member_id)[0]["message"])
+        page = self.client.get("/support?show=taken").get_data(as_text=True)
+        self.assertIn("Printer jams", page)
+        self.assertNotIn("New mouse", page)
+        as_user(other_id)
+        self.client.post(f"/support/{job['id']}/take", data={"_csrf_token": token})
+        self.assertEqual(store.job(job["id"])["helper"], "helper")
+        self.assertIn("helper is already working on that job.", self.client.get("/support").get_data(as_text=True))
+        # The member can't remove a job once someone has it.
+        as_user(member_id)
+        self.assertEqual(self.client.post(f"/support/{job['id']}/delete",
+                                          data={"_csrf_token": token}).status_code, 403)
+
+        # Done with a note; the member is told and can reopen it if it still doesn't work.
+        as_user(helper_id)
+        self.client.post(f"/support/{job['id']}/done", data={"_csrf_token": token, "resolution": "Cleared the rollers"})
+        job = store.job(job["id"])
+        self.assertEqual((job["status"], job["resolution"]), ("done", "Cleared the rollers"))
+        self.assertIn("Cleared the rollers", notifications.for_user(member_id)[0]["message"])
+        as_user(member_id)
+        page = self.client.get("/support?show=done").get_data(as_text=True)
+        self.assertIn("Cleared the rollers", page)
+        self.assertIn("Still not working", page)
+        self.client.post(f"/support/{job['id']}/reopen", data={"_csrf_token": token})
+        self.assertEqual(store.job(job["id"])["status"], "in_progress")
+        self.assertIn("member reopened", notifications.for_user(helper_id)[0]["message"])
+
+        # Handing back makes it wait again; the member can remove their own waiting job.
+        as_user(helper_id)
+        self.client.post(f"/support/{job['id']}/release", data={"_csrf_token": token})
+        self.assertEqual((store.job(job["id"])["status"], store.job(job["id"])["assigned_to"]), ("open", None))
+        as_user(member_id)
+        self.client.post(f"/support/{mouse_id}/delete", data={"_csrf_token": token})
+        self.assertIsNone(store.job(mouse_id))
+
+        # Deleting the helper's account puts the jobs they were working on back in the queue.
+        as_user(helper_id)
+        self.client.post(f"/support/{job['id']}/take", data={"_csrf_token": token})
+        as_user(self.admin_id)
+        self.client.post(f"/settings/users/{helper_id}/delete", data={"_csrf_token": token})
+        self.assertEqual(store.job(job["id"])["status"], "open")
+        # Administrators can close any job, even one nobody took.
+        self.client.post(f"/support/{job['id']}/done", data={"_csrf_token": token})
+        self.assertEqual((store.job(job["id"])["status"], store.job(job["id"])["helper"]), ("done", "admin"))
+
     def test_missions_run_between_their_dates(self):
         from datetime import datetime, timedelta, timezone
         token = self._csrf()

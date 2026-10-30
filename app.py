@@ -164,6 +164,8 @@ TRANSLATIONS = {
     "Chat": {"th": "แชท", "lo": "ແຊັດ", "zh": "聊天", "ru": "Чат", "es": "Chat", "la": "Colloquium"},
     "Convert": {"th": "แปลงไฟล์", "lo": "ແປງໄຟລ໌", "zh": "转换", "ru": "Конвертер", "es": "Convertir",
                 "la": "Convertere"},
+    "Support": {"th": "แจ้งซ่อม IT", "lo": "ແຈ້ງສ້ອມ IT", "zh": "IT 支持", "ru": "IT-поддержка", "es": "Soporte TI",
+                "la": "Auxilium IT"},
     "Games": {"th": "เกม", "lo": "ເກມ", "zh": "游戏", "ru": "Игры", "es": "Juegos", "la": "Ludi"},
     "Missions": {"th": "ภารกิจ", "lo": "ພາລະກິດ", "zh": "任务", "ru": "Миссии", "es": "Misiones", "la": "Munera"},
     "Update log": {"th": "บันทึกอัปเดต", "lo": "ບັນທຶກການອັບເດດ", "zh": "更新日志", "ru": "Журнал обновлений",
@@ -218,6 +220,7 @@ NOTIFY_KINDS = {
     "mission": "New missions, and news about mission work",
     "wallet": "Points you receive in your wallet",
     "game": "Someone joins your game room, or a game you play ends",
+    "support": "IT support jobs: new jobs, and news about yours",
 }
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}")
 LOCAL_URL = re.compile(r"https?://[^\s/]+(/\S*)?")
@@ -230,7 +233,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.61.0"
+HELP_VERSION = "1.62.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -341,6 +344,19 @@ HELP_TOPICS = [
         ],
     },
     {
+        "key": "support", "title": "IT support", "icon": "🛠️", "endpoint": "support",
+        "summary": "Report a computer, network, printer or account problem, and follow it until it's fixed.",
+        "steps": [
+            "Press ＋ Ask for help, say what the problem is, choose the kind of problem and how urgent it is, and add where it is and any details. Press Send to IT support.",
+            "The tabs pick which jobs to see: To do (waiting and in progress), My requests, My jobs (the ones you're fixing), Done and All. High and Urgent jobs have an orange or red edge and come first.",
+            "Can you fix it? Press Get job on a waiting job: it's yours and the person who asked is told. Press Mark as done when it's fixed, with a short note on what you did, or Hand back to let someone else take it.",
+            "You're notified when someone takes your job and when it's done. If it still doesn't work, press Still not working to reopen it. You can remove your own job until someone takes it.",
+        ],
+        "admin": [
+            "Administrators are told about every new job, can mark any job as done or hand it back, and can remove any job.",
+        ],
+    },
+    {
         "key": "games", "title": "Games: Thai checkers (หมากฮอส)", "icon": "♟️", "endpoint": "games_page",
         "summary": "Play หมากฮอส against the computer or another person, bet points on a game, or watch one.",
         "steps": [
@@ -414,6 +430,16 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.62.0",
+        "date": "2026-10-30",
+        "changes": [
+            "New IT support page (request #34: add task jobs for IT support, so support people can get jobs, with a responsive design). Find it as Support in the menu.",
+            "Anyone can ask for help with a computer, network, printer, account or other problem, choosing how urgent it is and where it is. Administrators are told about each new job.",
+            "Whoever can fix it presses Get job, then Mark as done with a note on what they did. The person who asked is told at each step and can press Still not working to reopen it.",
+            "Tabs show To do, My requests, My jobs, Done and All, and the cards and buttons fit phones as well as computers.",
+        ],
+    },
     {
         "version": "1.61.0",
         "date": "2026-10-20",
@@ -1031,7 +1057,7 @@ SYSTEM_STATUSES = {"ok": "OK", "warning": "Warning", "problem": "Problem"}
 SYSTEM_CHECK_STATE = "_system_checks"  # app_settings row: the last automatic check
 # Settings → Activity log: what people do in Notes and Chat.
 ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat", "feed": "Feed", "convert": "Convert", "files": "Files",
-                  "games": "Games"}
+                  "games": "Games", "support": "IT support"}
 ACTIVITY_DETAIL = 300  # characters of a note title or chat message kept in the log
 ACTIVITY_KEEP_DAYS = 365
 # Settings → Chat AI: replies that failed, with the technical cause, for administrators.
@@ -1084,6 +1110,14 @@ WALLET_SHOWN = 100
 ANNOUNCEMENT_LEVELS = {"info": "Information", "success": "Good news", "warning": "Important", "urgent": "Urgent"}
 ANNOUNCEMENT_LIMIT = 300
 ANNOUNCEMENTS_SHOWN = 3
+# IT support jobs (1.62.0): anyone reports a problem, someone on IT support takes the job and finishes it.
+SUPPORT_STATUSES = {"open": "Waiting", "in_progress": "In progress", "done": "Done"}
+SUPPORT_CATEGORIES = {"computer": "💻 Computer", "network": "🌐 Network & Wi-Fi", "printer": "🖨️ Printer",
+                      "account": "🔑 Account & password", "software": "🧩 Software", "phone": "📱 Phone",
+                      "other": "🛠️ Something else"}
+SUPPORT_PRIORITIES = {"low": "Low", "normal": "Normal", "high": "High", "urgent": "Urgent"}
+SUPPORT_VIEWS = {"active": "To do", "mine": "My requests", "taken": "My jobs", "done": "Done", "all": "All"}
+SUPPORT_TEXT_LIMIT = 4000
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
 # How many requests and patch notes the Update log shows on a page. 0 means all of them.
 PAGE_SIZES = (5, 10, 20, 50, 0)
@@ -1816,6 +1850,25 @@ def create_app(test_config=None):
                                    ("image", "TEXT NOT NULL DEFAULT ''")):
             if column not in existing:
                 connection.execute(f"ALTER TABLE missions ADD COLUMN {column} {definition}")
+        # IT support jobs (1.62.0): a problem someone reports, who took the job, and how it was fixed.
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS support_jobs (
+                {id_column},
+                title TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '',
+                category TEXT NOT NULL DEFAULT 'other',
+                priority TEXT NOT NULL DEFAULT 'normal',
+                place TEXT NOT NULL DEFAULT '',
+                requested_by INTEGER,
+                assigned_to INTEGER,
+                status TEXT NOT NULL DEFAULT 'open',
+                resolution TEXT NOT NULL DEFAULT '',
+                created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         # Wallet (1.37.0): every change to someone's points is a row; the balance is their sum.
         connection.execute(
             f"""
@@ -1944,6 +1997,7 @@ def create_app(test_config=None):
             "CREATE INDEX IF NOT EXISTS wallet_entries_user ON wallet_entries (user_id, id)",
             "CREATE INDEX IF NOT EXISTS mission_submissions_mission ON mission_submissions (mission_id, user_id)",
             "CREATE INDEX IF NOT EXISTS notifications_user ON notifications (user_id, is_read, id)",
+            "CREATE INDEX IF NOT EXISTS support_jobs_status ON support_jobs (status, id)",
             "CREATE INDEX IF NOT EXISTS feed_comments_post ON feed_comments (post_id, id)",
             "CREATE INDEX IF NOT EXISTS feed_media_post ON feed_media (post_id, position)",
         ):
@@ -2033,6 +2087,82 @@ def create_app(test_config=None):
         def delete(self, request_id):
             with notes_connection() as connection:
                 connection.execute(sql("DELETE FROM user_requests WHERE id = ?"), (request_id,))
+
+    class SupportStore:
+        """IT support jobs: problems people report, and who on IT support takes and finishes each one."""
+
+        columns = (
+            "support_jobs.id, support_jobs.title, support_jobs.details, support_jobs.category, "
+            "support_jobs.priority, support_jobs.place, support_jobs.requested_by, support_jobs.assigned_to, "
+            "support_jobs.status, support_jobs.resolution, requesters.username AS requester, "
+            f"helpers.username AS helper, {time_as('support_jobs.created_at')}, "
+            f"{time_as('support_jobs.updated_at', 'updated_at')}"
+        )
+        joins = ("FROM support_jobs LEFT JOIN users requesters ON requesters.id = support_jobs.requested_by "
+                 "LEFT JOIN users helpers ON helpers.id = support_jobs.assigned_to")
+
+        def all(self):
+            """Every job: waiting and in progress first, the most urgent first, then oldest first."""
+            with notes_connection() as connection:
+                rows = connection.execute(
+                    f"SELECT {self.columns} {self.joins} ORDER BY "
+                    "CASE support_jobs.status WHEN 'done' THEN 1 ELSE 0 END, "
+                    "CASE support_jobs.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, "
+                    "support_jobs.id"
+                ).fetchall()
+            jobs = [dict(row) for row in rows]
+            # Finished jobs read newest first.
+            done = sorted((job for job in jobs if job["status"] == "done"), key=lambda job: job["updated_at"],
+                          reverse=True)
+            return [job for job in jobs if job["status"] != "done"] + done
+
+        def job(self, job_id):
+            with notes_connection() as connection:
+                row = connection.execute(
+                    sql(f"SELECT {self.columns} {self.joins} WHERE support_jobs.id = ?"), (job_id,)
+                ).fetchone()
+            return dict(row) if row else None
+
+        def add(self, title, details, category, priority, place, requested_by):
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("INSERT INTO support_jobs (title, details, category, priority, place, requested_by) "
+                        "VALUES (?, ?, ?, ?, ?, ?)") + returning_id,
+                    (title, details, category, priority, place, requested_by),
+                )
+                return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def take(self, job_id, user_id):
+            """Give a waiting job to this person. False when someone else got it first."""
+            with notes_connection() as connection:
+                cursor = connection.execute(
+                    sql("UPDATE support_jobs SET status = 'in_progress', assigned_to = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'open'"),
+                    (user_id, job_id),
+                )
+                return cursor.rowcount == 1
+
+        def set_status(self, job_id, status, assigned_to, resolution):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("UPDATE support_jobs SET status = ?, assigned_to = ?, resolution = ?, "
+                        "updated_at = CURRENT_TIMESTAMP WHERE id = ?"),
+                    (status, assigned_to, resolution, job_id),
+                )
+
+        def delete(self, job_id):
+            with notes_connection() as connection:
+                connection.execute(sql("DELETE FROM support_jobs WHERE id = ?"), (job_id,))
+
+        def delete_user_content(self, user_id):
+            """When an account is deleted, its jobs stay; jobs it was working on wait for someone else."""
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE support_jobs SET requested_by = NULL WHERE requested_by = ?"),
+                                   (user_id,))
+                connection.execute(sql("UPDATE support_jobs SET status = 'open', assigned_to = NULL "
+                                       "WHERE assigned_to = ? AND status = 'in_progress'"), (user_id,))
+                connection.execute(sql("UPDATE support_jobs SET assigned_to = NULL WHERE assigned_to = ?"),
+                                   (user_id,))
 
     class MissionStore:
         """Missions administrators set, and the work people submit for an administrator to approve."""
@@ -3038,6 +3168,9 @@ def create_app(test_config=None):
     mission_store = MissionStore()
     app.extensions["missions"] = mission_store
 
+    support_store = SupportStore()
+    app.extensions["support"] = support_store
+
     wallet_store = WalletStore()
     quest_store = QuestStore()
     game_store = GameStore()
@@ -3394,6 +3527,7 @@ def create_app(test_config=None):
             feed_store.delete_user_content(user_id)
             chat_store.delete_user_content(user_id)
             mission_store.delete_user_content(user_id)
+            support_store.delete_user_content(user_id)
             quest_store.delete_user_content(user_id)
             for game in game_store.live():  # The other player gets their bet back.
                 if game["bet"] and user_id in (game["white_id"], game["black_id"]):
@@ -3885,6 +4019,149 @@ def create_app(test_config=None):
             mission_store.delete_submission(submission_id)
             flash("Submission removed.", "success")
         return redirect(url_for("missions", _anchor=f"mission-{item['mission_id']}" if item else None), code=303)
+
+    # ---------------------------------------------------------- IT support jobs
+
+    def support_back(job_id=None):
+        """Back to the list the person was looking at, at the job they changed."""
+        show = request.form.get("show", "")
+        return redirect(url_for("support", show=show if show in SUPPORT_VIEWS else None,
+                                _anchor=f"job-{job_id}" if job_id else None), code=303)
+
+    def support_job_or_flash(job_id):
+        job = support_store.job(job_id)
+        if job is None:
+            flash("That job no longer exists.", "error")
+        return job
+
+    @app.get("/support")
+    def support():
+        user = g.user
+        show = request.args.get("show", "active")
+        if show not in SUPPORT_VIEWS:
+            show = "active"
+        jobs = support_store.all()
+        groups = {
+            "active": [job for job in jobs if job["status"] != "done"],
+            "mine": [job for job in jobs if job["requested_by"] == user["id"]],
+            "taken": [job for job in jobs if job["assigned_to"] == user["id"] and job["status"] != "done"],
+            "done": [job for job in jobs if job["status"] == "done"],
+            "all": jobs,
+        }
+        return render_template(
+            "support.html", jobs=groups[show], show=show, views=SUPPORT_VIEWS,
+            counts={key: len(items) for key, items in groups.items()},
+            waiting=sum(1 for job in jobs if job["status"] == "open"),
+            urgent=sum(1 for job in jobs if job["status"] == "open" and job["priority"] in ("urgent", "high")),
+            statuses=SUPPORT_STATUSES, categories=SUPPORT_CATEGORIES, priorities=SUPPORT_PRIORITIES,
+            form=session.pop("support_form", None),
+        )
+
+    @app.post("/support")
+    def support_create():
+        """Anyone reports a problem; everyone on IT support (the administrators) is told about it."""
+        title = " ".join(request.form.get("title", "").split())
+        details = request.form.get("details", "").strip().replace("\r\n", "\n")
+        place = " ".join(request.form.get("place", "").split())
+        category = request.form.get("category", "other")
+        priority = request.form.get("priority", "normal")
+        error = None
+        if not title:
+            error = "Say in a few words what the problem is."
+        elif len(title) > 120 or len(details) > SUPPORT_TEXT_LIMIT or len(place) > 120:
+            error = "Keep the title and place under 120 characters and the details under 4,000."
+        elif category not in SUPPORT_CATEGORIES or priority not in SUPPORT_PRIORITIES:
+            error = "Choose a kind of problem and how urgent it is from the lists."
+        if error:
+            flash(error, "error")
+            session["support_form"] = {"title": title[:120], "details": details[:SUPPORT_TEXT_LIMIT],
+                                       "place": place[:120], "category": category[:20], "priority": priority[:20]}
+            return redirect(url_for("support", _anchor="job-new"), code=303)
+        job_id = support_store.add(title, details, category, priority, place, g.user["id"])
+        notification_store.add(user_store.admin_ids(), g.user["id"], "support",
+                               f"{g.user['username']} needs IT support"
+                               + (f" ({SUPPORT_PRIORITIES[priority].lower()})" if priority in ("high", "urgent") else "")
+                               + f": “{title}”", url_for("support", _anchor=f"job-{job_id}"))
+        activity_log.add(g.user["id"], "support", "asked for help", title)
+        flash("Job sent to IT support. You're notified when someone takes it and when it's done.", "success")
+        return redirect(url_for("support", show="mine", _anchor=f"job-{job_id}"), code=303)
+
+    @app.post("/support/<int:job_id>/take")
+    def support_take(job_id):
+        """Get the job: the person who presses it is now working on it."""
+        job = support_job_or_flash(job_id)
+        if job is None:
+            pass
+        elif not support_store.take(job_id, g.user["id"]):
+            job = support_store.job(job_id) or job  # Someone may have got it a moment ago.
+            flash(f"{job['helper'] or 'Someone'} is already working on that job." if job["status"] == "in_progress"
+                  else "That job is already done.", "error")
+        else:
+            notification_store.add([job["requested_by"]], g.user["id"], "support",
+                                   f"{g.user['username']} is working on your IT support job “{job['title']}”",
+                                   url_for("support", show="mine", _anchor=f"job-{job_id}"))
+            activity_log.add(g.user["id"], "support", "took a job", job["title"])
+            flash(f"You got the job “{job['title']}”. Press Mark as done when it's fixed.", "success")
+        return support_back(job_id)
+
+    @app.post("/support/<int:job_id>/release")
+    def support_release(job_id):
+        """Hand a job back so someone else can take it."""
+        job = support_job_or_flash(job_id)
+        if job is not None:
+            if job["status"] != "in_progress" or (job["assigned_to"] != g.user["id"] and not g.user["is_admin"]):
+                abort(403, "Only the person working on a job, or an administrator, can hand it back.")
+            support_store.set_status(job_id, "open", None, "")
+            flash(f"“{job['title']}” is waiting for someone to take it again.", "success")
+        return support_back(job_id)
+
+    @app.post("/support/<int:job_id>/done")
+    def support_done(job_id):
+        job = support_job_or_flash(job_id)
+        note = request.form.get("resolution", "").strip().replace("\r\n", "\n")[:1000]
+        if job is not None:
+            if job["status"] == "done":
+                flash("That job is already done.", "error")
+                return support_back(job_id)
+            # Whoever took it finishes it; an administrator can close any job, even one nobody took.
+            if job["assigned_to"] != g.user["id"] and not g.user["is_admin"]:
+                abort(403, "Only the person working on a job, or an administrator, can mark it as done.")
+            support_store.set_status(job_id, "done", job["assigned_to"] or g.user["id"], note)
+            notification_store.add([job["requested_by"]], g.user["id"], "support",
+                                   f"{g.user['username']} finished your IT support job “{job['title']}”"
+                                   + (f": {note}" if note else ""),
+                                   url_for("support", show="mine", _anchor=f"job-{job_id}"))
+            activity_log.add(g.user["id"], "support", "finished a job", job["title"])
+            flash(f"“{job['title']}” is done. {job['requester'] or 'The person who asked'} has been told.", "success")
+        return support_back(job_id)
+
+    @app.post("/support/<int:job_id>/reopen")
+    def support_reopen(job_id):
+        """Still broken: the person who asked (or an administrator) sends a finished job back."""
+        job = support_job_or_flash(job_id)
+        if job is not None:
+            if job["requested_by"] != g.user["id"] and not g.user["is_admin"]:
+                abort(403, "Only the person who asked for help, or an administrator, can reopen a job.")
+            if job["status"] != "done":
+                flash("That job isn't done yet.", "error")
+            else:
+                helper = job["assigned_to"]
+                support_store.set_status(job_id, "in_progress" if helper else "open", helper, "")
+                notification_store.add([helper] if helper else user_store.admin_ids(), g.user["id"], "support",
+                                       f"{g.user['username']} reopened the IT support job “{job['title']}”",
+                                       url_for("support", _anchor=f"job-{job_id}"))
+                flash(f"“{job['title']}” is open again.", "success")
+        return support_back(job_id)
+
+    @app.post("/support/<int:job_id>/delete")
+    def support_delete(job_id):
+        job = support_store.job(job_id)
+        if job is not None:
+            if not g.user["is_admin"] and (job["requested_by"] != g.user["id"] or job["status"] != "open"):
+                abort(403, "You can only remove your own job before someone takes it.")
+            support_store.delete(job_id)
+            flash("Job removed.", "success")
+        return support_back()
 
     # ----------------------------------------------------------------- quests
 
