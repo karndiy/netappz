@@ -11,6 +11,8 @@ from pathlib import Path
 import urllib.error
 from urllib.parse import unquote
 
+from markupsafe import escape
+
 THAI_FONTS = "/usr/share/fonts/truetype/tlwg"
 
 import chat
@@ -2346,6 +2348,13 @@ class FileManagerTests(unittest.TestCase):
         self.assertIn("Settings → Appearance → Language", page)
         self.assertIn("Upcoming", page)
         self.assertIn("watermark", page)
+        # What's new shows the newest patch notes, linked to the Update log.
+        latest = app_module.UPDATE_LOG[0]
+        self.assertIn(f"What's new in version {latest['version']}", page)
+        for change in latest["changes"]:
+            self.assertIn(str(escape(change)), page)
+        self.assertIn(f'href="/updates?q={latest["version"]}"', page)
+        self.assertIn("finishing a game of Thai checkers", page)
 
         # People who aren't administrators get only the parts they can use.
         member_id = self.app.extensions["users"].add("member", "member-password")

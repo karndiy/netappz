@@ -22,6 +22,20 @@
       {% endfor %}
     </nav>
 
+    <section class="mission-card help-card help-whats-new" id="help-whats-new">
+      <div class="help-card-head">
+        <span class="mission-stat-icon" aria-hidden="true">✨</span>
+        <div>
+          <h2>What's new in version {{ latest.version }}</h2>
+          <p class="mission-text">{{ latest.date }}</p>
+        </div>
+      </div>
+      <ul class="help-steps">
+        {% for change in latest.changes %}<li>{{ change }}</li>{% endfor %}
+      </ul>
+      <a class="button secondary help-open" href="{{ url_for('updates', q=latest.version) }}">See all patch notes</a>
+    </section>
+
     <ul class="card-grid help-grid">
       {% for topic in topics %}
         <li class="mission-card help-card" id="help-{{ topic.key }}">

@@ -1685,6 +1685,7 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 
 /* Help: one card per part of the app, with numbered steps. */
 .help-contents { margin-top: 18px; }
+.help-whats-new { margin: 18px 0; list-style: none; }
 .help-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); align-items: start; }
 .help-card { scroll-margin-top: 16px; }
 .help-card:target { border-color: var(--mac-accent); box-shadow: 0 0 0 3px var(--mac-accent-tint); }

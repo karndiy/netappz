@@ -235,11 +235,11 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.63.0"
+HELP_VERSION = "1.64.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
-        "summary": "Network Files is a shared space for your team: files, posts, notes, an AI chat, converters, missions and points.",
+        "summary": "Network Files is a shared space for your team: files, posts, notes, an AI chat, converters, missions and points, IT support and games.",
         "steps": [
             "Open the app at http://netappz.local from any phone, tablet or computer on the same network.",
             "Sign in with your username and password. No account yet? Choose Sign up on the sign-in page; an administrator may need to approve it before you can sign in.",
@@ -247,7 +247,7 @@ HELP_TOPICS = [
             "After you sign in you land on the Feed, the home page. The logo at the top of the menu always brings you back to it.",
             "At the bottom of the menu are Notifications, your profile, Wallet with your points, Settings and Log out.",
             "The app is in Thai until you choose another language under Settings → Appearance → Language. The menu is translated so far; other pages are still in English and are being translated a few at a time.",
-            "Help (the ? icon in the menu) explains every part of the app and says which version it covers. Press a topic at the top to jump to it.",
+            "Help (the ? icon in the menu) explains every part of the app and says which version it covers. What's new at the top lists the changes in the latest version; press a topic to jump to it.",
             "Messages floating across the top of the page are announcements from an administrator. Press ✕ to close one on this device.",
         ],
         "admin": [
@@ -332,7 +332,7 @@ HELP_TOPICS = [
             "Open missions are cards showing the reward, the dates and the days left. Write what you did on its card and press Submit for approval.",
             "A mission with a start date shows as Upcoming until then. After its end date it moves to Closed missions as Ended.",
             "You are notified when your work is approved (the points go to your Wallet) or sent back with a note. After a send-back you can submit again. You can withdraw work until it's approved.",
-            "Daily quests, such as posting or commenting on the Feed, converting a file, uploading files, writing a note or sending a Chat message, fill in by themselves as you use the app. When one is done, press Claim. Quests start again every day at midnight (Thailand time).",
+            "Daily quests, such as posting or commenting on the Feed, converting a file, uploading files, writing a note, sending a Chat message or finishing a game of Thai checkers, fill in by themselves as you use the app. When one is done, press Claim. Quests start again every day at midnight (Thailand time).",
             "Have an idea for a mission? Press ＋ Propose a mission; it starts once an administrator approves it. Add dates if you like, and a picture to promote it: it shows at the top of the mission's card. You can remove your proposal until it's approved.",
             "Reward goals are cards showing what your points can buy, such as a travel ticket, with a picture when there is one. Press Make it my goal on one to follow how close you are; it shows at the top of the page. When you have enough points, press Exchange.",
         ],
@@ -390,7 +390,7 @@ HELP_TOPICS = [
     },
     {
         "key": "notifications", "title": "Notifications", "icon": "🔔", "endpoint": "notifications",
-        "summary": "News about comments, likes, mentions, missions, points and requests.",
+        "summary": "News about comments, likes, mentions, missions, points, requests, games and IT support jobs.",
         "steps": [
             "The bell at the bottom of the menu shows how many are unread. New ones also pop up while the app is open.",
             "Click a notification to go to what it is about; that marks it as read.",
@@ -405,7 +405,7 @@ HELP_TOPICS = [
             "Open New request, choose Feature or Problem, write a short title and the details, and press Send request.",
             "Each request shows its status: Waiting, Sent to Claude, In progress or Done. You are notified when it changes. Filter the list by status.",
             "A Done request shows the version that has the change, with a link to its patch notes, and a note from Claude about what was changed.",
-            "The patch notes below list every version, newest first. Search finds both requests and patch notes.",
+            "The patch notes below list every version, newest first. Search finds both requests and patch notes. The newest version's notes also show at the top of Help.",
             "Requests and patch notes come a page at a time. Use the page numbers under each list, and Show … per page to see 5, 10, 20, 50 or all. Your choice is remembered.",
         ],
         "admin": [
@@ -433,6 +433,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.64.0",
+        "date": "2026-10-30",
+        "changes": [
+            "Help is brought up to date with the latest version (request #36: update help with the latest data).",
+            "New What's new card at the top of Help: it lists the changes in the newest version, with a link to all the patch notes on the Update log.",
+            "Getting started now mentions IT support and Games, daily quests include finishing a game of Thai checkers, and Notifications mentions game and IT support news.",
+        ],
+    },
     {
         "version": "1.63.0",
         "date": "2026-10-30",
@@ -3824,7 +3833,7 @@ def create_app(test_config=None):
             {**topic, "admin": topic.get("admin", []) if g.user["is_admin"] else []}
             for topic in HELP_TOPICS
         ]
-        return render_template("help.html", topics=topics, help_version=HELP_VERSION)
+        return render_template("help.html", topics=topics, help_version=HELP_VERSION, latest=UPDATE_LOG[0])
 
     @app.get("/missions")
     def missions():
