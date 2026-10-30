@@ -1608,6 +1608,79 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(client.get("/settings/system/backups/notes-20261014-032151Z.dump").status_code, 403)
         self.assertEqual(client.post("/settings/system/backup", data={"_csrf_token": token}).status_code, 403)
 
+    def test_system_dashboard_shows_docker_disks_speed_and_power(self):
+        import app as app_module
+
+        # A made-up server: in Docker with a memory limit, on battery that is running low.
+        host = Path(self.temp_dir.name) / "host"
+        files = {
+            ".dockerenv": "",
+            "proc/meminfo": "MemTotal:       8000000 kB\nMemFree:  100 kB\nMemAvailable:   6000000 kB\n",
+            "proc/uptime": "200000.5 1000.0",
+            "sys/fs/cgroup/memory.current": str(230 * 1048576),
+            "sys/fs/cgroup/memory.max": str(256 * 1048576),
+            "sys/fs/cgroup/cpu.max": "150000 100000",
+            "sys/class/thermal/thermal_zone0/temp": "47000",
+            "sys/class/thermal/thermal_zone0/type": "x86_pkg_temp",
+            "sys/class/power_supply/AC/type": "Mains",
+            "sys/class/power_supply/AC/online": "0",
+            "sys/class/power_supply/BAT0/type": "Battery",
+            "sys/class/power_supply/BAT0/capacity": "15",
+            "sys/class/power_supply/BAT0/status": "Discharging",
+        }
+        for name, text in files.items():
+            (host / name).parent.mkdir(parents=True, exist_ok=True)
+            (host / name).write_text(text)
+        self.app.config["SPEED_TEST_MB"] = 1
+        token = self._csrf()
+        with mock.patch.object(app_module, "HOST_ROOT", host):
+            page = self.client.get("/settings/dashboard").get_data(as_text=True)
+            self.assertIn("System dashboard", page)
+            self.assertIn("Yes · container", page)
+            self.assertIn("230 MB of 256 MB", page)
+            self.assertIn("1.5 of", page)
+            self.assertIn("Shared files, Feed photos and videos, Database", page)
+            self.assertIn("2 days, 7 hours", page)
+            self.assertIn("47 °C", page)
+            self.assertIn("Unplugged", page)
+            self.assertIn("15% · Discharging", page)
+            self.assertIn("Not tested yet", page)
+            panels = page.split('class="dashboard-tile ')[1:5]
+            self.assertEqual([panel.split('"')[0] for panel in panels],
+                             ["is-warning", "is-ok", "is-ok", "is-problem"])
+            self.assertIn("Needs attention: Docker, Power &amp; load",
+                          self.client.get("/settings").get_data(as_text=True))
+
+            # The speed test writes, reads and removes a file, and is kept for the next visit.
+            response = self.client.post("/settings/dashboard/speed", data={"_csrf_token": token})
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(list(self.root.iterdir()), [])
+            page = self.client.get("/settings/dashboard").get_data(as_text=True)
+            self.assertIn("Speed tested: the disk writes", page)
+            self.assertIn("with a 1 MB file", page)
+            self.assertIn("Disk read", page)
+            self.assertIn("ms per query", page)
+
+        # The browser downloads a sample to measure the network.
+        response = self.client.get("/settings/dashboard/sample?mb=2")
+        self.assertEqual((response.status_code, len(response.data)), (200, 2 * 1048576))
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(len(self.client.get("/settings/dashboard/sample?mb=999").data), 32 * 1048576)
+
+        # Without /proc and /sys it still works, and says the power supply isn't reported.
+        with mock.patch.object(app_module, "HOST_ROOT", Path(self.temp_dir.name) / "nothing"):
+            page = self.client.get("/settings/dashboard").get_data(as_text=True)
+            self.assertIn("No, directly on the server computer", page)
+            self.assertIn("doesn&#39;t report its power supply", page)
+
+        # Members can't see or use any of it.
+        member_id = self.app.extensions["users"].add("member", "member-password")
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        self.assertEqual(self.client.get("/settings/dashboard").status_code, 403)
+        self.assertEqual(self.client.get("/settings/dashboard/sample").status_code, 403)
+        self.assertEqual(self.client.post("/settings/dashboard/speed", data={"_csrf_token": token}).status_code, 403)
+
     def test_only_administrators_send_requests_to_claude(self):
         import json
         import app as app_module

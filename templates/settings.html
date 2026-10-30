@@ -617,6 +617,58 @@
               </form>
             </section>
           {% endif %}
+
+        {% elif section.key == "dashboard" %}
+          {# -------------------------------------------------- dashboard #}
+          <div class="dashboard-tiles">
+            {% for panel in panels %}
+              <a class="dashboard-tile is-{{ panel.status }}" href="#{{ panel.key }}">
+                <span class="dashboard-tile-icon" aria-hidden="true">{{ panel.icon }}</span>
+                <strong>{{ panel.title }}</strong>
+                <span class="system-status">{{ statuses[panel.status] }}</span>
+              </a>
+            {% endfor %}
+          </div>
+          {% for panel in panels %}
+            <section class="settings-card{% if panel.status != 'ok' %} is-attention{% endif %}" id="{{ panel.key }}" aria-labelledby="{{ panel.key }}-heading">
+              <div class="settings-card-head">
+                <h2 id="{{ panel.key }}-heading">{{ panel.icon }} {{ panel.title }}</h2>
+                {% if panel.key == "docker" %}<p>The container this app runs in and the services next to it. Start, stop and update them on the server with docker-compose.</p>
+                {% elif panel.key == "disks" %}<p>Each disk that holds the app's files, photos, database or backups.</p>
+                {% elif panel.key == "speed" %}<p>Test speed writes a {{ test_mb }} MB file to the shared files disk, reads it back and deletes it, and times the database and Redis. The network test measures downloads from the server to this device.</p>
+                {% else %}<p>How busy the server is, and its temperature and power supply when the computer reports them.</p>{% endif %}
+              </div>
+              <ul class="system-checks">
+                {% for row in panel.rows %}
+                  <li class="system-check is-{{ row.status }}">
+                    <span class="system-status">{{ statuses[row.status] }}</span>
+                    <div><strong>{{ row.label }}</strong><span>{{ row.value }}</span>
+                      {% if row.percent is not none %}<span class="dashboard-meter" aria-hidden="true"><span style="width: {{ [row.percent, 100] | min }}%"></span></span>{% endif %}
+                    </div>
+                  </li>
+                {% endfor %}
+                {% if panel.key == "speed" %}
+                  <li class="system-check" id="network-test" hidden>
+                    <span class="system-status">Network</span>
+                    <div><strong>Download to this device</strong><span id="network-result"></span></div>
+                  </li>
+                {% endif %}
+              </ul>
+              {% if panel.key == "speed" %}
+                <div class="settings-actions">
+                  <form action="{{ url_for('dashboard_speed_test') }}" method="post">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <button class="secondary" type="submit">Test speed</button>
+                  </form>
+                  <button class="secondary" type="button" id="network-button"
+                          data-url="{{ url_for('dashboard_speed_sample', mb=sample_mb) }}" data-mb="{{ sample_mb }}">Test network</button>
+                </div>
+              {% endif %}
+            </section>
+          {% endfor %}
+          <form class="settings-actions dashboard-refresh" action="{{ url_for('settings_section', section='dashboard') }}" method="get">
+            <button class="secondary" type="submit">Refresh</button>
+          </form>
         {% endif %}
       {% endif %}
     </main>
@@ -634,6 +686,30 @@
         var holder = document.getElementById('avatar-preview');
         holder.innerHTML = '';
         holder.appendChild(img);
+      });
+    </script>
+  {% endif %}
+  {% if section and section.key == "dashboard" %}
+    <script>
+      // Download a sample from the server and show how fast it came.
+      document.getElementById('network-button').addEventListener('click', function () {
+        var button = this, row = document.getElementById('network-test'), result = document.getElementById('network-result');
+        row.hidden = false;
+        result.textContent = 'Testing…';
+        button.disabled = true;
+        var start = performance.now();
+        fetch(button.dataset.url + '&t=' + Date.now(), {cache: 'no-store'})
+          .then(function (response) {
+            if (!response.ok) throw new Error('The server answered ' + response.status);
+            return response.arrayBuffer();
+          })
+          .then(function (data) {
+            var seconds = Math.max((performance.now() - start) / 1000, 0.001);
+            result.textContent = (data.byteLength * 8 / seconds / 1e6).toFixed(0) + ' Mbit/s (' +
+              (data.byteLength / 1048576).toFixed(0) + ' MB in ' + seconds.toFixed(2) + ' s)';
+          })
+          .catch(function (error) { result.textContent = 'The test failed: ' + error.message; })
+          .then(function () { button.disabled = false; });
       });
     </script>
   {% endif %}

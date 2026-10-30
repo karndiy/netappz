@@ -1790,3 +1790,15 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
   .support-job .mission-card-foot > form { flex: 1 1 auto; }
   .support-job .mission-card-foot > form button { width: 100%; }
 }
+/* System dashboard */
+.dashboard-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.dashboard-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; background: var(--mac-surface); border: 1px solid var(--mac-separator); border-radius: 10px; color: var(--mac-text); text-decoration: none; }
+.dashboard-tile:hover { border-color: var(--mac-accent-line); }
+.dashboard-tile.is-warning, .dashboard-tile.is-problem { border-color: var(--mac-orange-line); }
+.dashboard-tile.is-problem { border-color: var(--mac-red-line); }
+.dashboard-tile-icon { font-size: 24px; line-height: 1; }
+.dashboard-meter { display: block; height: 6px; margin-top: 5px; border-radius: 999px; background: var(--mac-fill); overflow: hidden; }
+.dashboard-meter span { display: block; height: 100%; border-radius: inherit; background: var(--mac-green); }
+.is-warning .dashboard-meter span { background: var(--mac-orange); }
+.is-problem .dashboard-meter span { background: var(--mac-red); }
+.dashboard-refresh { margin-top: 16px; }

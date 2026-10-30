@@ -145,6 +145,8 @@ SETTINGS_SECTIONS = [
      "description": "What people do in the app: notes, chat messages, Feed posts and comments, conversions and uploads."},
     {"key": "system", "title": "System & backups", "icon": "🩺", "admin": True,
      "description": "Automatic checks of the database, Redis, disk and backups, and the database backups."},
+    {"key": "dashboard", "title": "System dashboard", "icon": "📊", "admin": True,
+     "description": "Docker, disks (HDD), speed, and power and load of the server at a glance."},
 ]
 SECTION_KEYS = {section["key"]: section for section in SETTINGS_SECTIONS}
 # Looks people can choose under Settings → Appearance; "auto" follows the device.
@@ -233,7 +235,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.62.0"
+HELP_VERSION = "1.63.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -424,12 +426,23 @@ HELP_TOPICS = [
             "Announcements: messages that float at the top of every page, colored by how important they are.",
             "Activity log: what people do in the app, filtered by person or kind. System & backups: checks every 15 minutes (you are notified when something needs attention), database backups to download or make now, and how often backups are made and kept.",
             "Server: where files are stored, the database and the version. These are changed in the server's files.",
+            "System dashboard: Docker (the container's memory and CPUs, and whether the database, Redis, backups and Telegram bot are working), each disk's free space, the server's CPU load, memory, temperature and power supply. Press Test speed to time the disk, database and Redis, and Test network to measure downloads from the server to your device.",
         ],
     },
 ]
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.63.0",
+        "date": "2026-10-30",
+        "changes": [
+            "New System dashboard for administrators under Settings (request #35: a dashboard to check the system: Docker, HDD, speed and power). It shows each part as OK, Warning or Problem at a glance.",
+            "Docker shows the container's memory and CPUs and whether the database, Redis, backups and Telegram bot are working; Disks shows how full each disk with the app's data is.",
+            "Test speed times writing and reading a file on the shared files disk, the database and Redis; Test network measures how fast your device downloads from the server.",
+            "Power & load shows the CPU load, memory, how long the server has been on, and its temperature, battery or UPS when the computer reports them.",
+        ],
+    },
     {
         "version": "1.62.0",
         "date": "2026-10-30",
@@ -1055,6 +1068,81 @@ APP_VERSION = UPDATE_LOG[0]["version"]
 BACKUP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.dump")
 SYSTEM_STATUSES = {"ok": "OK", "warning": "Warning", "problem": "Problem"}
 SYSTEM_CHECK_STATE = "_system_checks"  # app_settings row: the last automatic check
+# Settings → System dashboard: Docker, disks, speed and power, read from /proc and /sys.
+HOST_ROOT = Path("/")  # tests point this at a folder with made-up /proc and /sys files
+SPEED_TEST_STATE = "_speed_test"  # app_settings row: the last speed test
+SPEED_TEST_MB = 16  # written to and read back from the shared files disk
+SPEED_SAMPLE_MB = 8  # downloaded by the browser to measure the network to the server
+
+
+def host_text(*parts):
+    """A small /proc or /sys file, stripped, or None when it can't be read."""
+    try:
+        return HOST_ROOT.joinpath(*parts).read_text(errors="replace").strip()
+    except (OSError, ValueError):
+        return None
+
+
+def host_number(*parts):
+    try:
+        return int(host_text(*parts))
+    except (TypeError, ValueError):
+        return None
+
+
+def docker_info():
+    """Whether the app runs in Docker, and the container's memory and CPU limits (cgroup v2 or v1)."""
+    cgroup = host_text("proc", "1", "cgroup") or ""
+    info = {"in_docker": HOST_ROOT.joinpath(".dockerenv").exists() or "docker" in cgroup,
+            "container": os.uname().nodename if hasattr(os, "uname") else "", "cpus": os.cpu_count() or 1,
+            "memory_used": host_number("sys", "fs", "cgroup", "memory.current"),
+            "memory_limit": host_number("sys", "fs", "cgroup", "memory.max"), "cpu_limit": None}
+    if info["memory_used"] is None:
+        info["memory_used"] = host_number("sys", "fs", "cgroup", "memory", "memory.usage_in_bytes")
+        info["memory_limit"] = host_number("sys", "fs", "cgroup", "memory", "memory.limit_in_bytes")
+    if info["memory_limit"] and info["memory_limit"] >= 2 ** 60:  # cgroup v1 writes "no limit" as a huge number
+        info["memory_limit"] = None
+    quota = (host_text("sys", "fs", "cgroup", "cpu.max") or "").split()
+    if len(quota) == 2 and quota[0].isdigit() and quota[1].isdigit() and int(quota[1]):
+        info["cpu_limit"] = int(quota[0]) / int(quota[1])
+    return info
+
+
+def host_power():
+    """CPU load, memory, uptime, temperatures and power supplies (mains, UPS or battery) the server can see."""
+    info = {"cpus": os.cpu_count() or 1, "load": None, "memory_total": None, "memory_available": None,
+            "uptime": None, "temperatures": [], "supplies": []}
+    try:
+        info["load"] = os.getloadavg()
+    except (AttributeError, OSError):
+        pass
+    for line in (host_text("proc", "meminfo") or "").splitlines():
+        name, _, value = line.partition(":")
+        if name in ("MemTotal", "MemAvailable") and value.split() and value.split()[0].isdigit():
+            info["memory_total" if name == "MemTotal" else "memory_available"] = int(value.split()[0]) * 1024
+    try:
+        info["uptime"] = float((host_text("proc", "uptime") or "").split()[0])
+    except (IndexError, ValueError):
+        pass
+    for zone in sorted(HOST_ROOT.joinpath("sys", "class", "thermal").glob("thermal_zone*")):
+        millidegrees = host_number(zone, "temp")
+        if millidegrees is not None and millidegrees > 0:
+            info["temperatures"].append({"name": host_text(zone, "type") or zone.name, "celsius": millidegrees / 1000})
+    for supply in sorted(HOST_ROOT.joinpath("sys", "class", "power_supply").glob("*")):
+        info["supplies"].append({"name": supply.name, "type": host_text(supply, "type") or "Unknown",
+                                 "online": host_number(supply, "online"), "capacity": host_number(supply, "capacity"),
+                                 "status": host_text(supply, "status")})
+    return info
+
+
+def duration_text(seconds):
+    minutes = int(seconds // 60)
+    days, hours = minutes // 1440, minutes // 60 % 24
+    if days:
+        return f"{days} day{'s' if days != 1 else ''}, {hours} hour{'s' if hours != 1 else ''}"
+    if minutes >= 60:
+        return f"{minutes // 60} hour{'s' if minutes // 60 != 1 else ''}, {minutes % 60} min"
+    return f"{minutes} min"
 # Settings → Activity log: what people do in Notes and Chat.
 ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat", "feed": "Feed", "convert": "Convert", "files": "Files",
                   "games": "Games", "support": "IT support"}
@@ -5791,6 +5879,12 @@ def create_app(test_config=None):
                               "safety": path.name.startswith("pre-restore-")})
         return sorted(files, key=lambda item: item["mtime"], reverse=True)
 
+    def disk_status(free, total):
+        free_gb, free_share = free / 1024 ** 3, free / total if total else 0
+        if free_gb < 1 or free_share < 0.03:
+            return "problem"
+        return "warning" if free_gb < 5 or free_share < 0.10 else "ok"
+
     def run_system_checks():
         """Each check: {key, title, status (ok, warning or problem), detail}."""
         checks = []
@@ -5824,14 +5918,9 @@ def create_app(test_config=None):
                 add("redis", "Redis", "problem", f"Redis isn't answering: {error}")
 
         usage = shutil.disk_usage(root)
-        free_gb, free_share = usage.free / 1024 ** 3, usage.free / usage.total
-        detail = f"{free_gb:.1f} GB free of {usage.total / 1024 ** 3:.0f} GB ({free_share:.0%})"
-        if free_gb < 1 or free_share < 0.03:
-            add("disk", "Disk space", "problem", f"Almost full: {detail}")
-        elif free_gb < 5 or free_share < 0.10:
-            add("disk", "Disk space", "warning", f"Getting full: {detail}")
-        else:
-            add("disk", "Disk space", "ok", detail)
+        detail = f"{usage.free / 1024 ** 3:.1f} GB free of {usage.total / 1024 ** 3:.0f} GB ({usage.free / usage.total:.0%})"
+        status = disk_status(usage.free, usage.total)
+        add("disk", "Disk space", status, {"problem": "Almost full: ", "warning": "Getting full: "}.get(status, "") + detail)
 
         if backup_dir is None:
             add("backups", "Backups", "warning", "Backups aren't set up on this server (BACKUP_DIR).")
@@ -5919,6 +6008,185 @@ def create_app(test_config=None):
         dumps = [item for item in backup_files() if not item["safety"]]
         return "All checks OK" + (f" · last backup {dumps[0]['age']}" if dumps else "")
 
+    # ------------------------------------------------------- system dashboard
+    started_at = time.time()
+
+    def worst(statuses):
+        return max(statuses, key=["ok", "warning", "problem"].index, default="ok")
+
+    def size_text(size):
+        return f"{size / 1024 ** 3:.1f} GB" if size >= 1024 ** 3 else f"{size / 1048576:.0f} MB"
+
+    def dashboard_disks():
+        """The disks holding the app's data; folders on the same disk are listed together."""
+        places = [("Shared files", root), ("Feed photos and videos", feed_media_dir)]
+        if backup_dir is not None:
+            places.append(("Database backups", backup_dir))
+        if not database_url:
+            places.append(("Database", Path(app.config["NOTES_DATABASE"]).expanduser().resolve().parent))
+        disks = {}
+        for label, path in places:
+            try:
+                device, usage = path.stat().st_dev, shutil.disk_usage(path)
+            except OSError:
+                continue
+            if device in disks:
+                disks[device]["labels"].append(label)
+                continue
+            used = usage.total - usage.free
+            disks[device] = {"labels": [label], "total": usage.total, "used": used, "free": usage.free,
+                             "percent": round(100 * used / usage.total) if usage.total else 0,
+                             "status": disk_status(usage.free, usage.total)}
+        return list(disks.values())
+
+    def run_speed_test():
+        """Times writing and reading a file on the shared files disk, and the database and Redis."""
+        size = int(app.config.get("SPEED_TEST_MB") or SPEED_TEST_MB) * 1048576
+        result = {"at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "size": size}
+
+        def timed(run, times=5):
+            start = time.perf_counter()
+            for _ in range(times):
+                run()
+            return (time.perf_counter() - start) / times * 1000
+
+        try:
+            handle, name = tempfile.mkstemp(prefix=".speed-test-", dir=root)
+            try:
+                block, written = os.urandom(1048576), 0
+                start = time.perf_counter()
+                while written < size:
+                    written += os.write(handle, block[:size - written])
+                os.fsync(handle)
+                result["write"] = size / max(time.perf_counter() - start, 1e-6)
+                if hasattr(os, "posix_fadvise"):
+                    os.posix_fadvise(handle, 0, 0, os.POSIX_FADV_DONTNEED)  # Read from the disk, not memory.
+                os.lseek(handle, 0, os.SEEK_SET)
+                start = time.perf_counter()
+                while os.read(handle, 1048576):
+                    pass
+                result["read"] = size / max(time.perf_counter() - start, 1e-6)
+            finally:
+                os.close(handle)
+                os.unlink(name)
+        except OSError as error:
+            result["disk_error"] = str(error)
+        try:
+            with notes_connection() as connection:
+                result["database_ms"] = timed(lambda: connection.execute("SELECT 1").fetchone())
+        except Exception as error:
+            result["database_error"] = str(error)
+        if cache is not None:
+            try:
+                result["redis_ms"] = timed(cache.ping)
+            except cache_errors as error:
+                result["redis_error"] = str(error)
+        settings_store.save({SPEED_TEST_STATE: json.dumps(result)})
+        return result
+
+    def last_speed_test():
+        try:
+            return json.loads(settings_store.get(SPEED_TEST_STATE) or "{}")
+        except ValueError:
+            return {}
+
+    def dashboard_panels(checks=None):
+        """Docker, disks, speed and power: each {key, title, icon, status, rows}; a row is
+        {label, value, status, percent (for a bar, or None)}."""
+        checks = {check["key"]: check for check in (checks or run_system_checks())}
+
+        def row(label, value, status="ok", percent=None):
+            return {"label": label, "value": value, "status": status, "percent": percent}
+
+        docker = docker_info()
+        rows = [row("Running in Docker", f"Yes · container {docker['container']}" if docker["in_docker"]
+                    else "No, directly on the server computer"),
+                row("App running for", duration_text(time.time() - started_at))]
+        if docker["memory_used"] is not None:
+            limit = docker["memory_limit"]
+            share = docker["memory_used"] / limit if limit else None
+            rows.append(row("Container memory",
+                            f"{size_text(docker['memory_used'])} of {size_text(limit)}" if limit
+                            else f"{size_text(docker['memory_used'])} used, no limit",
+                            "problem" if share and share >= 0.95 else "warning" if share and share >= 0.85 else "ok",
+                            round(100 * share) if share is not None else None))
+        rows.append(row("CPUs", f"{docker['cpu_limit']:g} of {docker['cpus']}" if docker["cpu_limit"]
+                        else f"{docker['cpus']}"))
+        for key in ("database", "redis", "backups"):
+            if key in checks:
+                rows.append(row(checks[key]["title"], checks[key]["detail"], checks[key]["status"]))
+        bot = telegram_status(settings_store.all())
+        rows.append(row("Telegram bot", bot.get("message") or bot["state"],
+                        {"running": "ok", "off": "ok", "pending": "warning"}.get(bot["state"], "problem")))
+        panels = [{"key": "docker", "title": "Docker", "icon": "🐳", "rows": rows}]
+
+        rows = [row(", ".join(disk["labels"]),
+                    f"{size_text(disk['free'])} free of {size_text(disk['total'])} · {disk['percent']}% used",
+                    disk["status"], disk["percent"]) for disk in dashboard_disks()]
+        panels.append({"key": "disks", "title": "Disks (HDD)", "icon": "💽",
+                       "rows": rows or [row("Disks", "Couldn't read the disks", "warning")]})
+
+        test = last_speed_test()
+        if not test:
+            rows = [row("Last test", "Not tested yet. Press Test speed.")]
+        else:
+            rows = [row("Last test", f"{test['at']} UTC with a {size_text(test['size'])} file")]
+            if "disk_error" in test:
+                rows.append(row("Disk", f"Couldn't test: {test['disk_error']}", "problem"))
+            else:
+                for label, key in (("Disk write", "write"), ("Disk read", "read")):
+                    speed = test[key] / 1048576
+                    rows.append(row(label, f"{speed:,.0f} MB/s", "warning" if speed < 10 else "ok"))
+            for label, key, slow in (("Database", "database", 50), ("Redis", "redis", 20)):
+                if f"{key}_error" in test:
+                    rows.append(row(label, f"Couldn't test: {test[key + '_error']}", "problem"))
+                elif f"{key}_ms" in test:
+                    rows.append(row(label, f"{test[key + '_ms']:.1f} ms per query",
+                                    "warning" if test[key + "_ms"] > slow else "ok"))
+        panels.append({"key": "speed", "title": "Speed", "icon": "⚡", "rows": rows})
+
+        power = host_power()
+        rows = []
+        if power["load"]:
+            share = power["load"][0] / power["cpus"]
+            rows.append(row("CPU load", f"{power['load'][0]:.2f} · {power['load'][1]:.2f} · {power['load'][2]:.2f}"
+                            f" (1, 5, 15 min) on {power['cpus']} CPU{'s' if power['cpus'] != 1 else ''}",
+                            "problem" if share >= 2 else "warning" if share >= 1 else "ok", min(100, round(100 * share))))
+        if power["memory_total"] and power["memory_available"] is not None:
+            used = power["memory_total"] - power["memory_available"]
+            free_share = power["memory_available"] / power["memory_total"]
+            rows.append(row("Memory", f"{size_text(used)} used of {size_text(power['memory_total'])}",
+                            "problem" if free_share < 0.05 else "warning" if free_share < 0.10 else "ok",
+                            round(100 * used / power["memory_total"])))
+        if power["uptime"] is not None:
+            rows.append(row("Server on for", duration_text(power["uptime"])))
+        for sensor in power["temperatures"]:
+            celsius = sensor["celsius"]
+            rows.append(row(f"Temperature ({sensor['name']})", f"{celsius:.0f} °C",
+                            "problem" if celsius >= 90 else "warning" if celsius >= 80 else "ok"))
+        for supply in power["supplies"]:
+            if supply["type"] in ("Battery", "UPS"):
+                charging = supply["status"] or "Unknown"
+                low = supply["capacity"] is not None and supply["capacity"] < 20
+                rows.append(row(f"{supply['type']} ({supply['name']})",
+                                (f"{supply['capacity']}% · " if supply["capacity"] is not None else "") + charging,
+                                "problem" if low and charging == "Discharging" else
+                                "warning" if charging == "Discharging" else "ok", supply["capacity"]))
+            elif supply["online"] is not None:
+                rows.append(row(f"Power ({supply['name']})", "Plugged in" if supply["online"] else "Unplugged",
+                                "ok" if supply["online"] else "warning"))
+        if not power["supplies"]:
+            rows.append(row("Power supply", "The server computer doesn't report its power supply or battery here."))
+        panels.append({"key": "power", "title": "Power & load", "icon": "🔋", "rows": rows})
+
+        for panel in panels:
+            panel["status"] = worst(item["status"] for item in panel["rows"])
+        return panels
+
+    def dashboard_summary():
+        bad = [panel["title"] for panel in dashboard_panels() if panel["status"] != "ok"]
+        return "Needs attention: " + ", ".join(bad) if bad else "Docker, disks, speed and power all OK"
+
     def settings_summary():
         """One line per category for the Settings overview."""
         users = user_store.all()
@@ -5942,6 +6210,7 @@ def create_app(test_config=None):
                     sum(1 for item in announcement_store.all() if item["is_active"])),
                 "server": f"Version {APP_VERSION}",
                 "system": system_summary(),
+                "dashboard": dashboard_summary(),
                 "activity": f"{activity_log.count_since(24)} in the last 24 hours",
             })
         return summary, waiting
@@ -5985,6 +6254,9 @@ def create_app(test_config=None):
                     "schedule": backup_schedule(), "backup_ready": backup_dir is not None,
                     "backup_pending": backup_dir is not None and (backup_dir / ".backup-now").exists(),
                     "last_check": last_automatic_check(), "check_minutes": check_minutes}
+        if section == "dashboard":
+            return {"panels": dashboard_panels(), "statuses": SYSTEM_STATUSES, "sample_mb": SPEED_SAMPLE_MB,
+                    "test_mb": int(app.config.get("SPEED_TEST_MB") or SPEED_TEST_MB)}
         if section == "notifications":
             return {"prefs": user_prefs(g.user), "kinds": NOTIFY_KINDS}
         if section == "appearance":
@@ -6053,6 +6325,26 @@ def create_app(test_config=None):
         flash("Everything checked: all OK." if not bad else f"Checked: {bad} need attention.",
               "success" if not bad else "error")
         return redirect(url_for("settings_section", section="system"), code=303)
+
+    @app.post("/settings/dashboard/speed")
+    def dashboard_speed_test():
+        admin_required()
+        result = run_speed_test()
+        if "disk_error" in result:
+            flash(f"The disk speed test failed: {result['disk_error']}", "error")
+        else:
+            flash(f"Speed tested: the disk writes {result['write'] / 1048576:,.0f} MB/s and reads "
+                  f"{result['read'] / 1048576:,.0f} MB/s.", "success")
+        return redirect(url_for("settings_section", section="dashboard", _anchor="speed"), code=303)
+
+    @app.get("/settings/dashboard/sample")
+    def dashboard_speed_sample():
+        """Random bytes for the browser to download, to measure the network to the server."""
+        admin_required()
+        megabytes = min(max(request.args.get("mb", SPEED_SAMPLE_MB, type=int), 1), 32)
+        block = os.urandom(1048576)
+        return Response((block for _ in range(megabytes)), mimetype="application/octet-stream",
+                        headers={"Content-Length": str(megabytes * 1048576), "Cache-Control": "no-store"})
 
     @app.post("/settings/system/backup")
     def backup_now():
