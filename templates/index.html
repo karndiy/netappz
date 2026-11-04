@@ -8,14 +8,62 @@
 </head>
 <body>
   {% include "_sidebar.html" %}
-  <main class="container">
+  {# Files works like Google Drive (1.67.0): a New menu, search, type filters, sorting, list or grid view
+     and a ⋮ menu on each item. Everything is plain links and forms; the script only adds drag and drop,
+     uploading as soon as files are chosen, and closing menus. #}
+  {% set base = {"path": current or None, "q": query or None, "type": kind_filter or None,
+                 "owner": "me" if mine_only else None} %}
+  {% macro files_url() %}{{ url_for('index', **dict(base, **kwargs)) }}{% endmacro %}
+  <main class="container drive" id="drive">
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% for category, message in messages %}
         <div class="message {{ category }}">{{ message }}</div>
       {% endfor %}
     {% endwith %}
 
-    <section class="heading">
+    <header class="drive-top">
+      <details class="drive-new drive-popup">
+        <summary class="button drive-new-button"><span aria-hidden="true">＋</span> New</summary>
+        <div class="drive-menu-panel drive-new-panel">
+          <form action="{{ url_for('create_folder') }}" method="post">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="path" value="{{ current }}">
+            <label for="folder-name">📁 New folder</label>
+            <div class="inline-form">
+              <input id="folder-name" name="name" type="text" placeholder="Folder name" required>
+              <button type="submit">Create</button>
+            </div>
+          </form>
+          <form id="upload-form" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="path" value="{{ current }}">
+            <label class="drive-menu-item" for="files">⬆️ File upload</label>
+            <input id="files" class="drive-file-input" name="files" type="file" multiple>
+            <label class="drive-menu-item" for="folder-files">🗂️ Folder upload</label>
+            <input id="folder-files" class="drive-file-input" name="folder_files" type="file" webkitdirectory multiple>
+            <label class="drive-small-label" for="upload-visibility">Who can see uploads</label>
+            <select id="upload-visibility" name="visibility">
+              <option value="public">Public: everyone can see and download</option>
+              <option value="private">Private: only you (and administrators)</option>
+            </select>
+            <button class="drive-upload-submit" type="submit">Upload</button>
+            <small>Tip: drag files from your computer onto this page to upload them here.</small>
+          </form>
+        </div>
+      </details>
+
+      <form class="drive-search" role="search" action="{{ url_for('index') }}" method="get">
+        {% if current %}<input type="hidden" name="path" value="{{ current }}">{% endif %}
+        {% if kind_filter %}<input type="hidden" name="type" value="{{ kind_filter }}">{% endif %}
+        {% if mine_only %}<input type="hidden" name="owner" value="me">{% endif %}
+        <span class="drive-search-icon" aria-hidden="true">🔍</span>
+        <input type="search" name="q" value="{{ query }}" aria-label="Search files"
+               placeholder="Search in {{ current.split('/')[-1] if current else 'Shared files' }}">
+        {% if query %}<a class="drive-search-clear" href="{{ files_url(q=None) }}" aria-label="Clear search">✕</a>{% endif %}
+      </form>
+    </header>
+
+    <section class="heading drive-heading">
       <div>
         <h1>Shared files</h1>
         <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -24,93 +72,182 @@
             {% set ns = namespace(path='') %}
             {% for part in current.split('/') %}
               {% set ns.path = (ns.path ~ '/' ~ part).lstrip('/') %}
-              <span>/</span><a href="{{ url_for('index', path=ns.path) }}">{{ part }}</a>
+              <span>›</span><a href="{{ url_for('index', path=ns.path) }}">{{ part }}</a>
             {% endfor %}
           {% endif %}
         </nav>
       </div>
-      {% if current %}
-        <a class="button secondary" href="{{ url_for('download', relative=current) }}">Download folder (.zip)</a>
+      <div class="drive-view-tools">
+        {% if current %}
+          <a class="button secondary" href="{{ url_for('download', relative=current) }}">Download folder (.zip)</a>
+        {% endif %}
+        <details class="drive-popup drive-sort">
+          <summary class="button secondary">↕ {{ sorts[sort] }}</summary>
+          <div class="drive-menu-panel drive-menu-right">
+            {% for key, label in sorts.items() %}
+              <a class="drive-menu-item" href="{{ files_url(sort=key) }}"{% if key == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+            {% endfor %}
+            <hr>
+            <a class="drive-menu-item" href="{{ files_url(order='asc') }}"{% if order == 'asc' %} aria-current="true"{% endif %}>{{ 'Oldest first' if sort == 'modified' else 'Smallest first' if sort == 'size' else 'A to Z' }}</a>
+            <a class="drive-menu-item" href="{{ files_url(order='desc') }}"{% if order == 'desc' %} aria-current="true"{% endif %}>{{ 'Newest first' if sort == 'modified' else 'Largest first' if sort == 'size' else 'Z to A' }}</a>
+          </div>
+        </details>
+        <div class="drive-view-switch" role="group" aria-label="View">
+          <a href="{{ files_url(view='list') }}" title="List view" aria-label="List view"{% if view == 'list' %} aria-current="true"{% endif %}>☰</a>
+          <a href="{{ files_url(view='grid') }}" title="Grid view" aria-label="Grid view"{% if view == 'grid' %} aria-current="true"{% endif %}>▦</a>
+        </div>
+      </div>
+    </section>
+
+    <nav class="drive-chips" aria-label="Filters">
+      <details class="drive-popup">
+        <summary class="drive-chip{% if kind_filter %} is-on{% endif %}">{{ kinds[kind_filter][1] ~ ' ' ~ kinds[kind_filter][0] if kind_filter else 'Type' }} ▾</summary>
+        <div class="drive-menu-panel">
+          {% for key, (label, icon) in kinds.items() %}
+            <a class="drive-menu-item" href="{{ files_url(type=key) }}"{% if key == kind_filter %} aria-current="true"{% endif %}>{{ icon }} {{ label }}</a>
+          {% endfor %}
+        </div>
+      </details>
+      <a class="drive-chip{% if mine_only %} is-on{% endif %}" href="{{ files_url(owner=None if mine_only else 'me') }}">{{ '✓ ' if mine_only }}Owned by me</a>
+      {% if kind_filter or mine_only or query %}
+        <a class="drive-chip-clear" href="{{ url_for('index', path=current or None) }}">Clear filters</a>
       {% endif %}
-    </section>
+      <p class="drive-count">
+        {% if query %}{{ entries|length }}{{ '+' if truncated }} result{{ '' if entries|length == 1 else 's' }} for “{{ query }}” ·{% endif %}
+        {{ folder_count }} folder{{ '' if folder_count == 1 else 's' }}, {{ file_count }} file{{ '' if file_count == 1 else 's' }}{% if file_count %} · {{ total_size|filesizeformat }}{% endif %}
+      </p>
+    </nav>
 
-    <section class="tools">
-      <form action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="path" value="{{ current }}">
-        <label for="files">Upload files</label>
-        <div class="inline-form">
-          <input id="files" name="files" type="file" multiple>
-          <button type="submit">Upload</button>
+    <section class="file-list drive-items is-{{ view }}" aria-label="Files">
+      {% if view == 'list' and entries %}
+        <div class="drive-list-head" aria-hidden="true">
+          {% for key, label in (("name", "Name"), ("owner", "Owner"), ("modified", "Last modified"), ("size", "File size")) %}
+            {% if key in sorts %}
+              <a class="drive-col-{{ key }}" href="{{ files_url(sort=key, order='desc' if key == sort and order == 'asc' else 'asc') }}">{{ label }}{% if key == sort %} {{ '↑' if order == 'asc' else '↓' }}{% endif %}</a>
+            {% else %}
+              <span class="drive-col-{{ key }}">{{ label }}</span>
+            {% endif %}
+          {% endfor %}
+          <span></span>
         </div>
-        <label class="folder-picker" for="folder-files">Or upload a folder</label>
-        <input id="folder-files" name="folder_files" type="file" webkitdirectory multiple>
-        <label class="folder-picker" for="upload-visibility">Who can see them</label>
-        <select id="upload-visibility" name="visibility">
-          <option value="public">Public: everyone can see and download</option>
-          <option value="private">Private: only you (and administrators)</option>
-        </select>
-        <small>Choose files from your device. Folder selection is available in browsers that support it.</small>
-      </form>
-      <form action="{{ url_for('create_folder') }}" method="post">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-        <input type="hidden" name="path" value="{{ current }}">
-        <label for="folder-name">Create folder</label>
-        <div class="inline-form">
-          <input id="folder-name" name="name" type="text" placeholder="Folder name" required>
-          <button type="submit">Create</button>
-        </div>
-      </form>
-    </section>
-
-    <section class="file-list" aria-label="Files">
-      {% if parent is not none %}
-        <a class="file-row parent-row" href="{{ url_for('index', path=parent) }}">
-          <span class="file-name"><span class="icon">↩</span> ..</span><span></span>
-        </a>
       {% endif %}
       {% for entry in entries %}
-        <div class="file-row">
+        <div class="file-row kind-{{ entry.kind }}">
           <a class="file-name" href="{% if entry.is_dir %}{{ url_for('index', path=entry.path) }}{% else %}{{ url_for('download', relative=entry.path) }}{% endif %}">
-            <span class="icon">{{ '📁' if entry.is_dir else '📄' }}</span>{{ entry.name }}
-            {% if entry.private %}<span class="file-badge private" title="Only the owner and administrators can see this file">🔒 Private</span>{% endif %}
+            <span class="file-icon" aria-hidden="true">{{ entry.icon }}</span>
+            <span class="file-title">
+              <span class="file-title-text">{{ entry.name }}</span>
+              {% if entry.private %}<span class="file-badge private" title="Only the owner and administrators can see this file">🔒 Private</span>{% endif %}
+              <small class="file-sub">
+                {% if query %}<span class="file-location">in /{{ entry.location }}</span>{% endif %}
+                <span class="file-sub-meta">{{ entry.modified }}{% if not entry.is_dir %} · {{ entry.size|filesizeformat }}{% endif %}</span>
+                {% if not entry.is_dir %}<span class="file-downloads">{{ "{:,}".format(entry.downloads) }} download{{ '' if entry.downloads == 1 else 's' }}</span>{% endif %}
+              </small>
+            </span>
           </a>
-          <div class="file-actions">
-            {% if entry.is_dir %}
-              <a class="download-link" href="{{ url_for('download', relative=entry.path) }}">Download ZIP</a>
-            {% else %}
-              <span class="size">{{ "{:,}".format(entry.size) }} bytes</span>
-              <span class="size file-downloads">{{ "{:,}".format(entry.downloads) }} download{{ '' if entry.downloads == 1 else 's' }}</span>
-              {% if entry.owner %}<span class="size file-owner">by {{ entry.owner }}</span>{% endif %}
-            {% endif %}
-            {% if entry.can_share %}
-              <form action="{{ url_for('file_visibility') }}" method="post">
-                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="path" value="{{ entry.path }}">
-                <input type="hidden" name="visibility" value="{{ 'public' if entry.private else 'private' }}">
-                <button class="secondary" type="submit">{{ 'Make public' if entry.private else 'Make private' }}</button>
-              </form>
-            {% endif %}
-            {% if entry.can_manage %}
-            <form class="rename-form" action="{{ url_for('rename_item') }}" method="post">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="path" value="{{ entry.path }}">
-              <input type="text" name="name" aria-label="New name for {{ entry.name }}" placeholder="New name" required>
-              <button class="secondary" type="submit">Rename</button>
-            </form>
-            <form action="{{ url_for('delete_item') }}" method="post"
-                  onsubmit="if (!confirm('Permanently delete this item{% if entry.is_dir %} and all its contents{% endif %}?')) return false; this.querySelector('button').disabled = true; return true;">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="path" value="{{ entry.path }}">
-              <button class="danger" type="submit">Delete</button>
-            </form>
-            {% endif %}
-          </div>
+          <span class="drive-col-owner file-owner">{{ 'me' if entry.mine else entry.owner or '—' }}</span>
+          <span class="drive-col-modified">{{ entry.modified }}</span>
+          <span class="drive-col-size">{{ '—' if entry.is_dir else entry.size|filesizeformat }}</span>
+          <details class="drive-popup file-menu">
+            <summary class="file-menu-button" aria-label="More actions for {{ entry.name }}" title="More actions">⋮</summary>
+            <div class="drive-menu-panel drive-menu-right file-actions">
+              {% if entry.is_dir %}
+                <a class="drive-menu-item" href="{{ url_for('index', path=entry.path) }}">📂 Open</a>
+                <a class="drive-menu-item download-link" href="{{ url_for('download', relative=entry.path) }}">⬇️ Download ZIP</a>
+              {% else %}
+                <a class="drive-menu-item download-link" href="{{ url_for('download', relative=entry.path) }}">⬇️ Download</a>
+              {% endif %}
+              {% if query and entry.location != current %}
+                <a class="drive-menu-item" href="{{ url_for('index', path=entry.location or None) }}">📍 Show file location</a>
+              {% endif %}
+              {% if entry.can_share %}
+                <form action="{{ url_for('file_visibility') }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="path" value="{{ entry.path }}">
+                  <input type="hidden" name="visibility" value="{{ 'public' if entry.private else 'private' }}">
+                  <button class="drive-menu-item" type="submit">{{ '🌐 Make public' if entry.private else '🔒 Make private' }}</button>
+                </form>
+              {% endif %}
+              {% if entry.can_manage %}
+                <hr>
+                <form class="rename-form" action="{{ url_for('rename_item') }}" method="post">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="path" value="{{ entry.path }}">
+                  <input type="text" name="name" value="{{ entry.name }}" aria-label="New name for {{ entry.name }}" placeholder="New name" required>
+                  <button class="secondary" type="submit">Rename</button>
+                </form>
+                <form action="{{ url_for('delete_item') }}" method="post"
+                      onsubmit="if (!confirm('Permanently delete this item{% if entry.is_dir %} and all its contents{% endif %}?')) return false; this.querySelector('button').disabled = true; return true;">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="path" value="{{ entry.path }}">
+                  <button class="drive-menu-item drive-menu-danger" type="submit">🗑️ Delete</button>
+                </form>
+              {% endif %}
+            </div>
+          </details>
         </div>
       {% else %}
-        <p class="empty">This folder is empty.</p>
+        <div class="empty drive-empty">
+          <span aria-hidden="true">{{ '🔍' if query or kind_filter or mine_only else '📂' }}</span>
+          {% if query or kind_filter or mine_only %}
+            <p>No files match. <a href="{{ url_for('index', path=current or None) }}">Clear filters</a></p>
+          {% else %}
+            <p>This folder is empty.</p>
+            <small>Drop files here, or use ＋ New to upload files or make a folder.</small>
+          {% endif %}
+        </div>
       {% endfor %}
     </section>
+    {% if truncated %}<p class="drive-count">Showing the first {{ entries|length }} results. Type more of the name to narrow the search.</p>{% endif %}
+
+    <div class="drive-drop" id="drive-drop" hidden>
+      <div><span aria-hidden="true">⬆️</span><p>Drop files to upload them to {{ '/' ~ current if current else 'Shared files' }}</p></div>
+    </div>
   </main>
+  <script>
+    (function () {
+      var drive = document.getElementById("drive");
+      var form = document.getElementById("upload-form");
+      var drop = document.getElementById("drive-drop");
+      // Choosing files uploads them straight away, as in Drive.
+      form.querySelector(".drive-upload-submit").hidden = true;
+      form.querySelectorAll(".drive-file-input").forEach(function (input) {
+        input.addEventListener("change", function () { if (input.files.length) form.submit(); });
+      });
+      // Only one menu open at a time; a click outside or Escape closes it.
+      var popups = drive.querySelectorAll(".drive-popup");
+      popups.forEach(function (menu) {
+        menu.addEventListener("toggle", function () {
+          if (!menu.open) return;
+          popups.forEach(function (other) { if (other !== menu) other.open = false; });
+          var field = menu.querySelector("input[type=text]");
+          if (field && menu.classList.contains("drive-new")) field.focus();
+        });
+      });
+      function closeAll() { popups.forEach(function (menu) { menu.open = false; }); }
+      document.addEventListener("click", function (event) {
+        if (!event.target.closest(".drive-popup")) closeAll();
+      });
+      document.addEventListener("keydown", function (event) { if (event.key === "Escape") closeAll(); });
+      // Drag files from the computer onto the page to upload them into this folder.
+      var depth = 0;
+      function hasFiles(event) { return Array.prototype.indexOf.call(event.dataTransfer.types, "Files") !== -1; }
+      document.addEventListener("dragenter", function (event) {
+        if (!hasFiles(event)) return;
+        depth += 1; drop.hidden = false;
+      });
+      document.addEventListener("dragleave", function () {
+        depth = Math.max(0, depth - 1); if (!depth) drop.hidden = true;
+      });
+      document.addEventListener("dragover", function (event) { if (hasFiles(event)) event.preventDefault(); });
+      document.addEventListener("drop", function (event) {
+        if (!hasFiles(event)) return;
+        event.preventDefault(); depth = 0; drop.hidden = true;
+        var input = document.getElementById("files");
+        try { input.files = event.dataTransfer.files; } catch (error) { return; }
+        if (input.files.length) form.submit();
+      });
+    })();
+  </script>
 </body>
 </html>

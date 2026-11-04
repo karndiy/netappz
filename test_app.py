@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -362,7 +363,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(files.get("open.txt")["user_id"], member_id)
         page = self.client.get("/files").get_data(as_text=True)
         self.assertIn("🔒 Private", page)
-        self.assertIn("by member", page)
+        self.assertIn('file-owner">me</span>', page)  # Your own files say "me", like Drive.
         self.assertIn("Make public", page)
 
         # Downloads are counted.
@@ -377,6 +378,7 @@ class FileManagerTests(unittest.TestCase):
         self.assertNotIn("secret.txt", page)
         self.assertIn("open.txt", page)
         self.assertNotIn("Make private", page.split("open.txt")[2].split("file-row")[0])
+        self.assertIn('file-owner">member</span>', page)
         self.assertEqual(self.client.get("/download/secret.txt").status_code, 404)
         with zipfile.ZipFile(io.BytesIO(self.client.get("/download/docs").data)) as archive:
             self.assertEqual(archive.namelist(), [])
@@ -412,6 +414,59 @@ class FileManagerTests(unittest.TestCase):
         self.assertIn("renamed.txt", self.client.get("/files").get_data(as_text=True))
         self.client.post("/delete", data={"_csrf_token": token, "path": "renamed.txt"})
         self.assertFalse((self.root / "renamed.txt").exists())
+
+    def test_files_page_searches_filters_sorts_and_switches_view_like_drive(self):
+        token = self._csrf()
+        (self.root / "docs" / "deep").mkdir(parents=True)
+        (self.root / "docs" / "deep" / "Budget 2026.xlsx").write_bytes(b"x" * 3000)
+        (self.root / "docs" / "notes.txt").write_text("hi")
+        (self.root / "photo.jpg").write_bytes(b"jpg")
+        (self.root / "report.pdf").write_bytes(b"p" * 50)
+        os.utime(self.root / "photo.jpg", (1_600_000_000, 1_600_000_000))
+
+        page = self.client.get("/files").get_data(as_text=True)
+        self.assertIn("＋</span> New", page)
+        self.assertIn('class="file-row kind-folder"', page)
+        self.assertIn('class="file-row kind-image"', page)
+        self.assertIn('class="file-row kind-pdf"', page)
+        self.assertIn('class="file-list drive-items is-list"', page)
+        self.assertIn("1 folder, 2 files", page)
+        self.assertIn("Sep 13, 2020", page)  # Last modified, with the year when it isn't this year.
+        self.assertLess(page.index(">docs<"), page.index(">photo.jpg<"))  # Folders come first.
+        self.assertLess(page.index(">photo.jpg<"), page.index(">report.pdf<"))
+
+        # Search looks in every folder below this one and says where each result is.
+        page = self.client.get("/files?q=budget").get_data(as_text=True)
+        self.assertIn("Budget 2026.xlsx", page)
+        self.assertIn("in /docs/deep", page)
+        self.assertIn('href="/files?path=docs/deep">📍 Show file location', page)
+        self.assertNotIn(">photo.jpg<", page)
+        self.assertIn("1 result for “budget”", page)
+        self.assertNotIn("notes.txt", self.client.get("/files?path=docs&q=budget").get_data(as_text=True))
+        self.assertNotIn("Budget", self.client.get("/files?path=docs/deep&q=notes").get_data(as_text=True))
+
+        # Type filter and Owned by me.
+        page = self.client.get("/files?type=pdf").get_data(as_text=True)
+        self.assertIn(">report.pdf<", page)
+        self.assertNotIn(">photo.jpg<", page)
+        self.assertNotIn(">docs<", page)
+        self.assertIn("No files match", self.client.get("/files?owner=me").get_data(as_text=True))
+        self.client.post("/upload", data={"_csrf_token": token, "path": "", "files": (io.BytesIO(b"mine"), "mine.txt")},
+                         content_type="multipart/form-data")
+        page = self.client.get("/files?owner=me").get_data(as_text=True)
+        self.assertIn(">mine.txt<", page)
+        self.assertNotIn(">report.pdf<", page)
+
+        # Sort by size, largest first; the choice and the grid view are remembered.
+        page = self.client.get("/files?sort=size&order=desc&view=grid").get_data(as_text=True)
+        self.assertLess(page.index(">report.pdf<"), page.index(">photo.jpg<"))
+        page = self.client.get("/files").get_data(as_text=True)
+        self.assertIn('class="file-list drive-items is-grid"', page)
+        self.assertIn("↕ File size", page)
+        self.assertLess(page.index(">report.pdf<"), page.index(">photo.jpg<"))
+        self.assertIn('class="file-list drive-items is-list"',
+                      self.client.get("/files?view=list&sort=bogus").get_data(as_text=True))
+        self.assertEqual(self.client.get("/files?q=x&path=../outside").status_code, 400)
 
     def test_renames_file_and_folder(self):
         (self.root / "old.txt").write_text("contents")

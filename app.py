@@ -236,7 +236,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.66.0"
+HELP_VERSION = "1.67.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -271,15 +271,19 @@ HELP_TOPICS = [
     },
     {
         "key": "files", "title": "Files", "icon": "📁", "endpoint": "index",
-        "summary": "Shared folders on the server that everyone on the network can use.",
+        "summary": "Shared folders on the server that everyone on the network can use, laid out like Google Drive.",
         "steps": [
             "Files is the second icon in the menu, just below Feed (the address is /files).",
-            "Click a folder to open it. The path at the top takes you back up.",
-            "Create folder makes a folder inside the one you are in: type its name and press Create.",
-            "Upload files sends files into the folder you are in; Or upload a folder sends a whole folder. Who can see them picks Public (everyone) or Private (only you and administrators).",
-            "Files you upload are yours: each one shows who uploaded it and how many times it was downloaded. 🔒 Private marks your private files; Make private and Make public change it later.",
-            "Click a file to download it. Downloading a folder gives you a ZIP of everything in it, without other people's private files.",
-            "Rename and Delete are next to each file and folder. Only the person who uploaded a file (or an administrator) can rename or delete it. Delete asks you to confirm first, and can't be undone.",
+            "Click a folder to open it. The path under the title (Home › folder › …) takes you back up.",
+            "Press ＋ New to make a folder, upload files or upload a whole folder. Uploads start as soon as you choose the files. You can also drag files from your computer onto the page to upload them into the folder you are in.",
+            "Who can see uploads (in the ＋ New menu) picks Public (everyone) or Private (only you and administrators).",
+            "The search box finds files and folders by name in the folder you are in and every folder inside it. Each result says where it is; ⋮ → Show file location opens its folder.",
+            "Type narrows the list to folders, documents, spreadsheets, PDFs, images, videos and more; Owned by me shows only files you uploaded. Clear filters shows everything again.",
+            "Sort by name, last modified or file size, from the sort button or by clicking a column heading. ☰ shows a list and ▦ shows a grid of cards; the app remembers your choice.",
+            "Files you upload are yours: the Owner column says me, and each file shows how many times it was downloaded. 🔒 Private marks private files.",
+            "Click a file to download it. The ⋮ button on each item has Download (a ZIP for folders, without other people's private files), Make private or Make public, Rename and Delete.",
+            "Only the person who uploaded a file (or an administrator) can rename or delete it. Delete asks you to confirm first, and can't be undone.",
+            "On a phone the list shows just the names, with the date and size underneath, and the grid shows two cards across.",
         ],
     },
     {
@@ -435,6 +439,16 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.67.0",
+        "date": "2026-11-04",
+        "changes": [
+            "Files now looks and works like Google Drive (request #39: upgrade Files with a design like Google Drive that works on any screen).",
+            "A ＋ New button makes folders and uploads files or folders straight away, and you can drag files onto the page to upload them.",
+            "Search finds files in every folder below the one you are in; filter by type or Owned by me, and sort by name, date or size.",
+            "Switch between a list and a grid of cards, with a ⋮ menu on each item for download, sharing, rename and delete. On phones it fits the small screen.",
+        ],
+    },
     {
         "version": "1.66.0",
         "date": "2026-10-30",
@@ -1187,6 +1201,32 @@ CONVERT_TOOL_NAMES = {"word2pdf": "Word to PDF", "pdf2word": "PDF to Word", "ima
 CONVERT_LOG_SHOWN = 50
 # Files: who can see a file someone uploaded.
 FILE_VISIBILITIES = {"public": "Public", "private": "Private"}
+# The Files page (1.67.0) works like Google Drive: each file gets a kind from its extension, which
+# picks its icon and lets people filter by type. Kinds are listed in the order the filter shows them.
+FILE_KINDS = {
+    "folder": ("Folders", "📁", ()),
+    "document": ("Documents", "📝", (".doc", ".docx", ".odt", ".rtf", ".txt", ".md", ".pages")),
+    "sheet": ("Spreadsheets", "📊", (".xls", ".xlsx", ".ods", ".csv", ".tsv", ".numbers")),
+    "slides": ("Presentations", "📽️", (".ppt", ".pptx", ".odp", ".key")),
+    "pdf": ("PDFs", "📕", (".pdf",)),
+    "image": ("Images", "🖼️", (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp", ".svg", ".tif", ".tiff")),
+    "video": ("Videos", "🎬", (".mp4", ".m4v", ".mov", ".webm", ".avi", ".mkv", ".wmv")),
+    "audio": ("Audio", "🎵", (".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")),
+    "archive": ("Archives", "🗜️", (".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz")),
+    "code": ("Code", "💻", (".py", ".js", ".ts", ".html", ".css", ".json", ".xml", ".yml", ".yaml", ".sh", ".sql",
+                            ".java", ".c", ".cpp", ".h", ".go", ".rs", ".php", ".rb")),
+    "other": ("Other files", "📄", ()),
+}
+FILE_KIND_BY_EXTENSION = {ext: kind for kind, (_, _, exts) in FILE_KINDS.items() for ext in exts}
+FILE_SORTS = {"name": "Name", "modified": "Last modified", "size": "File size"}
+FILE_VIEWS = ("list", "grid")
+FILE_SEARCH_LIMIT = 200
+
+
+def file_kind(path):
+    if path.is_dir():
+        return "folder"
+    return FILE_KIND_BY_EXTENSION.get(path.suffix.lower(), "other")
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 MISSION_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "returned": "Sent back"}
@@ -3699,6 +3739,22 @@ def create_app(test_config=None):
             return jsonify(status="error", problems=problems), 503
         return jsonify(status="ok")
 
+    def file_modified_label(stamp, today):
+        moment = datetime.fromtimestamp(stamp)
+        if moment.date() == today:
+            return moment.strftime("%H:%M")
+        if moment.year == today.year:
+            return f"{moment:%b} {moment.day}"
+        return f"{moment:%b} {moment.day}, {moment.year}"
+
+    def chosen_file_option(arg, session_key, choices, default):
+        """Sort and view stick: the one in the link, else the one this person chose last time."""
+        asked = request.args.get(arg, "")
+        if asked in choices:
+            session[session_key] = asked
+        chosen = session.get(session_key, default)
+        return chosen if chosen in choices else default
+
     @app.get("/files")
     def index():
         relative = relative_path(request.args.get("path", ""))
@@ -3706,27 +3762,63 @@ def create_app(test_config=None):
         if not directory.is_dir():
             abort(404)
 
-        entries = []
-        items = [item for item in directory.iterdir() if not item.is_symlink()]
+        query = " ".join(request.args.get("q", "").split())[:100]
+        kind_filter = request.args.get("type", "")
+        kind_filter = kind_filter if kind_filter in FILE_KINDS else ""
+        mine_only = request.args.get("owner") == "me"
+        sort = chosen_file_option("sort", "files_sort", FILE_SORTS, "name")
+        order = chosen_file_option("order", "files_order", ("asc", "desc"), "asc")
+        view = chosen_file_option("view", "files_view", FILE_VIEWS, "list")
+
+        # Search looks through every folder below this one, like Drive; otherwise just this folder.
+        if query:
+            needle = query.casefold()
+            items = [item for item in directory.rglob("*")
+                     if needle in item.name.casefold() and not item.is_symlink()]
+        else:
+            items = [item for item in directory.iterdir() if not item.is_symlink()]
         metas = file_store.for_paths(item.relative_to(root).as_posix() for item in items if item.is_file())
-        for item in sorted(items, key=lambda entry: (entry.is_file(), entry.name.lower())):
+        today = datetime.now().date()
+        entries = []
+        for item in items:
             item_relative = item.relative_to(root).as_posix()
             meta = metas.get(item_relative)
             if item.is_file() and not file_visible(meta):
                 continue  # Someone else's private file.
+            kind = file_kind(item)
+            if kind_filter and kind != kind_filter:
+                continue
+            if mine_only and not (meta and meta["user_id"] == g.user["id"]):
+                continue
+            stat = item.stat()
+            location = PurePosixPath(item_relative).parent.as_posix()
             entries.append(
                 {
                     "name": item.name,
                     "path": item_relative,
                     "is_dir": item.is_dir(),
-                    "size": item.stat().st_size if item.is_file() else None,
+                    "kind": kind,
+                    "icon": FILE_KINDS[kind][1],
+                    "size": stat.st_size if item.is_file() else None,
+                    "mtime": stat.st_mtime,
+                    "modified": file_modified_label(stat.st_mtime, today),
+                    "location": "" if location == "." else location,
                     "owner": meta["owner"] if meta else None,
+                    "mine": bool(meta and meta["user_id"] == g.user["id"]),
                     "private": bool(meta and meta["visibility"] == "private"),
                     "downloads": meta["downloads"] if meta else 0,
                     "can_manage": item.is_dir() or file_manageable(meta),
                     "can_share": item.is_file() and file_shareable(meta),
                 }
             )
+        sort_keys = {"name": lambda e: e["name"].casefold(), "modified": lambda e: e["mtime"],
+                     "size": lambda e: (e["size"] or 0, e["name"].casefold())}
+        entries.sort(key=sort_keys[sort], reverse=order == "desc")
+        entries.sort(key=lambda e: not e["is_dir"])  # Folders first, like Drive.
+        truncated = len(entries) > FILE_SEARCH_LIMIT if query else False
+        if truncated:
+            entries = entries[:FILE_SEARCH_LIMIT]
+
         current = relative.as_posix() if relative.parts else ""
         parent = PurePosixPath(current).parent.as_posix() if current else None
         if parent == ".":
@@ -3736,6 +3828,18 @@ def create_app(test_config=None):
             entries=entries,
             current=current,
             parent=parent,
+            query=query,
+            kind_filter=kind_filter,
+            mine_only=mine_only,
+            sort=sort,
+            order=order,
+            view=view,
+            truncated=truncated,
+            kinds={key: (label, icon) for key, (label, icon, _) in FILE_KINDS.items()},
+            sorts=FILE_SORTS,
+            folder_count=sum(1 for e in entries if e["is_dir"]),
+            file_count=sum(1 for e in entries if not e["is_dir"]),
+            total_size=sum(e["size"] or 0 for e in entries),
         )
 
     @app.get("/updates")
