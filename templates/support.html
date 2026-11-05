@@ -156,6 +156,15 @@
               </details>
             {% endif %}
 
+            {% if job.google_doc and job.status != 'open' %}
+              <div class="support-doc-link">
+                <a href="{{ job.google_doc }}" target="_blank" rel="noopener">📝 Open Google Doc</a>
+                <label class="visually-hidden" for="job-doc-{{ job.id }}">Google Doc link</label>
+                <input id="job-doc-{{ job.id }}" type="text" value="{{ job.google_doc }}" readonly>
+                <button class="secondary" type="button" data-copy-link="job-doc-{{ job.id }}">Copy link</button>
+              </div>
+            {% endif %}
+
             <div class="mission-card-foot">
               {% if job.status == 'open' %}
                 <form action="{{ url_for('support_take', job_id=job.id) }}" method="post">
@@ -167,6 +176,15 @@
               {% if job.status != 'open' %}
                 <a class="button secondary" href="{{ url_for('support_pdf', job_id=job.id) }}" download
                    title="Download a job sheet to print or keep">📄 PDF</a>
+                {% if google_docs %}
+                  <form action="{{ url_for('support_google_doc', job_id=job.id) }}" method="post">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="show" value="{{ show }}">
+                    <button class="secondary" type="submit"
+                            title="{% if job.google_doc %}Make a new Google Doc with the job as it is now{% else %}Make a Google Doc of the job sheet and a link to share it{% endif %}">
+                      📝 {% if job.google_doc %}Update Google Doc{% else %}Google Doc{% endif %}</button>
+                  </form>
+                {% endif %}
               {% endif %}
               {% if job.status == 'in_progress' and (working or current_user.is_admin) %}
                 <form action="{{ url_for('support_release', job_id=job.id) }}" method="post">
@@ -250,5 +268,20 @@
       </div>
     </section>
   </main>
+  <script>
+    // Copy a job's Google Doc link (request #43); without the clipboard API the link is selected to copy by hand.
+    document.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-copy-link]");
+      if (!button) return;
+      var box = document.getElementById(button.dataset.copyLink);
+      function copied() { button.textContent = "Copied ✓"; setTimeout(function () { button.textContent = "Copy link"; }, 2000); }
+      box.select();
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(box.value).then(copied, function () {});
+      } else if (document.execCommand("copy")) {
+        copied();
+      }
+    });
+  </script>
 </body>
 </html>

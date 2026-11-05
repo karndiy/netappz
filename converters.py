@@ -206,12 +206,20 @@ def merge_pdfs(sources, workdir, names=None):
     return result
 
 
-def job_sheet_pdf(title, rows, sections, image=None):
-    """An A4 sheet: a title, a table of label/value rows, text sections and a picture; the PDF's bytes."""
-    import html
-    import io
+JOB_SHEET_CSS = (
+    "body { font-family: sans-serif; font-size: 11pt; line-height: 1.4; color: #1d1d1f; }"
+    " h1 { font-size: 18pt; margin: 0 0 12pt; }"
+    " h2 { font-size: 12pt; margin: 14pt 0 4pt; }"
+    " table { border-collapse: collapse; width: 100%; }"
+    " th, td { border: 1px solid #c7c7cc; padding: 4pt 6pt; text-align: left; vertical-align: top; }"
+    " th { background-color: #f2f2f7; }"
+    " p { margin: 0; }"
+)
 
-    import pymupdf
+
+def _job_sheet_body(title, rows, sections, image=None, image_src=None):
+    """The job sheet's HTML parts; the picture, if any, is shown with image_src."""
+    import html
 
     def text(value):
         return "<br>".join(html.escape(line) for line in str(value).split("\n"))
@@ -224,7 +232,6 @@ def job_sheet_pdf(title, rows, sections, image=None):
     for heading, value in sections:
         if value:
             body.append(f"<h2>{text(heading)}</h2><p>{text(value)}</p>")
-    archive = None
     if image is not None:
         from PIL import Image
 
@@ -232,18 +239,35 @@ def job_sheet_pdf(title, rows, sections, image=None):
             width, height = picture.size
         # Fit inside 300 x 360 points so a tall photo never overflows the page.
         scale = min(300 / width, 360 / height)
-        archive = pymupdf.Archive(str(Path(image).parent))
-        body.append(f'<h2>Picture</h2><p><img src="{html.escape(Path(image).name)}" '
+        body.append(f'<h2>Picture</h2><p><img src="{html.escape(image_src)}" '
                     f'width="{width * scale:.0f}" height="{height * scale:.0f}"></p>')
-    css = (
-        "body { font-family: sans-serif; font-size: 11pt; line-height: 1.4; color: #1d1d1f; }"
-        " h1 { font-size: 18pt; margin: 0 0 12pt; }"
-        " h2 { font-size: 12pt; margin: 14pt 0 4pt; }"
-        " table { border-collapse: collapse; width: 100%; }"
-        " th, td { border: 1px solid #c7c7cc; padding: 4pt 6pt; text-align: left; vertical-align: top; }"
-        " th { background-color: #f2f2f7; }"
-        " p { margin: 0; }"
-    )
+    return body
+
+
+def job_sheet_html(title, rows, sections, image=None):
+    """The job sheet as one HTML page, its picture built in, for Google Docs to turn into a document."""
+    import base64
+    import html
+    import mimetypes
+
+    image_src = None
+    if image is not None:
+        kind = mimetypes.guess_type(str(image))[0] or "image/jpeg"
+        image_src = f"data:{kind};base64," + base64.b64encode(Path(image).read_bytes()).decode("ascii")
+    body = _job_sheet_body(title, rows, sections, image, image_src)
+    return (f'<!doctype html><html><head><meta charset="utf-8"><title>{html.escape(title)}</title>'
+            f"<style>{JOB_SHEET_CSS}</style></head><body>{''.join(body)}</body></html>")
+
+
+def job_sheet_pdf(title, rows, sections, image=None):
+    """An A4 sheet: a title, a table of label/value rows, text sections and a picture; the PDF's bytes."""
+    import io
+
+    import pymupdf
+
+    body = _job_sheet_body(title, rows, sections, image, Path(image).name if image is not None else None)
+    archive = pymupdf.Archive(str(Path(image).parent)) if image is not None else None
+    css = JOB_SHEET_CSS
     output = io.BytesIO()
     try:
         story = pymupdf.Story(html="".join(body), user_css=css, archive=archive)

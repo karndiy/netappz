@@ -319,7 +319,7 @@
             <div class="settings-actions"><button type="submit">Save</button></div>
           </form>
 
-        {% elif section.key in ("ai", "telegram") %}
+        {% elif section.key in ("ai", "telegram", "google") %}
           {# --------------------------------------------- AI and Telegram #}
           <form class="settings-form" action="{{ url_for('save_settings', section=section.key) }}" method="post" autocomplete="off">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">

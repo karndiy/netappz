@@ -40,6 +40,7 @@ from werkzeug.utils import secure_filename
 import chat
 import checkers
 import converters
+import google_docs
 import pdf_editor
 import pdf_word
 
@@ -122,6 +123,32 @@ SETTING_GROUPS = [
             },
         ],
     },
+    {
+        "section": "google",
+        "title": "Google Docs",
+        "description": "Lets IT support make a Google Doc of a job sheet and share its link. The documents "
+                       "are made in the Google account that the refresh token belongs to.",
+        "fields": [
+            {
+                "name": "GOOGLE_CLIENT_ID", "label": "OAuth client ID",
+                "help": "Google Cloud console → APIs & Services → Credentials: an OAuth client ID, with the Google Drive API turned on.",
+            },
+            {
+                "name": "GOOGLE_CLIENT_SECRET", "label": "OAuth client secret", "secret": True,
+                "help": "Shown with the client ID.",
+            },
+            {
+                "name": "GOOGLE_REFRESH_TOKEN", "label": "Refresh token", "secret": True,
+                "help": "From the OAuth 2.0 Playground with your own client ID and the scope "
+                        "https://www.googleapis.com/auth/drive.file.",
+            },
+            {
+                "name": "GOOGLE_DRIVE_FOLDER", "label": "Drive folder ID",
+                "help": "Optional. The ID at the end of a Drive folder's address; new documents go there. "
+                        "Empty puts them in My Drive.",
+            },
+        ],
+    },
 ]
 SETTING_FIELDS = {field["name"]: field for group in SETTING_GROUPS for field in group["fields"]}
 # The Settings page's categories: personal ones for everyone, the rest for administrators.
@@ -138,6 +165,8 @@ SETTINGS_SECTIONS = [
      "description": "The AI that answers on the Chat page and in Telegram."},
     {"key": "telegram", "title": "Telegram bot", "icon": "✈️", "admin": True,
      "description": "Chat with the AI from your phone through a Telegram bot."},
+    {"key": "google", "title": "Google Docs", "icon": "📄", "admin": True,
+     "description": "Connect a Google account so IT support job sheets can be shared as Google Docs."},
     {"key": "announcements", "title": "Announcements", "icon": "📣", "admin": True,
      "description": "Messages that float at the top of every page, colored by how important they are."},
     {"key": "server", "title": "Server", "icon": "🖥️", "admin": True,
@@ -236,7 +265,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.69.0"
+HELP_VERSION = "1.70.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -361,9 +390,11 @@ HELP_TOPICS = [
             "You're notified when someone takes your job and when it's done. If it still doesn't work, press Still not working to reopen it. You can remove your own job until someone takes it.",
             "Press ✏️ Edit on your job to change what's wrong, where, how urgent it is, the details or the picture, any time until it's done. Whoever is working on it is told.",
             "Once someone has got the job, press 📄 PDF to download a job sheet to print or keep: a table of labels and answers (Thai text included), then the details and picture.",
+            "When Google Docs is connected, press 📝 Google Doc to make the job sheet as a Google Doc. The job then shows Open Google Doc and its link: press Copy link to paste it into a chat or email. Anyone with the link can view it. After changes, press Update Google Doc for a fresh one.",
         ],
         "admin": [
             "Administrators are told about every new job, can edit any job (even a finished one), can mark any job as done or hand it back, and can remove any job.",
+            "To turn on Google Docs, open Settings → Google Docs and fill in an OAuth client ID and secret from the Google Cloud console (with the Google Drive API on) and a refresh token for the drive.file scope, for example from the OAuth 2.0 Playground. A Drive folder ID is optional.",
         ],
     },
     {
@@ -432,6 +463,7 @@ HELP_TOPICS = [
         "admin": [
             "Users & sign-up: add people, approve new accounts, make someone an administrator, set passwords and choose who can sign up.",
             "Chat AI and Telegram bot: the AI behind Chat, a connection test and an error log of failed replies, and the bot for chatting from Telegram.",
+            "Google Docs: connect a Google account so IT support can share job sheets as Google Docs with a link to copy.",
             "Announcements: messages that float at the top of every page, colored by how important they are.",
             "Activity log: what people do in the app, filtered by person or kind. System & backups: checks every 15 minutes (you are notified when something needs attention), database backups to download or make now, and how often backups are made and kept.",
             "Server: where files are stored, the database and the version. These are changed in the server's files.",
@@ -442,6 +474,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.70.0",
+        "date": "2026-11-05",
+        "changes": [
+            "IT support job sheets can be shared as Google Docs (request #43: upgrade support to use Google Docs, make a Google Doc when exporting the PDF and share a link to copy).",
+            "Once someone has got a job, press 📝 Google Doc next to 📄 PDF. The job then shows Open Google Doc and its link with a Copy link button; anyone with the link can view it.",
+            "Administrators connect a Google account under the new Settings → Google Docs. Until then the button is hidden.",
+        ],
+    },
     {
         "version": "1.69.0",
         "date": "2026-11-05",
@@ -2072,6 +2113,9 @@ def create_app(test_config=None):
         # Support pictures (1.65.0): a screenshot or photo of the problem, stored with the mission pictures.
         if "image" not in table_columns(connection, "support_jobs"):
             connection.execute("ALTER TABLE support_jobs ADD COLUMN image TEXT NOT NULL DEFAULT ''")
+        # Google Docs (1.70.0): the link to the job sheet's shared Google Doc, once someone makes one.
+        if "google_doc" not in table_columns(connection, "support_jobs"):
+            connection.execute("ALTER TABLE support_jobs ADD COLUMN google_doc TEXT NOT NULL DEFAULT ''")
         # Wallet (1.37.0): every change to someone's points is a row; the balance is their sum.
         connection.execute(
             f"""
@@ -2301,7 +2345,8 @@ def create_app(test_config=None):
         columns = (
             "support_jobs.id, support_jobs.title, support_jobs.details, support_jobs.category, "
             "support_jobs.priority, support_jobs.place, support_jobs.requested_by, support_jobs.assigned_to, "
-            "support_jobs.status, support_jobs.resolution, support_jobs.image, requesters.username AS requester, "
+            "support_jobs.status, support_jobs.resolution, support_jobs.image, support_jobs.google_doc, "
+            "requesters.username AS requester, "
             f"helpers.username AS helper, {time_as('support_jobs.created_at')}, "
             f"{time_as('support_jobs.updated_at', 'updated_at')}"
         )
@@ -2364,6 +2409,10 @@ def create_app(test_config=None):
                         "updated_at = CURRENT_TIMESTAMP WHERE id = ?"),
                     (status, assigned_to, resolution, job_id),
                 )
+
+        def set_google_doc(self, job_id, link):
+            with notes_connection() as connection:
+                connection.execute(sql("UPDATE support_jobs SET google_doc = ? WHERE id = ?"), (link, job_id))
 
         def delete(self, job_id):
             with notes_connection() as connection:
@@ -4344,6 +4393,7 @@ def create_app(test_config=None):
         ]
         return render_template(
             "support.html", jobs=shown, show=show, views=SUPPORT_VIEWS,
+            google_docs=google_docs.configured(chat.setting),
             filters={"q": query, "category": category, "priority": priority},
             counts={key: len(items) for key, items in groups.items()},
             waiting=sum(1 for job in jobs if job["status"] == "open"),
@@ -4428,14 +4478,8 @@ def create_app(test_config=None):
         flash(f"“{fields['title']}” is updated.", "success")
         return support_back(job_id)
 
-    @app.get("/support/<int:job_id>.pdf")
-    def support_pdf(job_id):
-        """A job sheet to print or keep, once someone has got the job."""
-        job = support_store.job(job_id)
-        if job is None:
-            abort(404)
-        if job["status"] == "open":
-            abort(409, "A job sheet is ready once someone presses Get job.")
+    def support_sheet(job):
+        """The job sheet's title, label/value rows, text sections and picture (or None)."""
         rows = [
             ("Ticket", support_ticket(job["id"])),
             ("Status", SUPPORT_STATUSES.get(job["status"], job["status"])),
@@ -4451,15 +4495,44 @@ def create_app(test_config=None):
         if job["status"] == "done":
             sections.append(("What was done", job["resolution"] or "–"))
         image = mission_image_dir / job["image"] if job["image"] and AVATAR_NAME.fullmatch(job["image"]) else None
+        return f"IT support job: {job['title']}", rows, sections, image if image and image.is_file() else None
+
+    @app.get("/support/<int:job_id>.pdf")
+    def support_pdf(job_id):
+        """A job sheet to print or keep, once someone has got the job."""
+        job = support_store.job(job_id)
+        if job is None:
+            abort(404)
+        if job["status"] == "open":
+            abort(409, "A job sheet is ready once someone presses Get job.")
         try:
-            data = converters.job_sheet_pdf(f"IT support job: {job['title']}", rows, sections,
-                                            image if image and image.is_file() else None)
+            data = converters.job_sheet_pdf(*support_sheet(job))
         except converters.ConversionError as pdf_error:
             abort(500, str(pdf_error))
         response = send_file(io.BytesIO(data), mimetype="application/pdf", as_attachment=True,
                              download_name=f"it-support-job-{job_id}.pdf")
         response.headers["Cache-Control"] = "private, no-store"
         return response
+
+    @app.post("/support/<int:job_id>/google-doc")
+    def support_google_doc(job_id):
+        """Request #43: the job sheet as a Google Doc anyone with the link can view, its link kept on the job."""
+        job = support_job_or_flash(job_id)
+        if job is None:
+            return support_back()
+        if job["status"] == "open":
+            abort(409, "A job sheet is ready once someone presses Get job.")
+        title, rows, sections, image = support_sheet(job)
+        try:
+            link = google_docs.create_doc(chat.setting, f"{support_ticket(job['id'])} {title}",
+                                          converters.job_sheet_html(title, rows, sections, image))
+        except google_docs.GoogleDocsError as error:
+            flash(f"Could not make the Google Doc. {error}", "error")
+            return support_back(job_id)
+        support_store.set_google_doc(job_id, link)
+        activity_log.add(g.user["id"], "support", "made a Google Doc", job["title"])
+        flash("The Google Doc is ready. Press Copy link to share it.", "success")
+        return support_back(job_id)
 
     @app.post("/support/<int:job_id>/take")
     def support_take(job_id):
@@ -6150,6 +6223,8 @@ def create_app(test_config=None):
                         verify_telegram_token(value)
                     except ValueError as error:
                         errors[name] = str(error)
+            elif name.startswith("GOOGLE_") and (len(value) > 500 or any(c.isspace() for c in value)):
+                errors[name] = "This can't contain spaces. Paste it again without any spaces."
             elif name == "ANTHROPIC_API_KEY" and (len(value) < 20 or any(c.isspace() for c in value)):
                 errors[name] = "This doesn't look like an Anthropic API key."
             changes[name] = value
@@ -6562,7 +6637,7 @@ def create_app(test_config=None):
             return {"groups": settings_view(values, errors, section), "chat_errors": chat_error_log.entries(),
                     "error_sources": CHAT_ERROR_SOURCES, "error_keep_days": CHAT_ERROR_KEEP_DAYS,
                     "errors_today": chat_error_log.count_since(24)}
-        if section == "telegram":
+        if section in ("telegram", "google"):
             return {"groups": settings_view(values, errors, section)}
         if section == "users":
             return {"users": user_store.all(), "signup_mode": signup_mode(), "signup_modes": SIGNUP_MODES,
@@ -6614,7 +6689,7 @@ def create_app(test_config=None):
 
     @app.post("/settings/<section>")
     def save_settings(section):
-        if section not in ("ai", "telegram"):
+        if section not in ("ai", "telegram", "google"):
             abort(404)
         admin_required()
         fields = section_fields(section)

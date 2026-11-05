@@ -2126,6 +2126,87 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(store.job(job["id"])["title"], "Printer jams on floor 2")
         self.assertEqual(self.client.get("/support/9999.pdf").status_code, 404)
 
+    def test_support_job_sheet_can_be_shared_as_a_google_doc(self):
+        # Request #43: make the job sheet as a Google Doc and show its link to copy.
+        import google_docs
+
+        token = self._csrf()
+        store = self.app.extensions["support"]
+        self.client.post("/support", data={"_csrf_token": token, "title": "Printer jams", "category": "printer",
+                                           "place": "Room B", "details": "Paper jam"})
+        job = store.all()[0]
+        self.client.post(f"/support/{job['id']}/take", data={"_csrf_token": token})
+        # Hidden until an administrator connects Google Docs, and a press then explains why nothing happened.
+        self.assertNotIn(f'/support/{job["id"]}/google-doc', self.client.get("/support").get_data(as_text=True))
+        self.client.post(f"/support/{job['id']}/google-doc", data={"_csrf_token": token})
+        self.assertEqual(store.job(job["id"])["google_doc"], "")
+        self.assertIn("Google Docs isn&#39;t connected", self.client.get("/support").get_data(as_text=True))
+
+        response = self.client.post("/settings/google", data={
+            "_csrf_token": token, "GOOGLE_CLIENT_ID": "id.apps.googleusercontent.com",
+            "GOOGLE_CLIENT_SECRET": "client-secret", "GOOGLE_REFRESH_TOKEN": "1//refresh"})
+        self.assertEqual(response.status_code, 303)
+        self.assertIn(f'/support/{job["id"]}/google-doc', self.client.get("/support").get_data(as_text=True))
+        self.assertIn("Google Docs", self.client.get("/settings/google").get_data(as_text=True))
+
+        link = "https://docs.google.com/document/d/abc123/edit"
+        with mock.patch("google_docs.create_doc", return_value=link) as create:
+            self.client.post(f"/support/{job['id']}/google-doc", data={"_csrf_token": token})
+        setting, name, html = create.call_args[0]
+        self.assertEqual(setting("GOOGLE_REFRESH_TOKEN"), "1//refresh")
+        self.assertIn(f'IT-{job["id"]:05d}', name)
+        for expected in ("Printer jams", "Room B", "Paper jam"):
+            self.assertIn(expected, html)
+        self.assertEqual(store.job(job["id"])["google_doc"], link)
+        page = self.client.get("/support").get_data(as_text=True)
+        self.assertIn(f'value="{link}" readonly', page)
+        self.assertIn("Copy link", page)
+        self.assertIn("Update Google Doc", page)
+
+        # A failure from Google is shown and keeps the old link.
+        with mock.patch("google_docs.create_doc", side_effect=google_docs.GoogleDocsError("Google said: no.")):
+            self.client.post(f"/support/{job['id']}/google-doc", data={"_csrf_token": token})
+        self.assertEqual(store.job(job["id"])["google_doc"], link)
+        self.assertIn("Google said: no.", self.client.get("/support").get_data(as_text=True))
+
+    def test_google_docs_upload_and_share(self):
+        import json as json_module
+
+        import google_docs
+
+        calls = []
+
+        class Answer(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def urlopen(request, timeout=None):
+            calls.append(request)
+            if request.full_url == google_docs.TOKEN_URL:
+                return Answer(b'{"access_token": "token-1"}')
+            if request.full_url.startswith("https://www.googleapis.com/upload/"):
+                return Answer(b'{"id": "doc-9", "webViewLink": "https://docs.google.com/document/d/doc-9/edit"}')
+            return Answer(b'{"id": "anyoneWithLink"}')
+
+        settings = {"GOOGLE_CLIENT_ID": "id", "GOOGLE_CLIENT_SECRET": "secret", "GOOGLE_REFRESH_TOKEN": "refresh",
+                    "GOOGLE_DRIVE_FOLDER": "folder-1"}
+        with mock.patch("urllib.request.urlopen", urlopen):
+            link = google_docs.create_doc(lambda name: settings.get(name, ""), "IT-00001 Printer", "<p>ไทย</p>")
+        self.assertEqual(link, "https://docs.google.com/document/d/doc-9/edit")
+        upload, share = calls[1], calls[2]
+        self.assertEqual(upload.get_header("Authorization"), "Bearer token-1")
+        body = upload.data.decode("utf-8")
+        self.assertIn('"mimeType": "application/vnd.google-apps.document"', body)
+        self.assertIn('"parents": ["folder-1"]', body)
+        self.assertIn("<p>ไทย</p>", body)
+        self.assertIn("/files/doc-9/permissions", share.full_url)
+        self.assertEqual(json_module.loads(share.data), {"role": "reader", "type": "anyone"})
+        with self.assertRaises(google_docs.GoogleDocsError):
+            google_docs.create_doc(lambda name: "", "x", "<p></p>")
+
     def test_support_page_reads_like_a_helpdesk(self):
         # Request #42: ticket numbers, a progress line, a table of facts, search and filters, and a stepped form.
         token = self._csrf()
