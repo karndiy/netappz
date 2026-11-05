@@ -204,3 +204,57 @@ def merge_pdfs(sources, workdir, names=None):
     finally:
         merged.close()
     return result
+
+
+def job_sheet_pdf(title, rows, sections, image=None):
+    """An A4 sheet: a title, a table of label/value rows, text sections and a picture; the PDF's bytes."""
+    import html
+    import io
+
+    import pymupdf
+
+    def text(value):
+        return "<br>".join(html.escape(line) for line in str(value).split("\n"))
+
+    body = [f"<h1>{text(title)}</h1>", "<table>"]
+    body += [f"<tr><th>{text(label)}</th><td>{text(value)}</td></tr>" for label, value in rows]
+    body.append("</table>")
+    for heading, value in sections:
+        if value:
+            body.append(f"<h2>{text(heading)}</h2><p>{text(value)}</p>")
+    archive = None
+    if image is not None:
+        from PIL import Image
+
+        with Image.open(image) as picture:
+            width, height = picture.size
+        # Fit inside 300 x 360 points so a tall photo never overflows the page.
+        scale = min(300 / width, 360 / height)
+        archive = pymupdf.Archive(str(Path(image).parent))
+        body.append(f'<h2>Picture</h2><p><img src="{html.escape(Path(image).name)}" '
+                    f'width="{width * scale:.0f}" height="{height * scale:.0f}"></p>')
+    css = (
+        "body { font-family: sans-serif; font-size: 11pt; line-height: 1.4; color: #1d1d1f; }"
+        " h1 { font-size: 18pt; margin: 0 0 12pt; }"
+        " h2 { font-size: 12pt; margin: 14pt 0 4pt; }"
+        " table { border-collapse: collapse; width: 100%; }"
+        " th, td { border: 1px solid #c7c7cc; padding: 4pt 6pt; text-align: left; vertical-align: top; }"
+        " th { width: 30%; background-color: #f2f2f7; }"
+        " p { margin: 0; }"
+    )
+    output = io.BytesIO()
+    try:
+        story = pymupdf.Story(html="".join(body), user_css=css, archive=archive)
+        writer = pymupdf.DocumentWriter(output)
+        page = pymupdf.paper_rect("a4")
+        frame = page + (50, 50, -50, -50)
+        more = True
+        while more:
+            device = writer.begin_page(page)
+            more, _ = story.place(frame)
+            story.draw(device)
+            writer.end_page()
+        writer.close()
+    except Exception:
+        raise ConversionError("Could not make the PDF.")
+    return output.getvalue()

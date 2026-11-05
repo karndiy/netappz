@@ -2047,6 +2047,85 @@ class FileManagerTests(unittest.TestCase):
         self.client.post(f"/support/{job['id']}/done", data={"_csrf_token": token})
         self.assertEqual((store.job(job["id"])["status"], store.job(job["id"])["helper"]), ("done", "admin"))
 
+    def test_it_support_jobs_can_be_edited_and_exported_as_pdf(self):
+        import pymupdf
+
+        token = self._csrf()
+        store = self.app.extensions["support"]
+        users = self.app.extensions["users"]
+        notifications = self.app.extensions["notifications"]
+        member_id = users.add("member", "member-password")
+        helper_id = users.add("helper", "helper-password")
+        other_id = users.add("other", "other-password")
+
+        def as_user(user_id):
+            with self.client.session_transaction() as sess:
+                sess["user_id"] = user_id
+
+        def edit(job_id, **fields):
+            data = {"_csrf_token": token, "title": "Printer jams", "category": "printer", "priority": "normal"}
+            data.update(fields)
+            return self.client.post(f"/support/{job_id}/edit", data=data, content_type="multipart/form-data")
+
+        as_user(member_id)
+        self.client.post("/support", data={"_csrf_token": token, "title": "Printer", "category": "printer"})
+        job = store.all()[0]
+        page = self.client.get("/support").get_data(as_text=True)
+        self.assertIn(f'/support/{job["id"]}/edit', page)
+        # No job sheet until someone gets the job.
+        self.assertNotIn(f'/support/{job["id"]}.pdf', page)
+        self.assertEqual(self.client.get(f'/support/{job["id"]}.pdf').status_code, 409)
+
+        # The person who asked can change it; a bad change is turned away and nothing changes.
+        self.assertEqual(edit(job["id"], title=" ").status_code, 303)
+        self.assertEqual(store.job(job["id"])["title"], "Printer")
+        self.assertIn("Say in a few words what the problem is.", self.client.get("/support").get_data(as_text=True))
+        edit(job["id"], title="เครื่องพิมพ์ Printer jams", priority="urgent", place="Room B", details="Paper jam",
+             image=(io.BytesIO(self._png_bytes()), "jam.png"))
+        job = store.job(job["id"])
+        self.assertEqual((job["title"], job["priority"], job["place"], job["details"]),
+                         ("เครื่องพิมพ์ Printer jams", "urgent", "Room B", "Paper jam"))
+        self.assertRegex(job["image"], r"^[0-9a-f]{32}\.jpg$")
+        # Someone else can't change it.
+        as_user(other_id)
+        self.assertNotIn(f'/support/{job["id"]}/edit', self.client.get("/support").get_data(as_text=True))
+        self.assertEqual(edit(job["id"], title="Mine now").status_code, 403)
+
+        # Once the helper gets the job, anyone can download its job sheet, and the helper hears about edits.
+        as_user(helper_id)
+        self.client.post(f"/support/{job['id']}/take", data={"_csrf_token": token})
+        self.assertIn(f'/support/{job["id"]}.pdf', self.client.get("/support").get_data(as_text=True))
+        as_user(member_id)
+        edit(job["id"], title="เครื่องพิมพ์ Printer jams", priority="urgent", place="Room C", details="Paper jam")
+        self.assertEqual(store.job(job["id"])["place"], "Room C")
+        self.assertEqual(store.job(job["id"])["image"], job["image"])
+        self.assertIn("member changed the IT support job", notifications.for_user(helper_id)[0]["message"])
+        response = self.client.get(f'/support/{job["id"]}.pdf')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/pdf")
+        self.assertIn(f'it-support-job-{job["id"]}.pdf', response.headers["Content-Disposition"])
+        with pymupdf.open(stream=response.data, filetype="pdf") as document:
+            text = "".join(page.get_text() for page in document)
+            self.assertTrue(any(page.get_images() for page in document))
+        for expected in ("Printer jams", "Room C", "Urgent", "Paper jam", "member", "helper"):
+            self.assertIn(expected, text)
+        # Removing the picture deletes it.
+        edit(job["id"], remove_image="1")
+        self.assertEqual(store.job(job["id"])["image"], "")
+        self.assertEqual(self.client.get(f'/missions/images/{job["image"]}').status_code, 404)
+
+        # When it's done, the person who asked can't change it any more, but an administrator can.
+        as_user(helper_id)
+        self.client.post(f"/support/{job['id']}/done", data={"_csrf_token": token, "resolution": "Cleared rollers"})
+        as_user(member_id)
+        self.assertEqual(edit(job["id"], title="Again").status_code, 403)
+        with pymupdf.open(stream=self.client.get(f'/support/{job["id"]}.pdf').data, filetype="pdf") as document:
+            self.assertIn("Cleared rollers", "".join(page.get_text() for page in document))
+        as_user(self.admin_id)
+        edit(job["id"], title="Printer jams on floor 2")
+        self.assertEqual(store.job(job["id"])["title"], "Printer jams on floor 2")
+        self.assertEqual(self.client.get("/support/9999.pdf").status_code, 404)
+
     def test_missions_run_between_their_dates(self):
         from datetime import datetime, timedelta, timezone
         token = self._csrf()

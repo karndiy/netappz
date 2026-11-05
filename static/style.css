@@ -1891,12 +1891,15 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 .support-status.is-in_progress { background: var(--mac-purple-tint); color: var(--mac-purple-text); }
 .support-status.is-done { background: var(--mac-green-tint); color: var(--mac-green-text); }
 .support-job .mission-card-foot button { min-height: 38px; }
+.support-edit-fold .request-form { padding: 10px 0 0; }
+.support-edit-fold select { width: 100%; }
+.support-job .mission-card-foot a.button { min-height: 38px; }
 .support-form { padding: 16px 18px; }
 .support-form .request-form { padding: 0; }
 .support-form select { width: 100%; }
 @media (max-width: 560px) {
   .support-tabs a { flex: 0 0 auto; }
-  .support-job .mission-card-foot > form { flex: 1 1 auto; }
+  .support-job .mission-card-foot > form, .support-job .mission-card-foot > a.button { flex: 1 1 auto; }
   .support-job .mission-card-foot > form button { width: 100%; }
 }
 /* System dashboard */

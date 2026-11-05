@@ -236,7 +236,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.67.0"
+HELP_VERSION = "1.68.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -358,9 +358,11 @@ HELP_TOPICS = [
             "The tabs pick which jobs to see: To do (waiting and in progress), My requests, My jobs (the ones you're fixing), Done and All. High and Urgent jobs have an orange or red edge and come first.",
             "Can you fix it? Press Get job on a waiting job: it's yours and the person who asked is told. Press Mark as done when it's fixed, with a short note on what you did, or Hand back to let someone else take it.",
             "You're notified when someone takes your job and when it's done. If it still doesn't work, press Still not working to reopen it. You can remove your own job until someone takes it.",
+            "Press ✏️ Edit on your job to change what's wrong, where, how urgent it is, the details or the picture, any time until it's done. Whoever is working on it is told.",
+            "Once someone has got the job, press 📄 PDF to download a job sheet with all its details and picture, to print or keep.",
         ],
         "admin": [
-            "Administrators are told about every new job, can mark any job as done or hand it back, and can remove any job.",
+            "Administrators are told about every new job, can edit any job (even a finished one), can mark any job as done or hand it back, and can remove any job.",
         ],
     },
     {
@@ -439,6 +441,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.68.0",
+        "date": "2026-11-05",
+        "changes": [
+            "IT support jobs can be edited (request #40: upgrade support, edit Ask IT support for help and export a PDF when a job is taken). Press ✏️ Edit to change the problem, place, urgency, details or picture.",
+            "You can edit your own job until it's done, and administrators can edit any job. Whoever is working on it is told about the change.",
+            "Once someone presses Get job, a 📄 PDF button downloads a job sheet with the job's details, who asked, who is fixing it and the picture, ready to print.",
+        ],
+    },
     {
         "version": "1.67.0",
         "date": "2026-11-04",
@@ -2300,6 +2311,14 @@ def create_app(test_config=None):
                     (title, details, category, priority, place, requested_by, image),
                 )
                 return cursor.fetchone()["id"] if returning_id else cursor.lastrowid
+
+        def update(self, job_id, title, details, category, priority, place, image):
+            with notes_connection() as connection:
+                connection.execute(
+                    sql("UPDATE support_jobs SET title = ?, details = ?, category = ?, priority = ?, place = ?, "
+                        "image = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"),
+                    (title, details, category, priority, place, image, job_id),
+                )
 
         def take(self, job_id, user_id):
             """Give a waiting job to this person. False when someone else got it first."""
@@ -4291,20 +4310,21 @@ def create_app(test_config=None):
             form=session.pop("support_form", None),
         )
 
-    @app.post("/support")
-    def support_create():
-        """Anyone reports a problem; everyone on IT support (the administrators) is told about it."""
-        title = " ".join(request.form.get("title", "").split())
-        details = request.form.get("details", "").strip().replace("\r\n", "\n")
-        place = " ".join(request.form.get("place", "").split())
-        category = request.form.get("category", "other")
-        priority = request.form.get("priority", "normal")
+    def support_form_fields():
+        """The job form's fields, any new picture saved, and what's wrong with them (None when they're fine)."""
+        fields = {
+            "title": " ".join(request.form.get("title", "").split()),
+            "details": request.form.get("details", "").strip().replace("\r\n", "\n"),
+            "place": " ".join(request.form.get("place", "").split()),
+            "category": request.form.get("category", "other"),
+            "priority": request.form.get("priority", "normal"),
+        }
         error = None
-        if not title:
+        if not fields["title"]:
             error = "Say in a few words what the problem is."
-        elif len(title) > 120 or len(details) > SUPPORT_TEXT_LIMIT or len(place) > 120:
+        elif len(fields["title"]) > 120 or len(fields["details"]) > SUPPORT_TEXT_LIMIT or len(fields["place"]) > 120:
             error = "Keep the title and place under 120 characters and the details under 4,000."
-        elif category not in SUPPORT_CATEGORIES or priority not in SUPPORT_PRIORITIES:
+        elif fields["category"] not in SUPPORT_CATEGORIES or fields["priority"] not in SUPPORT_PRIORITIES:
             error = "Choose a kind of problem and how urgent it is from the lists."
         image = ""
         upload = request.files.get("image")
@@ -4313,6 +4333,18 @@ def create_app(test_config=None):
                 image = save_mission_image(upload)
             except ValueError as image_error:
                 error = str(image_error)
+        return fields, image, error
+
+    def can_edit_support_job(job):
+        """The person who asked can change their job until it's done; administrators can change any job."""
+        return g.user["is_admin"] or (job["requested_by"] == g.user["id"] and job["status"] != "done")
+
+    @app.post("/support")
+    def support_create():
+        """Anyone reports a problem; everyone on IT support (the administrators) is told about it."""
+        fields, image, error = support_form_fields()
+        title, details, place = fields["title"], fields["details"], fields["place"]
+        category, priority = fields["category"], fields["priority"]
         if error:
             flash(error, "error")
             session["support_form"] = {"title": title[:120], "details": details[:SUPPORT_TEXT_LIMIT],
@@ -4326,6 +4358,65 @@ def create_app(test_config=None):
         activity_log.add(g.user["id"], "support", "asked for help", title)
         flash("Job sent to IT support. You're notified when someone takes it and when it's done.", "success")
         return redirect(url_for("support", show="mine", _anchor=f"job-{job_id}"), code=303)
+
+    @app.post("/support/<int:job_id>/edit")
+    def support_edit(job_id):
+        """Fix or add to a job: what's wrong, where, how urgent, and its picture."""
+        job = support_job_or_flash(job_id)
+        if job is None:
+            return support_back()
+        if not can_edit_support_job(job):
+            abort(403, "Only the person who asked for help, or an administrator, can change a job.")
+        fields, image, error = support_form_fields()
+        if error:
+            flash(error, "error")
+            return support_back(job_id)
+        if image or request.form.get("remove_image"):
+            remove_mission_image(job["image"])
+        else:
+            image = job["image"]
+        support_store.update(job_id, fields["title"], fields["details"], fields["category"], fields["priority"],
+                             fields["place"], image)
+        # Whoever is working on it hears about the change.
+        if job["assigned_to"] and job["assigned_to"] != g.user["id"] and job["status"] != "done":
+            notification_store.add([job["assigned_to"]], g.user["id"], "support",
+                                   f"{g.user['username']} changed the IT support job “{fields['title']}”",
+                                   url_for("support", show="taken", _anchor=f"job-{job_id}"))
+        flash(f"“{fields['title']}” is updated.", "success")
+        return support_back(job_id)
+
+    @app.get("/support/<int:job_id>.pdf")
+    def support_pdf(job_id):
+        """A job sheet to print or keep, once someone has got the job."""
+        job = support_store.job(job_id)
+        if job is None:
+            abort(404)
+        if job["status"] == "open":
+            abort(409, "A job sheet is ready once someone presses Get job.")
+        rows = [
+            ("Job", f"#{job['id']}"),
+            ("Status", SUPPORT_STATUSES.get(job["status"], job["status"])),
+            ("How urgent", SUPPORT_PRIORITIES.get(job["priority"], job["priority"])),
+            ("Kind of problem", SUPPORT_CATEGORIES.get(job["category"], job["category"])),
+            ("Where", job["place"] or "–"),
+            ("Asked by", f"{job['requester'] or 'a deleted account'} · {job['created_at'][:16]} UTC"),
+            ("Done by" if job["status"] == "done" else "Working on it",
+             (job["helper"] or "a deleted account")
+             + (f" · {job['updated_at'][:16]} UTC" if job["status"] == "done" else "")),
+        ]
+        sections = [("Details", job["details"])]
+        if job["status"] == "done":
+            sections.append(("What was done", job["resolution"] or "–"))
+        image = mission_image_dir / job["image"] if job["image"] and AVATAR_NAME.fullmatch(job["image"]) else None
+        try:
+            data = converters.job_sheet_pdf(f"IT support job: {job['title']}", rows, sections,
+                                            image if image and image.is_file() else None)
+        except converters.ConversionError as pdf_error:
+            abort(500, str(pdf_error))
+        response = send_file(io.BytesIO(data), mimetype="application/pdf", as_attachment=True,
+                             download_name=f"it-support-job-{job_id}.pdf")
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
 
     @app.post("/support/<int:job_id>/take")
     def support_take(job_id):

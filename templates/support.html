@@ -67,6 +67,46 @@
             {% endif %}
             {% if job.resolution %}<p class="request-note">{{ job.resolution }}</p>{% endif %}
 
+            {% if current_user.is_admin or (job.requested_by == current_user.id and job.status != 'done') %}
+              <details class="mission-fold support-edit-fold">
+                <summary><span class="button secondary">✏️ Edit</span></summary>
+                <form class="request-form" action="{{ url_for('support_edit', job_id=job.id) }}" method="post" enctype="multipart/form-data">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="show" value="{{ show }}">
+                  <label for="job-title-{{ job.id }}">What's the problem?</label>
+                  <input id="job-title-{{ job.id }}" name="title" type="text" maxlength="120" required value="{{ job.title }}">
+                  <div class="mission-dates">
+                    <div>
+                      <label for="job-category-{{ job.id }}">Kind of problem</label>
+                      <select id="job-category-{{ job.id }}" name="category">
+                        {% for key, label in categories.items() %}
+                          <option value="{{ key }}" {% if job.category == key %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                    <div>
+                      <label for="job-priority-{{ job.id }}">How urgent?</label>
+                      <select id="job-priority-{{ job.id }}" name="priority">
+                        {% for key, label in priorities.items() %}
+                          <option value="{{ key }}" {% if job.priority == key %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                  </div>
+                  <label for="job-place-{{ job.id }}">Where? <span class="optional">(optional)</span></label>
+                  <input id="job-place-{{ job.id }}" name="place" type="text" maxlength="120" value="{{ job.place }}">
+                  <label for="job-details-{{ job.id }}">Details <span class="optional">(optional)</span></label>
+                  <textarea id="job-details-{{ job.id }}" name="details" rows="4" maxlength="4000">{{ job.details }}</textarea>
+                  <label for="job-image-{{ job.id }}">{{ 'New picture' if job.image else 'Picture' }} <span class="optional">(optional)</span></label>
+                  <input id="job-image-{{ job.id }}" name="image" type="file" accept="image/*,.heic,.heif">
+                  {% if job.image %}
+                    <label class="quest-approval"><input type="checkbox" name="remove_image" value="1"> Remove the picture</label>
+                  {% endif %}
+                  <div class="request-actions"><button type="submit">Save changes</button></div>
+                </form>
+              </details>
+            {% endif %}
+
             {% set can_finish = job.status != 'done' and (working or current_user.is_admin) %}
             {% if can_finish %}
               <details class="mission-fold mission-submit-fold">
@@ -89,6 +129,10 @@
                   <input type="hidden" name="show" value="{{ show }}">
                   <button type="submit">Get job</button>
                 </form>
+              {% endif %}
+              {% if job.status != 'open' %}
+                <a class="button secondary" href="{{ url_for('support_pdf', job_id=job.id) }}" download
+                   title="Download a job sheet to print or keep">📄 PDF</a>
               {% endif %}
               {% if job.status == 'in_progress' and (working or current_user.is_admin) %}
                 <form action="{{ url_for('support_release', job_id=job.id) }}" method="post">
