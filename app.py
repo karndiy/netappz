@@ -236,7 +236,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.68.1"
+HELP_VERSION = "1.69.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -354,8 +354,9 @@ HELP_TOPICS = [
         "key": "support", "title": "IT support", "icon": "🛠️", "endpoint": "support",
         "summary": "Report a computer, network, printer or account problem, and follow it until it's fixed.",
         "steps": [
-            "Press ＋ Ask for help, say what the problem is, choose the kind of problem and how urgent it is, and add where it is and any details. Add a picture too if it helps, like a screenshot of the error or a photo of the printer. Press Send to IT support.",
-            "The tabs pick which jobs to see: To do (waiting and in progress), My requests, My jobs (the ones you're fixing), Done and All. High and Urgent jobs have an orange or red edge and come first.",
+            "Press ＋ Ask for help and fill in the three steps: 1 the problem and its kind, 2 how urgent it is (each choice says what it means, from Low: it can wait, to Urgent: my work has stopped), 3 where it is, any details and a picture if it helps, like a screenshot of the error. Press Send to IT support.",
+            "Every job gets a ticket number like IT-00042. Each job shows its number, status and urgency, a progress line (Received, In progress, Done) and a table of the kind of problem, where, who asked, when, and who is fixing it.",
+            "The tabs pick which jobs to see: To do (waiting and in progress), My requests, My jobs (the ones you're fixing), Done and All. High and Urgent jobs have an orange or red edge and come first. Use the search box and the kind and urgency lists to find a job, by ticket number, problem, place or name.",
             "Can you fix it? Press Get job on a waiting job: it's yours and the person who asked is told. Press Mark as done when it's fixed, with a short note on what you did, or Hand back to let someone else take it.",
             "You're notified when someone takes your job and when it's done. If it still doesn't work, press Still not working to reopen it. You can remove your own job until someone takes it.",
             "Press ✏️ Edit on your job to change what's wrong, where, how urgent it is, the details or the picture, any time until it's done. Whoever is working on it is told.",
@@ -441,6 +442,16 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.69.0",
+        "date": "2026-11-05",
+        "changes": [
+            "The IT support page looks like a standard helpdesk (request #42: upgrade the UX/UI of support to be orderly and standard for taking IT support jobs, and responsive).",
+            "Every job has a ticket number like IT-00042, a progress line (Received, In progress, Done) and a tidy table of the kind of problem, where, who asked, when and who is fixing it.",
+            "Find jobs with a search box and filters for the kind of problem and how urgent it is. Asking for help is now three numbered steps, and each urgency says what it means.",
+            "Works well on phones: the filters, job cards, urgency choices and buttons rearrange to fit small screens.",
+        ],
+    },
     {
         "version": "1.68.1",
         "date": "2026-11-05",
@@ -1297,8 +1308,16 @@ SUPPORT_CATEGORIES = {"computer": "💻 Computer", "network": "🌐 Network & Wi
                       "account": "🔑 Account & password", "software": "🧩 Software", "phone": "📱 Phone",
                       "other": "🛠️ Something else"}
 SUPPORT_PRIORITIES = {"low": "Low", "normal": "Normal", "high": "High", "urgent": "Urgent"}
+# What each urgency means, shown on the request form so everyone picks the same way (1.69.0).
+SUPPORT_PRIORITY_HINTS = {"low": "It can wait, nothing is stopped", "normal": "Please fix it within a day",
+                          "high": "My work is slowed down", "urgent": "My work has stopped"}
 SUPPORT_VIEWS = {"active": "To do", "mine": "My requests", "taken": "My jobs", "done": "Done", "all": "All"}
 SUPPORT_TEXT_LIMIT = 4000
+
+
+def support_ticket(job_id):
+    """The job's ticket number, like IT-00042, the way helpdesks number their jobs."""
+    return f"IT-{int(job_id):05d}"
 REQUEST_STATUSES = {"open": "Waiting", "queued": "Sent to Claude", "in_progress": "In progress", "done": "Done"}
 # How many requests and patch notes the Update log shows on a page. 0 means all of them.
 PAGE_SIZES = (5, 10, 20, 50, 0)
@@ -4309,12 +4328,28 @@ def create_app(test_config=None):
             "done": [job for job in jobs if job["status"] == "done"],
             "all": jobs,
         }
+        # Search and filters narrow the list being shown; the tab counts stay whole.
+        query = " ".join(request.args.get("q", "").split())[:120]
+        category = request.args.get("category", "")
+        category = category if category in SUPPORT_CATEGORIES else ""
+        priority = request.args.get("priority", "")
+        priority = priority if priority in SUPPORT_PRIORITIES else ""
+        needle = query.casefold()
+        shown = [
+            job for job in groups[show]
+            if (not category or job["category"] == category) and (not priority or job["priority"] == priority)
+            and (not needle or any(needle in (value or "").casefold() for value in (
+                job["title"], job["details"], job["place"], job["requester"], job["helper"],
+                support_ticket(job["id"]), f"#{job['id']}")))
+        ]
         return render_template(
-            "support.html", jobs=groups[show], show=show, views=SUPPORT_VIEWS,
+            "support.html", jobs=shown, show=show, views=SUPPORT_VIEWS,
+            filters={"q": query, "category": category, "priority": priority},
             counts={key: len(items) for key, items in groups.items()},
             waiting=sum(1 for job in jobs if job["status"] == "open"),
             urgent=sum(1 for job in jobs if job["status"] == "open" and job["priority"] in ("urgent", "high")),
             statuses=SUPPORT_STATUSES, categories=SUPPORT_CATEGORIES, priorities=SUPPORT_PRIORITIES,
+            priority_hints=SUPPORT_PRIORITY_HINTS, ticket=support_ticket,
             form=session.pop("support_form", None),
         )
 
@@ -4402,7 +4437,7 @@ def create_app(test_config=None):
         if job["status"] == "open":
             abort(409, "A job sheet is ready once someone presses Get job.")
         rows = [
-            ("Job", f"#{job['id']}"),
+            ("Ticket", support_ticket(job["id"])),
             ("Status", SUPPORT_STATUSES.get(job["status"], job["status"])),
             ("How urgent", SUPPORT_PRIORITIES.get(job["priority"], job["priority"])),
             ("Kind of problem", SUPPORT_CATEGORIES.get(job["category"], job["category"])),

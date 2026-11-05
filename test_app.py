@@ -2126,6 +2126,46 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(store.job(job["id"])["title"], "Printer jams on floor 2")
         self.assertEqual(self.client.get("/support/9999.pdf").status_code, 404)
 
+    def test_support_page_reads_like_a_helpdesk(self):
+        # Request #42: ticket numbers, a progress line, a table of facts, search and filters, and a stepped form.
+        token = self._csrf()
+        store = self.app.extensions["support"]
+        for title, category, priority, place in (("Printer jams", "printer", "urgent", "Room B"),
+                                                 ("Wi-Fi drops", "network", "low", "Floor 3")):
+            self.client.post("/support", data={"_csrf_token": token, "title": title, "category": category,
+                                               "priority": priority, "place": place})
+        printer, wifi = sorted(store.all(), key=lambda job: job["id"])
+        self.assertEqual(wifi["priority"], "low")
+        page = self.client.get("/support").get_data(as_text=True)
+        self.assertIn(f'IT-{printer["id"]:05d}', page)
+        self.assertIn('class="support-steps"', page)
+        self.assertIn('class="support-facts"', page)
+        self.assertIn('class="support-filters"', page)
+        self.assertIn('type="radio" name="priority" value="normal" checked', page)
+        self.assertIn("My work has stopped", page)
+
+        def titles(query):
+            body = self.client.get(f"/support?{query}").get_data(as_text=True)
+            return [title for title in ("Printer jams", "Wi-Fi drops") if f"<h3>{title}</h3>" in body]
+
+        self.assertEqual(titles("q=room+b"), ["Printer jams"])
+        self.assertEqual(titles(f"q=IT-{wifi['id']:05d}"), ["Wi-Fi drops"])
+        self.assertEqual(titles("q=admin"), ["Printer jams", "Wi-Fi drops"])
+        self.assertEqual(titles("category=network"), ["Wi-Fi drops"])
+        self.assertEqual(titles("priority=urgent&category=network"), [])
+        self.assertEqual(titles("priority=nonsense"), ["Printer jams", "Wi-Fi drops"])
+        self.assertIn("No jobs match your search.", self.client.get("/support?q=nothing-like-this").get_data(as_text=True))
+        # The tab counts stay whole and the tabs keep the search.
+        page = self.client.get("/support?category=network").get_data(as_text=True)
+        self.assertIn("/support?show=all&amp;category=network", page)
+        # Once taken, the job sheet carries the ticket number.
+        import pymupdf
+        self.client.post(f"/support/{printer['id']}/take", data={"_csrf_token": token})
+        page = self.client.get("/support").get_data(as_text=True)
+        self.assertIn("is-reached is-current", page)
+        with pymupdf.open(stream=self.client.get(f'/support/{printer["id"]}.pdf').data, filetype="pdf") as document:
+            self.assertIn(f'IT-{printer["id"]:05d}', "".join(page.get_text() for page in document))
+
     def test_job_sheet_labels_do_not_overlap_their_values(self):
         # Request #41: the label column used to collapse, drawing labels on top of the values.
         import pymupdf

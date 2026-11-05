@@ -37,35 +37,69 @@
 
     <nav class="support-tabs" aria-label="Which jobs to show">
       {% for key, label in views.items() %}
-        <a href="{{ url_for('support', show=key) }}"{% if key == show %} aria-current="page"{% endif %}>{{ label }} <span>{{ counts[key] }}</span></a>
+        <a href="{{ url_for('support', show=key, q=filters.q or None, category=filters.category or None, priority=filters.priority or None) }}"{% if key == show %} aria-current="page"{% endif %}>{{ label }} <span>{{ counts[key] }}</span></a>
       {% endfor %}
     </nav>
+
+    <form class="support-filters" action="{{ url_for('support') }}" method="get" role="search" aria-label="Find a job">
+      <input type="hidden" name="show" value="{{ show }}">
+      <label class="visually-hidden" for="support-search">Search</label>
+      <input id="support-search" name="q" type="search" maxlength="120" value="{{ filters.q }}"
+             placeholder="Search by ticket, problem, place or name">
+      <label class="visually-hidden" for="support-filter-category">Kind of problem</label>
+      <select id="support-filter-category" name="category">
+        <option value="">All kinds</option>
+        {% for key, label in categories.items() %}
+          <option value="{{ key }}" {% if filters.category == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <label class="visually-hidden" for="support-filter-priority">How urgent</label>
+      <select id="support-filter-priority" name="priority">
+        <option value="">Any urgency</option>
+        {% for key, label in priorities.items() %}
+          <option value="{{ key }}" {% if filters.priority == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Search</button>
+      {% if filters.q or filters.category or filters.priority %}
+        <a class="button secondary" href="{{ url_for('support', show=show) }}">Clear</a>
+      {% endif %}
+    </form>
 
     <section class="mission-section support-list" aria-label="{{ views[show] }}">
       <ul class="card-grid support-grid">
         {% for job in jobs %}
           {% set working = job.assigned_to == current_user.id %}
+          {% set step = {'open': 1, 'in_progress': 2, 'done': 3}[job.status] %}
           <li class="mission-card support-job is-{{ job.status }} priority-{{ job.priority }}" id="job-{{ job.id }}">
-            <div class="quest-card-top">
+            <div class="support-job-head">
+              <span class="support-ticket" title="Ticket number">{{ ticket(job.id) }}</span>
               <span class="request-status support-status is-{{ job.status }}">{{ statuses[job.status] }}</span>
               <span class="request-kind-tag support-priority is-{{ job.priority }}">{{ priorities[job.priority] }}</span>
-              <span class="request-kind-tag">{{ categories.get(job.category, job.category) }}</span>
             </div>
             <h3>{{ job.title }}</h3>
+            <ol class="support-steps" aria-label="Progress">
+              <li class="{% if step >= 1 %}is-reached{% endif %}{% if step == 1 %} is-current{% endif %}"><span>Received</span></li>
+              <li class="{% if step >= 2 %}is-reached{% endif %}{% if step == 2 %} is-current{% endif %}"><span>In progress</span></li>
+              <li class="{% if step >= 3 %}is-reached is-current{% endif %}"><span>Done</span></li>
+            </ol>
+            <dl class="support-facts">
+              <dt>Kind of problem</dt><dd>{{ categories.get(job.category, job.category) }}</dd>
+              <dt>Where</dt><dd>{{ job.place or '–' }}</dd>
+              <dt>Asked by</dt><dd>{{ job.requester or 'a deleted account' }}</dd>
+              <dt>Received</dt><dd>{{ job.created_at[:16] }} UTC</dd>
+              <dt>{{ 'Done by' if job.status == 'done' else 'Working on it' }}</dt>
+              <dd>{% if job.status == 'open' %}<span class="mission-muted">Waiting for someone</span>
+                  {% else %}<strong>{{ 'you' if working else (job.helper or 'a deleted account') }}</strong>{% endif %}</dd>
+              {% if job.status == 'done' %}<dt>Finished</dt><dd>{{ job.updated_at[:16] }} UTC</dd>{% endif %}
+            </dl>
+            {% if job.details %}<p class="mission-text mission-details">{{ job.details }}</p>{% endif %}
             {% if job.image %}
               <a class="support-picture" href="{{ url_for('mission_image', name=job.image) }}" target="_blank" rel="noopener"
                  title="See the picture full size">
                 <img src="{{ url_for('mission_image', name=job.image) }}" alt="Picture of the problem" loading="lazy"></a>
             {% endif %}
-            {% if job.details %}<p class="mission-text mission-details">{{ job.details }}</p>{% endif %}
-            {% if job.place %}<p class="mission-when">📍 {{ job.place }}</p>{% endif %}
-            <p class="mission-muted">#{{ job.id }} · asked by {{ job.requester or 'a deleted account' }} · {{ job.created_at[:16] }} UTC</p>
-            {% if job.status != 'open' %}
-              <p class="mission-yours is-{{ job.status }}">{{ '🧑‍💻 Working on it:' if job.status == 'in_progress' else '✅ Done by' }}
-                <strong>{{ 'you' if working else (job.helper or 'a deleted account') }}</strong>
-                {% if job.status == 'done' %}<span class="mission-muted">{{ job.updated_at[:16] }} UTC</span>{% endif %}</p>
-            {% endif %}
-            {% if job.resolution %}<p class="request-note">{{ job.resolution }}</p>{% endif %}
+            {% if job.resolution %}<p class="request-note support-resolution"><strong>How it was fixed:</strong> {{ job.resolution }}</p>{% endif %}
 
             {% if current_user.is_admin or (job.requested_by == current_user.id and job.status != 'done') %}
               <details class="mission-fold support-edit-fold">
@@ -162,7 +196,8 @@
           </li>
         {% else %}
           <li class="mission-empty">
-            {% if show == 'taken' %}You aren't working on any jobs. Press Get job on one under To do.
+            {% if filters.q or filters.category or filters.priority %}No jobs match your search.
+            {% elif show == 'taken' %}You aren't working on any jobs. Press Get job on one under To do.
             {% elif show == 'mine' %}You haven't asked IT support for help yet.
             {% elif show == 'done' %}No finished jobs yet.
             {% else %}Nothing waiting. Everything is working! 🎉{% endif %}
@@ -174,36 +209,42 @@
     <section class="mission-section" id="job-new" aria-labelledby="job-new-heading">
       <div class="mission-card mission-form-card support-form">
         <h2 id="job-new-heading">Ask IT support for help</h2>
+        <p class="mission-muted">Fill in the three steps. You get a ticket number and are told when someone takes the job and when it's done.</p>
         <form class="request-form" action="{{ url_for('support_create') }}" method="post" enctype="multipart/form-data">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-          <label for="job-title">What's the problem?</label>
-          <input id="job-title" name="title" type="text" maxlength="120" required placeholder="The printer on floor 2 won't print"
-                 value="{{ form.title if form else '' }}">
-          <div class="mission-dates">
-            <div>
-              <label for="job-category">Kind of problem</label>
-              <select id="job-category" name="category">
-                {% for key, label in categories.items() %}
-                  <option value="{{ key }}" {% if form and form.category == key %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-              </select>
+          <fieldset class="support-step">
+            <legend><span aria-hidden="true">1</span> The problem</legend>
+            <label for="job-title">What's the problem?</label>
+            <input id="job-title" name="title" type="text" maxlength="120" required placeholder="The printer on floor 2 won't print"
+                   value="{{ form.title if form else '' }}">
+            <label for="job-category">Kind of problem</label>
+            <select id="job-category" name="category">
+              {% for key, label in categories.items() %}
+                <option value="{{ key }}" {% if form and form.category == key %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </fieldset>
+          <fieldset class="support-step">
+            <legend><span aria-hidden="true">2</span> How urgent?</legend>
+            <div class="support-urgency">
+              {% for key, label in priorities.items() %}
+                <label class="support-urgency-choice is-{{ key }}">
+                  <input type="radio" name="priority" value="{{ key }}" {% if (form.priority if form else 'normal') == key %}checked{% endif %}>
+                  <span><strong>{{ label }}</strong><small>{{ priority_hints[key] }}</small></span>
+                </label>
+              {% endfor %}
             </div>
-            <div>
-              <label for="job-priority">How urgent?</label>
-              <select id="job-priority" name="priority">
-                {% for key, label in priorities.items() %}
-                  <option value="{{ key }}" {% if (form.priority if form else 'normal') == key %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-              </select>
-            </div>
-          </div>
-          <label for="job-place">Where? <span class="optional">(optional: room, desk or computer name)</span></label>
-          <input id="job-place" name="place" type="text" maxlength="120" placeholder="Meeting room B" value="{{ form.place if form else '' }}">
-          <label for="job-details">Details <span class="optional">(optional: what happens, any error message)</span></label>
-          <textarea id="job-details" name="details" rows="4" maxlength="4000"
-                    placeholder="It shows “Paper jam” but there's no paper stuck.">{{ form.details if form else '' }}</textarea>
-          <label for="job-image">Picture <span class="optional">(optional: a screenshot or photo of the problem)</span></label>
-          <input id="job-image" name="image" type="file" accept="image/*,.heic,.heif">
+          </fieldset>
+          <fieldset class="support-step">
+            <legend><span aria-hidden="true">3</span> Where and what happens</legend>
+            <label for="job-place">Where? <span class="optional">(optional: room, desk or computer name)</span></label>
+            <input id="job-place" name="place" type="text" maxlength="120" placeholder="Meeting room B" value="{{ form.place if form else '' }}">
+            <label for="job-details">Details <span class="optional">(optional: what happens, any error message)</span></label>
+            <textarea id="job-details" name="details" rows="4" maxlength="4000"
+                      placeholder="It shows “Paper jam” but there's no paper stuck.">{{ form.details if form else '' }}</textarea>
+            <label for="job-image">Picture <span class="optional">(optional: a screenshot or photo of the problem)</span></label>
+            <input id="job-image" name="image" type="file" accept="image/*,.heic,.heif">
+          </fieldset>
           <div class="request-actions"><button type="submit">Send to IT support</button></div>
         </form>
       </div>
