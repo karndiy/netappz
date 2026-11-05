@@ -2126,6 +2126,23 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(store.job(job["id"])["title"], "Printer jams on floor 2")
         self.assertEqual(self.client.get("/support/9999.pdf").status_code, 404)
 
+    def test_job_sheet_labels_do_not_overlap_their_values(self):
+        # Request #41: the label column used to collapse, drawing labels on top of the values.
+        import pymupdf
+
+        import converters
+
+        rows = [("Job", "#7"), ("Kind of problem", "Laser เครื่องพิมพ์"), ("Asked by", "member · 2026-11-05 09:00 UTC")]
+        data = converters.job_sheet_pdf("IT support job: Printer", rows, [("Details", "Paper jam")])
+        with pymupdf.open(stream=data, filetype="pdf") as document:
+            words = document[0].get_text("words")
+        def left_edge(word):
+            return min(w[0] for w in words if w[4] == word)
+        def right_edge(word):
+            return max(w[2] for w in words if w[4] == word)
+        for label, value in (("Job", "#7"), ("problem", "Laser"), ("by", "member")):
+            self.assertLess(right_edge(label), left_edge(value))
+
     def test_missions_run_between_their_dates(self):
         from datetime import datetime, timedelta, timezone
         token = self._csrf()

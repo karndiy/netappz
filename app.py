@@ -236,7 +236,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.68.0"
+HELP_VERSION = "1.68.1"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -359,7 +359,7 @@ HELP_TOPICS = [
             "Can you fix it? Press Get job on a waiting job: it's yours and the person who asked is told. Press Mark as done when it's fixed, with a short note on what you did, or Hand back to let someone else take it.",
             "You're notified when someone takes your job and when it's done. If it still doesn't work, press Still not working to reopen it. You can remove your own job until someone takes it.",
             "Press ✏️ Edit on your job to change what's wrong, where, how urgent it is, the details or the picture, any time until it's done. Whoever is working on it is told.",
-            "Once someone has got the job, press 📄 PDF to download a job sheet with all its details and picture, to print or keep.",
+            "Once someone has got the job, press 📄 PDF to download a job sheet to print or keep: a table of labels and answers (Thai text included), then the details and picture.",
         ],
         "admin": [
             "Administrators are told about every new job, can edit any job (even a finished one), can mark any job as done or hand it back, and can remove any job.",
@@ -441,6 +441,14 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.68.1",
+        "date": "2026-11-05",
+        "changes": [
+            "The IT support job sheet PDF prints cleanly (request #41: edit PDF IT support, the table and letters were drawn on top of each other).",
+            "Labels such as Status, Where and Asked by now sit in their own column, so they no longer overlap the answers next to them.",
+        ],
+    },
     {
         "version": "1.68.0",
         "date": "2026-11-05",

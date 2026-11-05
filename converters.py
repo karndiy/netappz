@@ -217,7 +217,9 @@ def job_sheet_pdf(title, rows, sections, image=None):
         return "<br>".join(html.escape(line) for line in str(value).split("\n"))
 
     body = [f"<h1>{text(title)}</h1>", "<table>"]
-    body += [f"<tr><th>{text(label)}</th><td>{text(value)}</td></tr>" for label, value in rows]
+    # MuPDF ignores a percentage width on th and lets the label column collapse under the
+    # values (request #41), so the column gets a fixed width in points.
+    body += [f'<tr><th width="140">{text(label)}</th><td>{text(value)}</td></tr>' for label, value in rows]
     body.append("</table>")
     for heading, value in sections:
         if value:
@@ -239,7 +241,7 @@ def job_sheet_pdf(title, rows, sections, image=None):
         " h2 { font-size: 12pt; margin: 14pt 0 4pt; }"
         " table { border-collapse: collapse; width: 100%; }"
         " th, td { border: 1px solid #c7c7cc; padding: 4pt 6pt; text-align: left; vertical-align: top; }"
-        " th { width: 30%; background-color: #f2f2f7; }"
+        " th { background-color: #f2f2f7; }"
         " p { margin: 0; }"
     )
     output = io.BytesIO()
