@@ -266,7 +266,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.72.0"
+HELP_VERSION = "1.73.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -394,10 +394,11 @@ HELP_TOPICS = [
             "Once someone has got the job, press 📄 PDF to download a job sheet to print or keep: a table of labels and answers (Thai text included), then the details and picture.",
             "When Google Docs is connected, press 📝 Google Doc to make the job sheet as a Google Doc. The job then shows Open Google Doc and its link: press Copy link to paste it into a chat or email. Anyone with the link can view it. After changes, press Update Google Doc for a fresh one.",
             "When Google Docs is connected, press Make Google Sheet above the tabs for one Google Sheet listing every job, to do first: its ticket, problem, status, urgency, who asked and when, who is fixing it, the last change and its Google Doc link. Press Copy link to share it. It keeps the same link and updates by itself whenever a job changes; press Update Google Sheet to refresh it now.",
+            "In the Google Sheet the header row is bold and stays at the top, and each job's Status is colored: yellow for Waiting, blue for In progress and green for Done. How urgent is red for Urgent, orange for High and gray for Low. The colors need the Google Sheets API turned on in the same Google Cloud project as the Drive API.",
         ],
         "admin": [
             "Administrators are told about every new job, can edit any job (even a finished one), can mark any job as done or hand it back, and can remove any job.",
-            "To turn on Google Docs, open Settings → Google Docs and fill in an OAuth client ID and secret from the Google Cloud console (with the Google Drive API on) and a refresh token for the drive.file scope, for example from the OAuth 2.0 Playground. A Drive folder ID is optional.",
+            "To turn on Google Docs, open Settings → Google Docs and fill in an OAuth client ID and secret from the Google Cloud console (with the Google Drive API on, and the Google Sheets API for colors in the Google Sheet) and a refresh token for the drive.file scope, for example from the OAuth 2.0 Playground. A Drive folder ID is optional.",
         ],
     },
     {
@@ -477,6 +478,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.73.0",
+        "date": "2026-11-10",
+        "changes": [
+            "The IT support Google Sheet now colors each job's status the standard way (request #47: upgrade support system, Google Sheet highlight color status for standard).",
+            "Status is yellow for Waiting, blue for In progress and green for Done. How urgent is red for Urgent, orange for High and gray for Low.",
+            "The header row is bold and gray and stays at the top while you scroll. The colors need the Google Sheets API turned on next to the Drive API.",
+        ],
+    },
     {
         "version": "1.72.0",
         "date": "2026-11-10",
@@ -1376,6 +1386,9 @@ SUPPORT_PRIORITY_HINTS = {"low": "It can wait, nothing is stopped", "normal": "P
 SUPPORT_VIEWS = {"active": "To do", "mine": "My requests", "taken": "My jobs", "done": "Done", "all": "All"}
 SUPPORT_TEXT_LIMIT = 4000
 SUPPORT_SHEET_NAME = "IT support jobs"
+# Request #47: the Google Sheet fills Status and How urgent with the usual helpdesk colors (Google's light shades).
+SUPPORT_SHEET_STATUS_COLORS = {"open": "#FFF2CC", "in_progress": "#CFE2F3", "done": "#D9EAD3"}
+SUPPORT_SHEET_PRIORITY_COLORS = {"low": "#EFEFEF", "high": "#FCE5CD", "urgent": "#F4CCCC"}
 
 
 def support_ticket(job_id):
@@ -4581,8 +4594,12 @@ def create_app(test_config=None):
     def sync_support_sheet():
         """Put the job list in the Google Sheet (making it the first time); its link."""
         with support_sheet_lock:
+            highlights = {
+                2: {SUPPORT_STATUSES[key]: color for key, color in SUPPORT_SHEET_STATUS_COLORS.items()},
+                3: {SUPPORT_PRIORITIES[key]: color for key, color in SUPPORT_SHEET_PRIORITY_COLORS.items()},
+            }
             file_id, link = google_docs.save_sheet(chat.setting, SUPPORT_SHEET_NAME, support_sheet_rows(),
-                                                   chat.setting("SUPPORT_SHEET_ID"))
+                                                   chat.setting("SUPPORT_SHEET_ID"), highlights)
             settings_store.save({"SUPPORT_SHEET_ID": file_id, "SUPPORT_SHEET_LINK": link})
         return link
 

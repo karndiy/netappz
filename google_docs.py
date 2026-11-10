@@ -1,13 +1,15 @@
 """Google Docs: turn an HTML page into a Google Doc in Drive and share it by link (request #43), and
-keep a Google Sheet of rows up to date at the same link (request #46).
+keep a Google Sheet of rows up to date at the same link (request #46), its cells colored by status (request #47).
 
 The app signs in as one Google account with an OAuth client and a refresh token, set under
-Settings → Google Docs, so it needs no extra packages: only the Drive API over HTTPS.
+Settings → Google Docs, so it needs no extra packages: only the Drive API (and the Sheets API, for
+colors) over HTTPS.
 """
 
 import csv
 import io
 import json
+import logging
 import secrets
 import urllib.error
 import urllib.parse
@@ -18,9 +20,12 @@ UPLOAD_URL = ("https://www.googleapis.com/upload/drive/v3/files"
               "?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
 UPDATE_URL = ("https://www.googleapis.com/upload/drive/v3/files/{file_id}"
               "?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
+SHEETS_URL = "https://sheets.googleapis.com/v4/spreadsheets/{file_id}"
 PERMISSIONS_URL = "https://www.googleapis.com/drive/v3/files/{file_id}/permissions?supportsAllDrives=true"
+HEADER_COLOR = "#D9D9D9"
 SETTINGS = ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN")
 TIMEOUT = 30
+logger = logging.getLogger(__name__)
 
 
 class GoogleDocsError(Exception):
@@ -116,11 +121,63 @@ def csv_text(rows):
     return out.getvalue()
 
 
-def save_sheet(setting, name, rows, file_id=""):
+def _color(hex_color):
+    return {key: int(hex_color[i:i + 2], 16) / 255 for key, i in (("red", 1), ("green", 3), ("blue", 5))}
+
+
+def highlight_requests(sheet_id, rows, highlights):
+    """Sheets API requests: a bold gray header row that stays at the top, and each cell in the columns of
+    highlights ({column: {text: "#RRGGBB"}}) filled with its text's color. Older colors are cleared first."""
+    requests = [
+        {"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
+                                   "fields": "gridProperties.frozenRowCount"}},
+        {"repeatCell": {"range": {"sheetId": sheet_id}, "cell": {"userEnteredFormat": {}},
+                        "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.bold"}},
+        {"repeatCell": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1},
+                        "cell": {"userEnteredFormat": {"backgroundColor": _color(HEADER_COLOR),
+                                                       "textFormat": {"bold": True}}},
+                        "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.bold"}},
+    ]
+    for column, colors in sorted(highlights.items()):
+        cells = []
+        for row in rows[1:]:
+            fill = colors.get(row[column]) if column < len(row) else None
+            cells.append({"values": [{"userEnteredFormat": {"backgroundColor": _color(fill)}} if fill else {}]})
+        if cells:
+            requests.append({"updateCells": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": len(rows),
+                          "startColumnIndex": column, "endColumnIndex": column + 1},
+                "rows": cells, "fields": "userEnteredFormat.backgroundColor"}})
+    return requests
+
+
+def _highlight(token, file_id, rows, highlights):
+    """Color the sheet's cells. The rows are saved even if this fails (say the Sheets API is off)."""
+    url = SHEETS_URL.format(file_id=urllib.parse.quote(file_id, safe=""))
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        found = _call(urllib.request.Request(url + "?fields=sheets.properties.sheetId", headers=headers))
+        sheet_id = ((found.get("sheets") or [{}])[0].get("properties") or {}).get("sheetId", 0)
+        _call(urllib.request.Request(
+            url + ":batchUpdate", method="POST", headers={**headers, "Content-Type": "application/json"},
+            data=json.dumps({"requests": highlight_requests(sheet_id, rows, highlights)}).encode(),
+        ))
+    except GoogleDocsError as error:
+        logger.warning("Could not color the Google Sheet (is the Google Sheets API on?): %s", error)
+
+
+def save_sheet(setting, name, rows, file_id="", highlights=None):
     """Put rows into the Google Sheet file_id, keeping its link, or make a new shared one when there is
-    none or it has gone. Its ID and link."""
+    none or it has gone, then color the cells in highlights. Its ID and link."""
     token = _connect(setting)
     content = csv_text(rows)
+    file_id, link = _save_rows(setting, token, name, content, file_id)
+    if highlights:
+        _highlight(token, file_id, rows, highlights)
+    return file_id, link
+
+
+def _save_rows(setting, token, name, content, file_id):
     if file_id:
         body, multipart = _multipart({"name": name}, "text/csv", content)
         try:

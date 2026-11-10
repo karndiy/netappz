@@ -2218,8 +2218,12 @@ class FileManagerTests(unittest.TestCase):
         link = "https://docs.google.com/spreadsheets/d/sheet-1/edit"
         with mock.patch("google_docs.save_sheet", return_value=("sheet-1", link)) as save:
             self.client.post("/support/google-sheet", data={"_csrf_token": token})
-        setting, name, rows, file_id = save.call_args[0]
+        setting, name, rows, file_id, highlights = save.call_args[0]
         self.assertEqual(file_id, "")
+        # Request #47: Status and How urgent are colored the usual helpdesk way.
+        self.assertEqual(highlights[2], {"Waiting": "#FFF2CC", "In progress": "#CFE2F3", "Done": "#D9EAD3"})
+        self.assertEqual(highlights[3]["Urgent"], "#F4CCCC")
+        self.assertNotIn("Normal", highlights[3])
         self.assertEqual(rows[0][:3], ["Ticket", "Problem", "Status"])
         row = rows[1]
         for expected in (f'IT-{job["id"]:05d}', "=Printer jams", "In progress", "Urgent", "Room B",
@@ -2284,6 +2288,59 @@ class FileManagerTests(unittest.TestCase):
                              ("sheet-2", "https://docs.google.com/spreadsheets/d/sheet-2/edit"))
         self.assertIn('"mimeType": "application/vnd.google-apps.spreadsheet"', calls[2].data.decode("utf-8"))
         self.assertIn("/files/sheet-2/permissions", calls[3].full_url)
+
+    def test_google_sheet_status_colors(self):
+        # Request #47: after saving, the Sheets API colors the status cells; a failure there keeps the rows.
+        import google_docs
+
+        calls = []
+        answers = {}
+
+        class Answer(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def urlopen(request, timeout=None):
+            calls.append(request)
+            if request.full_url == google_docs.TOKEN_URL:
+                return Answer(b'{"access_token": "token-1"}')
+            if request.full_url.startswith("https://sheets.googleapis.com/"):
+                if answers.get("off"):
+                    raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", {}, io.BytesIO(b"{}"))
+                if request.get_method() == "GET":
+                    return Answer(b'{"sheets": [{"properties": {"sheetId": 7}}]}')
+                return Answer(b"{}")
+            return Answer(b'{"id": "sheet-1", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet-1/edit"}')
+
+        settings = {"GOOGLE_CLIENT_ID": "id", "GOOGLE_CLIENT_SECRET": "secret", "GOOGLE_REFRESH_TOKEN": "refresh"}
+        setting = lambda name: settings.get(name, "")  # noqa: E731
+        rows = [["Ticket", "Status"], ["IT-00001", "Waiting"], ["IT-00002", "Done"], ["IT-00003", "Other"]]
+        highlights = {1: {"Waiting": "#FFF2CC", "Done": "#D9EAD3"}}
+        with mock.patch("urllib.request.urlopen", urlopen):
+            self.assertEqual(google_docs.save_sheet(setting, "Jobs", rows, "sheet-1", highlights)[0], "sheet-1")
+            self.assertEqual(calls[2].get_method(), "GET")
+            self.assertIn("sheets.googleapis.com/v4/spreadsheets/sheet-1?", calls[2].full_url)
+            self.assertTrue(calls[3].full_url.endswith("/spreadsheets/sheet-1:batchUpdate"))
+            sent = json.loads(calls[3].data)["requests"]
+            self.assertEqual(sent[0]["updateSheetProperties"]["properties"],
+                             {"sheetId": 7, "gridProperties": {"frozenRowCount": 1}})
+            self.assertTrue(sent[2]["repeatCell"]["cell"]["userEnteredFormat"]["textFormat"]["bold"])
+            cells = sent[3]["updateCells"]
+            self.assertEqual(cells["range"], {"sheetId": 7, "startRowIndex": 1, "endRowIndex": 4,
+                                              "startColumnIndex": 1, "endColumnIndex": 2})
+            fills = [row["values"][0].get("userEnteredFormat", {}).get("backgroundColor") for row in cells["rows"]]
+            self.assertEqual(fills[0], {"red": 1.0, "green": 0xF2 / 255, "blue": 0xCC / 255})
+            self.assertEqual(fills[1], {"red": 0xD9 / 255, "green": 0xEA / 255, "blue": 0xD3 / 255})
+            self.assertIsNone(fills[2])
+
+            calls.clear()
+            answers["off"] = True
+            with self.assertLogs("google_docs", "WARNING"):
+                self.assertEqual(google_docs.save_sheet(setting, "Jobs", rows, "sheet-1", highlights),
+                                 ("sheet-1", "https://docs.google.com/spreadsheets/d/sheet-1/edit"))
 
     def test_google_docs_upload_and_share(self):
         import json as json_module
