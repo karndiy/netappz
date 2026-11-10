@@ -265,7 +265,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.70.0"
+HELP_VERSION = "1.71.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -305,6 +305,7 @@ HELP_TOPICS = [
             "Files is the second icon in the menu, just below Feed (the address is /files).",
             "Click a folder to open it. The path under the title (Home › folder › …) takes you back up.",
             "Press ＋ New to make a folder, upload files or upload a whole folder. Uploads start as soon as you choose the files. You can also drag files from your computer onto the page to upload them into the folder you are in.",
+            "While files upload or download, the Transfers panel in the bottom right shows a progress bar, how much is done and a Cancel button for each one. The page opens the folder again when uploads finish. Downloads over 1 GB use the browser's own download instead.",
             "Who can see uploads (in the ＋ New menu) picks Public (everyone) or Private (only you and administrators).",
             "The search box finds files and folders by name in the folder you are in and every folder inside it. Each result says where it is; ⋮ → Show file location opens its folder.",
             "Type narrows the list to folders, documents, spreadsheets, PDFs, images, videos and more; Owned by me shows only files you uploaded. Clear filters shows everything again.",
@@ -474,6 +475,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.71.0",
+        "date": "2026-11-10",
+        "changes": [
+            "Files shows progress when you upload and download (request #44: upgrade files to have progress when uploading and downloading).",
+            "A Transfers panel in the bottom right shows each upload and download with a progress bar, how much is done (for example 45% · 12.3 MB of 27.0 MB) and a Cancel button.",
+            "Downloads bigger than 1 GB still use the browser's own download, which shows its own progress.",
+        ],
+    },
     {
         "version": "1.70.0",
         "date": "2026-11-05",
@@ -5965,6 +5975,9 @@ def create_app(test_config=None):
             flash(f"Uploaded {saved} file(s).", "success")
         elif not uploads:
             flash("Choose at least one file to upload.", "error")
+        # The Files page uploads with a progress bar and then opens this address itself.
+        if request.headers.get("X-Upload-Progress"):
+            return jsonify(redirect=url_for("index", path=current or None))
         return redirect(url_for("index", path=current))
 
     @app.get("/download/<path:relative>")
@@ -5988,13 +6001,17 @@ def create_app(test_config=None):
                     continue
                 if item.is_file() and item.relative_to(root).as_posix() not in hidden:
                     archive.write(item, item.relative_to(target.parent))
+        # Say how big the ZIP is so the browser can show download progress.
+        size = archive_file.seek(0, os.SEEK_END)
         archive_file.seek(0)
-        return send_file(
+        response = send_file(
             archive_file,
             as_attachment=True,
             download_name=f"{target.name}.zip",
             mimetype="application/zip",
         )
+        response.content_length = size
+        return response
 
     convert_tools = {
         "word2pdf": converters.WORD_EXTENSIONS,

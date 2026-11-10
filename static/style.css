@@ -370,6 +370,22 @@ small { display: block; margin-top: 9px; color: var(--mac-muted); }
 .drive-drop > div { padding: 22px 30px; border-radius: var(--mac-radius-lg); background: var(--mac-accent); color: #fff; text-align: center; font-weight: 600; }
 .drive-drop span { font-size: 34px; }
 .drive-drop p { margin: 6px 0 0; }
+.transfers {
+  position: fixed; right: 16px; bottom: 16px; z-index: 60; width: min(360px, calc(100vw - 32px));
+  max-height: 50vh; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--mac-surface); border: 1px solid var(--mac-separator); border-radius: var(--mac-radius-lg); box-shadow: var(--mac-shadow-raised);
+}
+.transfers[hidden] { display: none; }
+.transfers-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--mac-separator); }
+.transfers-close { min-height: 0; padding: 2px 8px; background: transparent; color: var(--mac-text-2); border: 0; box-shadow: none; }
+.transfers-list { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; }
+.transfer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; padding: 8px 12px; }
+.transfer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transfer-cancel { min-height: 0; padding: 2px 8px; font-size: 12px; }
+.transfer-bar { grid-column: 1 / -1; width: 100%; height: 6px; accent-color: var(--mac-accent); }
+.transfer-status { grid-column: 1 / -1; color: var(--mac-text-2); }
+.transfer.is-failed .transfer-status { color: var(--mac-red-text); }
+@media (max-width: 700px) { .transfers { right: 8px; bottom: 8px; width: calc(100vw - 16px); } }
 @media (max-width: 900px) {
   .drive-items.is-list .drive-list-head, .drive-items.is-list .file-row { grid-template-columns: minmax(0, 1fr) 110px 90px 44px; }
   .drive-items.is-list .drive-col-owner { display: none; }

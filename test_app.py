@@ -82,6 +82,33 @@ class FileManagerTests(unittest.TestCase):
             self.assertEqual(archive.read("folder/note.txt"), b"hello")
         response.close()
 
+    def test_upload_with_progress_replies_with_json_and_zip_has_size(self):
+        token = self._csrf()
+        response = self.client.post(
+            "/upload",
+            data={"_csrf_token": token, "path": "", "files": (io.BytesIO(b"hello"), "hello.txt")},
+            content_type="multipart/form-data",
+            headers={"X-Upload-Progress": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"redirect": "/files"})
+        self.assertEqual((self.root / "hello.txt").read_bytes(), b"hello")
+        self.assertIn("Uploaded 1 file(s).", self.client.get("/files").get_data(as_text=True))
+        (self.root / "folder").mkdir()
+        (self.root / "folder" / "note.txt").write_text("hello")
+        response = self.client.get("/download/folder")
+        self.assertEqual(response.content_length, len(response.data))
+        response.close()
+
+    def test_files_page_has_transfer_progress(self):
+        (self.root / "folder").mkdir()
+        (self.root / "report.pdf").write_bytes(b"12345")
+        page = self.client.get("/files").get_data(as_text=True)
+        self.assertIn('id="transfers"', page)
+        self.assertIn('data-download="report.pdf" data-size="5"', page)
+        self.assertIn('data-download="folder.zip"', page)
+        self.assertIn("X-Upload-Progress", page)
+
     def test_no_login_is_required_and_path_traversal_is_rejected(self):
         self.assertEqual(self.client.get("/files").status_code, 200)
         self.assertEqual(self.client.get("/files?path=../outside").status_code, 400)

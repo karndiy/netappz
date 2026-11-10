@@ -10,7 +10,8 @@
   {% include "_sidebar.html" %}
   {# Files works like Google Drive (1.67.0): a New menu, search, type filters, sorting, list or grid view
      and a ⋮ menu on each item. Everything is plain links and forms; the script only adds drag and drop,
-     uploading as soon as files are chosen, and closing menus. #}
+     uploading as soon as files are chosen, and closing menus. Since 1.71.0 uploads and downloads show a
+     progress panel (bottom right); without JavaScript they still work as plain links and forms. #}
   {% set base = {"path": current or None, "q": query or None, "type": kind_filter or None,
                  "owner": "me" if mine_only else None} %}
   {% macro files_url() %}{{ url_for('index', **dict(base, **kwargs)) }}{% endmacro %}
@@ -133,7 +134,7 @@
       {% endif %}
       {% for entry in entries %}
         <div class="file-row kind-{{ entry.kind }}">
-          <a class="file-name" href="{% if entry.is_dir %}{{ url_for('index', path=entry.path) }}{% else %}{{ url_for('download', relative=entry.path) }}{% endif %}">
+          <a class="file-name" href="{% if entry.is_dir %}{{ url_for('index', path=entry.path) }}{% else %}{{ url_for('download', relative=entry.path) }}{% endif %}"{% if not entry.is_dir %} data-download="{{ entry.name }}" data-size="{{ entry.size }}"{% endif %}>
             <span class="file-icon" aria-hidden="true">{{ entry.icon }}</span>
             <span class="file-title">
               <span class="file-title-text">{{ entry.name }}</span>
@@ -153,9 +154,9 @@
             <div class="drive-menu-panel drive-menu-right file-actions">
               {% if entry.is_dir %}
                 <a class="drive-menu-item" href="{{ url_for('index', path=entry.path) }}">📂 Open</a>
-                <a class="drive-menu-item download-link" href="{{ url_for('download', relative=entry.path) }}">⬇️ Download ZIP</a>
+                <a class="drive-menu-item download-link" href="{{ url_for('download', relative=entry.path) }}" data-download="{{ entry.name }}.zip">⬇️ Download ZIP</a>
               {% else %}
-                <a class="drive-menu-item download-link" href="{{ url_for('download', relative=entry.path) }}">⬇️ Download</a>
+                <a class="drive-menu-item download-link" href="{{ url_for('download', relative=entry.path) }}" data-download="{{ entry.name }}" data-size="{{ entry.size }}">⬇️ Download</a>
               {% endif %}
               {% if query and entry.location != current %}
                 <a class="drive-menu-item" href="{{ url_for('index', path=entry.location or None) }}">📍 Show file location</a>
@@ -203,16 +204,165 @@
     <div class="drive-drop" id="drive-drop" hidden>
       <div><span aria-hidden="true">⬆️</span><p>Drop files to upload them to {{ '/' ~ current if current else 'Shared files' }}</p></div>
     </div>
+    <section class="transfers" id="transfers" aria-live="polite" hidden>
+      <header class="transfers-head">
+        <strong id="transfers-title">Transfers</strong>
+        <button type="button" class="transfers-close" id="transfers-close" aria-label="Close" title="Close">✕</button>
+      </header>
+      <ul class="transfers-list" id="transfers-list"></ul>
+    </section>
   </main>
   <script>
     (function () {
       var drive = document.getElementById("drive");
       var form = document.getElementById("upload-form");
       var drop = document.getElementById("drive-drop");
+      // Uploads and downloads show a progress bar, size and a Cancel button in the Transfers panel.
+      var panel = document.getElementById("transfers");
+      var list = document.getElementById("transfers-list");
+      var running = 0;
+      function sizeText(bytes) {
+        var units = ["B", "KB", "MB", "GB", "TB"], i = 0;
+        while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i += 1; }
+        return (i ? bytes.toFixed(1) : bytes) + " " + units[i];
+      }
+      function updateTitle() {
+        document.getElementById("transfers-title").textContent =
+          running ? running + " transfer" + (running === 1 ? "" : "s") + " in progress" : "Transfers done";
+      }
+      function addTransfer(icon, name, onCancel) {
+        var row = document.createElement("li");
+        row.className = "transfer";
+        row.innerHTML = '<span class="transfer-icon" aria-hidden="true"></span><span class="transfer-name"></span>' +
+          '<button type="button" class="transfer-cancel">Cancel</button>' +
+          '<progress class="transfer-bar" max="100"></progress><small class="transfer-status">Starting…</small>';
+        row.querySelector(".transfer-icon").textContent = icon;
+        row.querySelector(".transfer-name").textContent = name;
+        var bar = row.querySelector(".transfer-bar"), status = row.querySelector(".transfer-status");
+        var cancel = row.querySelector(".transfer-cancel");
+        cancel.addEventListener("click", onCancel);
+        list.insertBefore(row, list.firstChild);
+        panel.hidden = false; running += 1; updateTitle();
+        var finished = false;
+        return {
+          progress: function (done, total) {
+            if (total) {
+              var percent = Math.min(100, Math.floor(done * 100 / total));
+              bar.value = percent;
+              status.textContent = percent + "% · " + sizeText(done) + " of " + sizeText(total);
+            } else {
+              bar.removeAttribute("value");
+              status.textContent = sizeText(done);
+            }
+          },
+          finish: function (text, failed) {
+            if (finished) return;
+            finished = true; running -= 1; updateTitle();
+            cancel.remove();
+            if (!failed) bar.value = 100;
+            row.classList.add(failed ? "is-failed" : "is-done");
+            status.textContent = text;
+          },
+        };
+      }
+      document.getElementById("transfers-close").addEventListener("click", function () {
+        if (running && !window.confirm("Stop the transfers that are still running?")) return;
+        list.querySelectorAll(".transfer-cancel").forEach(function (button) { button.click(); });
+        list.textContent = ""; panel.hidden = true;
+      });
+      window.addEventListener("beforeunload", function (event) {
+        if (running) { event.preventDefault(); event.returnValue = ""; }
+      });
+
+      function uploadWithProgress(files) {
+        if (!window.FormData || !window.XMLHttpRequest) { form.submit(); return; }
+        var data = new FormData(form);
+        var total = 0;
+        Array.prototype.forEach.call(files, function (file) { total += file.size; });
+        var name = files.length === 1 ? files[0].name : files.length + " files";
+        var xhr = new XMLHttpRequest();
+        var item = addTransfer("⬆️", name, function () { xhr.abort(); });
+        form.querySelectorAll(".drive-file-input").forEach(function (input) { input.value = ""; });
+        xhr.open("POST", form.action);
+        xhr.setRequestHeader("X-Upload-Progress", "1");
+        xhr.upload.addEventListener("progress", function (event) {
+          item.progress(event.loaded, event.lengthComputable ? event.total : total);
+        });
+        xhr.upload.addEventListener("load", function () { item.progress(total, total); });
+        xhr.addEventListener("load", function () {
+          var reply = null;
+          try { reply = JSON.parse(xhr.responseText); } catch (error) { reply = null; }
+          if (xhr.status === 200 && reply && reply.redirect) {
+            item.finish("Uploaded · " + sizeText(total));
+            if (!running) window.location.assign(reply.redirect);
+          } else {
+            item.finish(xhr.status === 413 ? "Too large: uploads can be up to 5 GB." : "Upload failed (" + xhr.status + ").", true);
+          }
+        });
+        xhr.addEventListener("error", function () { item.finish("Upload failed: check the network.", true); });
+        xhr.addEventListener("abort", function () { item.finish("Cancelled", true); });
+        xhr.send(data);
+      }
+
+      // Downloads up to 1 GB are fetched with a progress bar, then saved; bigger ones use the browser's own download.
+      var progressLimit = 1024 * 1024 * 1024;
+      function saveBlob(blob, name) {
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = url; link.download = name;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+      }
+      function downloadWithProgress(link) {
+        var controller = new AbortController();
+        var item = addTransfer("⬇️", link.dataset.download, function () { controller.abort(); });
+        fetch(link.href, { signal: controller.signal, credentials: "same-origin" }).then(function (response) {
+          if (!response.ok) throw new Error("Download failed (" + response.status + ").");
+          var total = Number(response.headers.get("Content-Length")) || 0;
+          if (!response.body || total > progressLimit) {
+            controller.abort();
+            item.finish("Downloading in your browser…");
+            window.location.assign(link.href);
+            return null;
+          }
+          var reader = response.body.getReader(), chunks = [], done = 0;
+          function pump() {
+            return reader.read().then(function (step) {
+              if (step.done) return new Blob(chunks, { type: response.headers.get("Content-Type") || "" });
+              chunks.push(step.value); done += step.value.length;
+              item.progress(done, total);
+              return pump();
+            });
+          }
+          return pump().then(function (blob) {
+            saveBlob(blob, link.dataset.download);
+            item.finish("Downloaded · " + sizeText(blob.size));
+          });
+        }).catch(function (error) {
+          item.finish(error.name === "AbortError" ? "Cancelled" : error.message || "Download failed.", true);
+        });
+      }
+      if (window.fetch && window.AbortController && window.ReadableStream) {
+        drive.addEventListener("click", function (event) {
+          var link = event.target.closest("a[data-download]");
+          if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+          if (Number(link.dataset.size || 0) > progressLimit) return;
+          event.preventDefault();
+          var menu = link.closest(".drive-popup");
+          if (menu) menu.open = false;
+          downloadWithProgress(link);
+        });
+      }
+
       // Choosing files uploads them straight away, as in Drive.
       form.querySelector(".drive-upload-submit").hidden = true;
       form.querySelectorAll(".drive-file-input").forEach(function (input) {
-        input.addEventListener("change", function () { if (input.files.length) form.submit(); });
+        input.addEventListener("change", function () {
+          if (!input.files.length) return;
+          var details = form.closest(".drive-popup");
+          if (details) details.open = false;
+          uploadWithProgress(input.files);
+        });
       });
       // Only one menu open at a time; a click outside or Escape closes it.
       var popups = drive.querySelectorAll(".drive-popup");
@@ -245,7 +395,7 @@
         event.preventDefault(); depth = 0; drop.hidden = true;
         var input = document.getElementById("files");
         try { input.files = event.dataTransfer.files; } catch (error) { return; }
-        if (input.files.length) form.submit();
+        if (input.files.length) uploadWithProgress(input.files);
       });
     })();
   </script>
