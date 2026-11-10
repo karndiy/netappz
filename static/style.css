@@ -1933,6 +1933,10 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
   border: 1px solid var(--mac-separator); border-radius: 10px; background: var(--mac-fill); font-size: 13.5px; }
 .support-doc-link a { font-weight: 600; white-space: nowrap; }
 .support-doc-link input { flex: 1 1 180px; min-width: 0; margin: 0; font-size: 13px; }
+/* The Google Sheet of every job (request #46), above the tabs. */
+.support-sheet-link { margin-bottom: 14px; }
+.support-sheet-link > span { flex: 1 1 220px; }
+.support-sheet-link form { margin: 0; }
 .support-priority.is-high { background: var(--mac-orange-tint); color: var(--mac-orange-text); }
 .support-priority.is-urgent { background: var(--mac-red-tint); color: var(--mac-red-text); }
 .support-status.is-in_progress { background: var(--mac-purple-tint); color: var(--mac-purple-text); }

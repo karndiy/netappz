@@ -1,9 +1,12 @@
-"""Google Docs: turn an HTML page into a Google Doc in Drive and share it by link (request #43).
+"""Google Docs: turn an HTML page into a Google Doc in Drive and share it by link (request #43), and
+keep a Google Sheet of rows up to date at the same link (request #46).
 
 The app signs in as one Google account with an OAuth client and a refresh token, set under
 Settings → Google Docs, so it needs no extra packages: only the Drive API over HTTPS.
 """
 
+import csv
+import io
 import json
 import secrets
 import urllib.error
@@ -13,6 +16,8 @@ import urllib.request
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 UPLOAD_URL = ("https://www.googleapis.com/upload/drive/v3/files"
               "?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
+UPDATE_URL = ("https://www.googleapis.com/upload/drive/v3/files/{file_id}"
+              "?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink")
 PERMISSIONS_URL = "https://www.googleapis.com/drive/v3/files/{file_id}/permissions?supportsAllDrives=true"
 SETTINGS = ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN")
 TIMEOUT = 30
@@ -20,6 +25,10 @@ TIMEOUT = 30
 
 class GoogleDocsError(Exception):
     """Something went wrong talking to Google; the message can be shown to people."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status  # Google's HTTP status, when it answered.
 
 
 def configured(setting):
@@ -39,7 +48,7 @@ def _call(request):
         message = detail.get("error_description") or (detail.get("error") or {})
         if isinstance(message, dict):
             message = message.get("message", "")
-        raise GoogleDocsError(f"Google said: {message or error.reason} (HTTP {error.code}).") from None
+        raise GoogleDocsError(f"Google said: {message or error.reason} (HTTP {error.code}).", error.code) from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise GoogleDocsError("Could not reach Google. Check the server's internet connection.") from None
     except ValueError:
@@ -55,22 +64,30 @@ def access_token(client_id, client_secret, refresh_token):
     return token
 
 
-def create_doc(setting, name, html):
-    """Make a Google Doc named name from this HTML, let anyone with the link view it; its link."""
+def _connect(setting):
     if not configured(setting):
         raise GoogleDocsError("Google Docs isn't connected. An administrator can set it up under "
                               "Settings → Google Docs.")
-    token = access_token(*(setting(name) for name in SETTINGS))
-    metadata = {"name": name, "mimeType": "application/vnd.google-apps.document"}
+    return access_token(*(setting(name) for name in SETTINGS))
+
+
+def _multipart(metadata, content_type, content):
+    boundary = "netappz-" + secrets.token_hex(12)
+    body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(metadata)}\r\n"
+            f"--{boundary}\r\nContent-Type: {content_type}; charset=UTF-8\r\n\r\n{content}\r\n--{boundary}--\r\n")
+    return body.encode("utf-8"), f"multipart/related; boundary={boundary}"
+
+
+def _create_shared(setting, token, name, mime_type, content_type, content):
+    """Make a Google file from content, let anyone with the link view it; its ID and link."""
+    metadata = {"name": name, "mimeType": mime_type}
     folder = setting("GOOGLE_DRIVE_FOLDER")
     if folder:
         metadata["parents"] = [folder]
-    boundary = "netappz-" + secrets.token_hex(12)
-    body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(metadata)}\r\n"
-            f"--{boundary}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n{html}\r\n--{boundary}--\r\n")
+    body, multipart = _multipart(metadata, content_type, content)
     created = _call(urllib.request.Request(
-        UPLOAD_URL, data=body.encode("utf-8"), method="POST",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": f"multipart/related; boundary={boundary}"},
+        UPLOAD_URL, data=body, method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": multipart},
     ))
     if not created.get("id"):
         raise GoogleDocsError("Google did not make the document.")
@@ -79,4 +96,43 @@ def create_doc(setting, name, html):
         data=json.dumps({"role": "reader", "type": "anyone"}).encode(), method="POST",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
     ))
-    return created.get("webViewLink") or f"https://docs.google.com/document/d/{created['id']}/edit"
+    return created["id"], created.get("webViewLink")
+
+
+def create_doc(setting, name, html):
+    """Make a Google Doc named name from this HTML, let anyone with the link view it; its link."""
+    token = _connect(setting)
+    file_id, link = _create_shared(setting, token, name, "application/vnd.google-apps.document", "text/html", html)
+    return link or f"https://docs.google.com/document/d/{file_id}/edit"
+
+
+def csv_text(rows):
+    """Rows as CSV for a Google Sheet. Cells people typed that start like a formula stay plain text."""
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    for row in rows:
+        writer.writerow(["'" + cell if isinstance(cell, str) and cell[:1] in ("=", "+", "-", "@") else cell
+                         for cell in row])
+    return out.getvalue()
+
+
+def save_sheet(setting, name, rows, file_id=""):
+    """Put rows into the Google Sheet file_id, keeping its link, or make a new shared one when there is
+    none or it has gone. Its ID and link."""
+    token = _connect(setting)
+    content = csv_text(rows)
+    if file_id:
+        body, multipart = _multipart({"name": name}, "text/csv", content)
+        try:
+            updated = _call(urllib.request.Request(
+                UPDATE_URL.format(file_id=urllib.parse.quote(file_id, safe="")), data=body, method="PATCH",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": multipart},
+            ))
+        except GoogleDocsError as error:
+            if error.status not in (403, 404):  # Deleted, or no longer the app's to change: make a new one.
+                raise
+        else:
+            return file_id, updated.get("webViewLink") or f"https://docs.google.com/spreadsheets/d/{file_id}/edit"
+    file_id, link = _create_shared(setting, token, name, "application/vnd.google-apps.spreadsheet",
+                                   "text/csv", content)
+    return file_id, link or f"https://docs.google.com/spreadsheets/d/{file_id}/edit"

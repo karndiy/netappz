@@ -2196,6 +2196,95 @@ class FileManagerTests(unittest.TestCase):
         self.assertEqual(store.job(job["id"])["google_doc"], link)
         self.assertIn("Google said: no.", self.client.get("/support").get_data(as_text=True))
 
+    def test_support_jobs_listed_in_a_google_sheet(self):
+        # Request #46: one Google Sheet lists the jobs with times, status and Google Doc link, at the same link.
+        import google_docs
+
+        token = self._csrf()
+        store = self.app.extensions["support"]
+        self.client.post("/support", data={"_csrf_token": token, "title": "=Printer jams", "category": "printer",
+                                           "priority": "urgent", "place": "Room B"})
+        job = store.all()[0]
+        self.client.post(f"/support/{job['id']}/take", data={"_csrf_token": token})
+        store.set_google_doc(job["id"], "https://docs.google.com/document/d/abc/edit")
+        self.assertNotIn("/support/google-sheet", self.client.get("/support").get_data(as_text=True))
+        self.client.post("/settings/google", data={
+            "_csrf_token": token, "GOOGLE_CLIENT_ID": "id.apps.googleusercontent.com",
+            "GOOGLE_CLIENT_SECRET": "client-secret", "GOOGLE_REFRESH_TOKEN": "1//refresh"})
+        page = self.client.get("/support").get_data(as_text=True)
+        self.assertIn("/support/google-sheet", page)
+        self.assertIn("Make Google Sheet", page)
+
+        link = "https://docs.google.com/spreadsheets/d/sheet-1/edit"
+        with mock.patch("google_docs.save_sheet", return_value=("sheet-1", link)) as save:
+            self.client.post("/support/google-sheet", data={"_csrf_token": token})
+        setting, name, rows, file_id = save.call_args[0]
+        self.assertEqual(file_id, "")
+        self.assertEqual(rows[0][:3], ["Ticket", "Problem", "Status"])
+        row = rows[1]
+        for expected in (f'IT-{job["id"]:05d}', "=Printer jams", "In progress", "Urgent", "Room B",
+                         "https://docs.google.com/document/d/abc/edit"):
+            self.assertIn(expected, row)
+        self.assertRegex(row[7], r"^\d{4}-\d\d-\d\d \d\d:\d\d$")
+        page = self.client.get("/support").get_data(as_text=True)
+        self.assertIn(f'value="{link}" readonly', page)
+        self.assertIn("Update Google Sheet", page)
+
+        # A change to a job updates the same sheet in the background.
+        with mock.patch("google_docs.save_sheet", return_value=("sheet-1", link)) as save:
+            self.client.post(f"/support/{job['id']}/done", data={"_csrf_token": token})
+            self.app.extensions["support_sheet_thread"].join(5)
+        self.assertEqual(save.call_args[0][3], "sheet-1")
+        self.assertEqual(save.call_args[0][2][1][2], "Done")
+
+        with mock.patch("google_docs.save_sheet", side_effect=google_docs.GoogleDocsError("Google said: no.")):
+            self.client.post("/support/google-sheet", data={"_csrf_token": token})
+        self.assertIn("Google said: no.", self.client.get("/support").get_data(as_text=True))
+
+    def test_google_sheet_upload_update_and_remake(self):
+        import google_docs
+
+        calls = []
+        answers = {}
+
+        class Answer(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def urlopen(request, timeout=None):
+            calls.append(request)
+            if request.full_url == google_docs.TOKEN_URL:
+                return Answer(b'{"access_token": "token-1"}')
+            if request.get_method() == "PATCH":
+                if answers.get("gone"):
+                    raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, io.BytesIO(b"{}"))
+                return Answer(b'{"id": "sheet-1", "webViewLink": "https://docs.google.com/spreadsheets/d/sheet-1/edit"}')
+            if request.full_url.startswith("https://www.googleapis.com/upload/"):
+                return Answer(b'{"id": "sheet-2"}')
+            return Answer(b'{"id": "anyoneWithLink"}')
+
+        settings = {"GOOGLE_CLIENT_ID": "id", "GOOGLE_CLIENT_SECRET": "secret", "GOOGLE_REFRESH_TOKEN": "refresh"}
+        setting = lambda name: settings.get(name, "")  # noqa: E731
+        rows = [["Ticket", "Problem"], ["IT-00001", "=HYPERLINK(\"x\")"], ["IT-00002", "ไทย, เครื่องพิมพ์"]]
+        with mock.patch("urllib.request.urlopen", urlopen):
+            self.assertEqual(google_docs.save_sheet(setting, "Jobs", rows, "sheet-1"),
+                             ("sheet-1", "https://docs.google.com/spreadsheets/d/sheet-1/edit"))
+            body = calls[1].data.decode("utf-8")
+            self.assertIn("/files/sheet-1?", calls[1].full_url)
+            self.assertIn("text/csv", body)
+            self.assertIn("'=HYPERLINK", body)
+            self.assertIn('"ไทย, เครื่องพิมพ์"', body)
+            self.assertEqual(len(calls), 2)  # Updating keeps the link: nothing new to share.
+            calls.clear()
+            answers["gone"] = True
+            self.assertEqual(google_docs.save_sheet(setting, "Jobs", rows, "sheet-1"),
+                             ("sheet-2", "https://docs.google.com/spreadsheets/d/sheet-2/edit"))
+        self.assertIn('"mimeType": "application/vnd.google-apps.spreadsheet"', calls[2].data.decode("utf-8"))
+        self.assertIn("/files/sheet-2/permissions", calls[3].full_url)
+
     def test_google_docs_upload_and_share(self):
         import json as json_module
 

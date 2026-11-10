@@ -126,7 +126,8 @@ SETTING_GROUPS = [
     {
         "section": "google",
         "title": "Google Docs",
-        "description": "Lets IT support make a Google Doc of a job sheet and share its link. The documents "
+        "description": "Lets IT support make a Google Doc of a job sheet and share its link, and list every job "
+                       "in a Google Sheet. The files "
                        "are made in the Google account that the refresh token belongs to.",
         "fields": [
             {
@@ -166,7 +167,7 @@ SETTINGS_SECTIONS = [
     {"key": "telegram", "title": "Telegram bot", "icon": "✈️", "admin": True,
      "description": "Chat with the AI from your phone through a Telegram bot."},
     {"key": "google", "title": "Google Docs", "icon": "📄", "admin": True,
-     "description": "Connect a Google account so IT support job sheets can be shared as Google Docs."},
+     "description": "Connect a Google account so IT support job sheets can be shared as Google Docs, and jobs listed in a Google Sheet."},
     {"key": "announcements", "title": "Announcements", "icon": "📣", "admin": True,
      "description": "Messages that float at the top of every page, colored by how important they are."},
     {"key": "server", "title": "Server", "icon": "🖥️", "admin": True,
@@ -265,7 +266,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.71.0"
+HELP_VERSION = "1.72.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -392,6 +393,7 @@ HELP_TOPICS = [
             "Press ✏️ Edit on your job to change what's wrong, where, how urgent it is, the details or the picture, any time until it's done. Whoever is working on it is told.",
             "Once someone has got the job, press 📄 PDF to download a job sheet to print or keep: a table of labels and answers (Thai text included), then the details and picture.",
             "When Google Docs is connected, press 📝 Google Doc to make the job sheet as a Google Doc. The job then shows Open Google Doc and its link: press Copy link to paste it into a chat or email. Anyone with the link can view it. After changes, press Update Google Doc for a fresh one.",
+            "When Google Docs is connected, press Make Google Sheet above the tabs for one Google Sheet listing every job, to do first: its ticket, problem, status, urgency, who asked and when, who is fixing it, the last change and its Google Doc link. Press Copy link to share it. It keeps the same link and updates by itself whenever a job changes; press Update Google Sheet to refresh it now.",
         ],
         "admin": [
             "Administrators are told about every new job, can edit any job (even a finished one), can mark any job as done or hand it back, and can remove any job.",
@@ -475,6 +477,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.72.0",
+        "date": "2026-11-10",
+        "changes": [
+            "IT support can keep a to-do list in a Google Sheet (request #46: upgrade support to use a Google Sheet to list to-dos, showing time, status and the Google Doc link for each job).",
+            "Press Make Google Sheet above the IT support tabs. The sheet lists every job, to do first, with its ticket, status, urgency, who asked and when, who is fixing it, the last change and its Google Doc link.",
+            "The sheet keeps the same link, with a Copy link button, and updates by itself whenever a job changes. Update Google Sheet refreshes it now.",
+        ],
+    },
     {
         "version": "1.71.0",
         "date": "2026-11-10",
@@ -1364,6 +1375,7 @@ SUPPORT_PRIORITY_HINTS = {"low": "It can wait, nothing is stopped", "normal": "P
                           "high": "My work is slowed down", "urgent": "My work has stopped"}
 SUPPORT_VIEWS = {"active": "To do", "mine": "My requests", "taken": "My jobs", "done": "Done", "all": "All"}
 SUPPORT_TEXT_LIMIT = 4000
+SUPPORT_SHEET_NAME = "IT support jobs"
 
 
 def support_ticket(job_id):
@@ -4404,6 +4416,7 @@ def create_app(test_config=None):
         return render_template(
             "support.html", jobs=shown, show=show, views=SUPPORT_VIEWS,
             google_docs=google_docs.configured(chat.setting),
+            google_sheet=chat.setting("SUPPORT_SHEET_LINK"),
             filters={"q": query, "category": category, "priority": priority},
             counts={key: len(items) for key, items in groups.items()},
             waiting=sum(1 for job in jobs if job["status"] == "open"),
@@ -4459,6 +4472,7 @@ def create_app(test_config=None):
                                + (f" ({SUPPORT_PRIORITIES[priority].lower()})" if priority in ("high", "urgent") else "")
                                + f": “{title}”", url_for("support", _anchor=f"job-{job_id}"))
         activity_log.add(g.user["id"], "support", "asked for help", title)
+        support_sheet_later()
         flash("Job sent to IT support. You're notified when someone takes it and when it's done.", "success")
         return redirect(url_for("support", show="mine", _anchor=f"job-{job_id}"), code=303)
 
@@ -4485,6 +4499,7 @@ def create_app(test_config=None):
             notification_store.add([job["assigned_to"]], g.user["id"], "support",
                                    f"{g.user['username']} changed the IT support job “{fields['title']}”",
                                    url_for("support", show="taken", _anchor=f"job-{job_id}"))
+        support_sheet_later()
         flash(f"“{fields['title']}” is updated.", "success")
         return support_back(job_id)
 
@@ -4540,9 +4555,65 @@ def create_app(test_config=None):
             flash(f"Could not make the Google Doc. {error}", "error")
             return support_back(job_id)
         support_store.set_google_doc(job_id, link)
+        support_sheet_later()
         activity_log.add(g.user["id"], "support", "made a Google Doc", job["title"])
         flash("The Google Doc is ready. Press Copy link to share it.", "success")
         return support_back(job_id)
+
+    # Request #46: one Google Sheet lists every job (to do first) with its times, status and Google Doc link.
+    # It keeps the same link: pressing Update, and every change to a job, puts the list in it again.
+    support_sheet_lock = threading.Lock()
+
+    def support_sheet_rows():
+        rows = [["Ticket", "Problem", "Status", "How urgent", "Kind of problem", "Where", "Asked by",
+                 "Asked at (UTC)", "Working on it / done by", "Last change (UTC)", "Google Doc"]]
+        for job in support_store.all():
+            rows.append([
+                support_ticket(job["id"]), job["title"], SUPPORT_STATUSES.get(job["status"], job["status"]),
+                SUPPORT_PRIORITIES.get(job["priority"], job["priority"]),
+                SUPPORT_CATEGORIES.get(job["category"], job["category"]), job["place"],
+                job["requester"] or "a deleted account", job["created_at"][:16],
+                (job["helper"] or "") if job["status"] != "open" else "", job["updated_at"][:16],
+                job["google_doc"] if job["status"] != "open" else "",
+            ])
+        return rows
+
+    def sync_support_sheet():
+        """Put the job list in the Google Sheet (making it the first time); its link."""
+        with support_sheet_lock:
+            file_id, link = google_docs.save_sheet(chat.setting, SUPPORT_SHEET_NAME, support_sheet_rows(),
+                                                   chat.setting("SUPPORT_SHEET_ID"))
+            settings_store.save({"SUPPORT_SHEET_ID": file_id, "SUPPORT_SHEET_LINK": link})
+        return link
+
+    def support_sheet_later():
+        """After a job changes, bring the Google Sheet up to date in the background, once there is one."""
+        if not chat.setting("SUPPORT_SHEET_ID") or not google_docs.configured(chat.setting):
+            return
+
+        def run():
+            try:
+                sync_support_sheet()
+            except google_docs.GoogleDocsError as error:
+                app.logger.warning("Could not update the IT support Google Sheet: %s", error)
+            except Exception:
+                app.logger.exception("Could not update the IT support Google Sheet")
+
+        thread = threading.Thread(target=run, name="support-sheet", daemon=True)
+        app.extensions["support_sheet_thread"] = thread  # Tests wait for it.
+        thread.start()
+
+    @app.post("/support/google-sheet")
+    def support_google_sheet():
+        """Make or update the Google Sheet of jobs now, and show its link to copy."""
+        try:
+            sync_support_sheet()
+        except google_docs.GoogleDocsError as error:
+            flash(f"Could not update the Google Sheet. {error}", "error")
+            return support_back()
+        activity_log.add(g.user["id"], "support", "updated the Google Sheet", SUPPORT_SHEET_NAME)
+        flash("The Google Sheet of jobs is up to date. Press Copy link to share it.", "success")
+        return support_back()
 
     @app.post("/support/<int:job_id>/take")
     def support_take(job_id):
@@ -4559,6 +4630,7 @@ def create_app(test_config=None):
                                    f"{g.user['username']} is working on your IT support job “{job['title']}”",
                                    url_for("support", show="mine", _anchor=f"job-{job_id}"))
             activity_log.add(g.user["id"], "support", "took a job", job["title"])
+            support_sheet_later()
             flash(f"You got the job “{job['title']}”. Press Mark as done when it's fixed.", "success")
         return support_back(job_id)
 
@@ -4570,6 +4642,7 @@ def create_app(test_config=None):
             if job["status"] != "in_progress" or (job["assigned_to"] != g.user["id"] and not g.user["is_admin"]):
                 abort(403, "Only the person working on a job, or an administrator, can hand it back.")
             support_store.set_status(job_id, "open", None, "")
+            support_sheet_later()
             flash(f"“{job['title']}” is waiting for someone to take it again.", "success")
         return support_back(job_id)
 
@@ -4590,6 +4663,7 @@ def create_app(test_config=None):
                                    + (f": {note}" if note else ""),
                                    url_for("support", show="mine", _anchor=f"job-{job_id}"))
             activity_log.add(g.user["id"], "support", "finished a job", job["title"])
+            support_sheet_later()
             flash(f"“{job['title']}” is done. {job['requester'] or 'The person who asked'} has been told.", "success")
         return support_back(job_id)
 
@@ -4605,6 +4679,7 @@ def create_app(test_config=None):
             else:
                 helper = job["assigned_to"]
                 support_store.set_status(job_id, "in_progress" if helper else "open", helper, "")
+                support_sheet_later()
                 notification_store.add([helper] if helper else user_store.admin_ids(), g.user["id"], "support",
                                        f"{g.user['username']} reopened the IT support job “{job['title']}”",
                                        url_for("support", _anchor=f"job-{job_id}"))
@@ -4619,6 +4694,7 @@ def create_app(test_config=None):
                 abort(403, "You can only remove your own job before someone takes it.")
             support_store.delete(job_id)
             remove_mission_image(job["image"])
+            support_sheet_later()
             flash("Job removed.", "success")
         return support_back()
 

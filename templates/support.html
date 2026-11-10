@@ -35,6 +35,26 @@
         <strong>{{ counts.done }}</strong><span>done</span></li>
     </ul>
 
+    {% if google_docs %}
+      <div class="support-doc-link support-sheet-link" id="job-sheet">
+        {% if google_sheet %}
+          <a href="{{ google_sheet }}" target="_blank" rel="noopener">📊 Open Google Sheet</a>
+          <label class="visually-hidden" for="support-sheet-url">Google Sheet link</label>
+          <input id="support-sheet-url" type="text" value="{{ google_sheet }}" readonly>
+          <button class="secondary" type="button" data-copy-link="support-sheet-url">Copy link</button>
+        {% else %}
+          <span>📊 List every job, its times, status and Google Doc in a Google Sheet to share.</span>
+        {% endif %}
+        <form action="{{ url_for('support_google_sheet') }}" method="post">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="show" value="{{ show }}">
+          <button class="secondary" type="submit"
+                  title="The sheet also updates by itself whenever a job changes">
+            {% if google_sheet %}Update Google Sheet{% else %}Make Google Sheet{% endif %}</button>
+        </form>
+      </div>
+    {% endif %}
+
     <nav class="support-tabs" aria-label="Which jobs to show">
       {% for key, label in views.items() %}
         <a href="{{ url_for('support', show=key, q=filters.q or None, category=filters.category or None, priority=filters.priority or None) }}"{% if key == show %} aria-current="page"{% endif %}>{{ label }} <span>{{ counts[key] }}</span></a>
