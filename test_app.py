@@ -2767,6 +2767,59 @@ class FileManagerTests(unittest.TestCase):
         self.client.post("/settings/notifications", data={"_csrf_token": token, "show_balance": "1"})
         self.assertIn("topbar-coins", self.client.get("/").get_data(as_text=True))
 
+    def test_mediaz_plays_the_songs_and_videos_people_can_see(self):
+        token = self._csrf()
+        users = self.app.extensions["users"]
+        member_id = users.add("member", "member-password")
+        (self.root / "music" / "rock").mkdir(parents=True)
+        (self.root / "music" / "rock" / "Song One.mp3").write_bytes(b"0123456789")
+        (self.root / "Clip.mp4").write_bytes(b"video")
+        (self.root / "Talk.opus").write_bytes(b"opus")
+        (self.root / "readme.txt").write_text("not media")
+        self.client.post("/upload", data={"_csrf_token": token, "path": "", "visibility": "private",
+                                          "files": (io.BytesIO(b"mine"), "Secret.wav")},
+                         content_type="multipart/form-data")
+
+        # Request #48: Mediaz is in the side menu and lists only audio and video, folder by folder.
+        page = self.client.get("/mediaz").get_data(as_text=True)
+        self.assertIn('class="sidebar-link" href="/mediaz" title="Mediaz" aria-current="page"', page)
+        self.assertIn("mediaz.js", page)
+        self.assertIn('data-url="/mediaz/play/music/rock/Song%20One.mp3" data-kind="audio"', page)
+        self.assertIn('data-url="/mediaz/play/Clip.mp4" data-kind="video"', page)
+        self.assertIn("Talk", page)
+        self.assertIn("Secret", page)
+        self.assertNotIn("readme", page)
+        self.assertLess(page.index("Clip"), page.index("Song One"))
+        self.assertIn('accept="audio/*,video/*,.mp3', page)
+
+        # Files stream for the player, with ranges so people can jump around, and aren't counted as downloads.
+        response = self.client.get("/mediaz/play/music/rock/Song One.mp3", headers={"Range": "bytes=2-5"})
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.data, b"2345")
+        self.assertEqual(response.mimetype, "audio/mpeg")
+        self.assertNotIn("attachment", response.headers.get("Content-Disposition", ""))
+        response.close()
+        response = self.client.get("/mediaz/play/Talk.opus")
+        self.assertEqual(response.mimetype, "audio/ogg")
+        response.close()
+        self.assertEqual(self.client.get("/mediaz/play/readme.txt").status_code, 404)
+        self.assertEqual(self.client.get("/mediaz/play/missing.mp3").status_code, 404)
+        self.assertEqual(self.client.get("/mediaz/play/../outside.mp3").status_code, 400)
+
+        # Someone else's private song is left out and can't be played.
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = member_id
+        page = self.client.get("/mediaz").get_data(as_text=True)
+        self.assertNotIn("Secret", page)
+        self.assertIn("Song One", page)
+        self.assertEqual(self.client.get("/mediaz/play/Secret.wav").status_code, 404)
+
+        # With nothing to play, the page says how to add some.
+        for item in self.root.iterdir():
+            shutil.rmtree(item) if item.is_dir() else item.unlink()
+        page = self.client.get("/mediaz").get_data(as_text=True)
+        self.assertIn('id="mediaz-empty">No songs or videos yet', page)
+
     def test_side_menu_icons_and_light_dark_theme_setting(self):
         token = self._csrf()
         page = self.client.get("/notes").get_data(as_text=True)

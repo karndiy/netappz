@@ -1994,3 +1994,46 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 .is-warning .dashboard-meter span { background: var(--mac-orange); }
 .is-problem .dashboard-meter span { background: var(--mac-red); }
 .dashboard-refresh { margin-top: 16px; }
+
+/* Mediaz (1.74.0): a Winamp-style player. The player keeps its dark, lit look in both themes. */
+.mediaz-page { max-width: 880px; }
+.mediaz-player { margin-top: 18px; padding: 14px; border-radius: var(--mac-radius-lg); background: linear-gradient(#3a3d4a, #23252e); color: #d8dbe6; box-shadow: var(--mac-shadow-raised); }
+.mediaz-screen { position: relative; border: 1px solid #000; border-radius: 6px; background: #000; overflow: hidden; }
+.mediaz-screen video { display: none; width: 100%; max-height: 60vh; background: #000; }
+.mediaz-player.is-video .mediaz-screen video { display: block; }
+.mediaz-player.is-video #mediaz-visual { display: none; }
+#mediaz-visual { display: block; width: 100%; height: 80px; }
+.mediaz-display { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 8px 12px; background: #0b0f0b; font-family: var(--mac-mono); color: #2fdc4b; }
+.mediaz-time { font-size: 26px; letter-spacing: 1px; }
+.mediaz-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
+.mediaz-state { font-size: 12px; color: #9fe6a9; }
+.mediaz-seek { width: 100%; margin: 12px 0 6px; accent-color: #e4d42a; }
+.mediaz-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.mediaz-transport { display: flex; gap: 4px; }
+.mediaz-transport button { min-width: 46px; padding: 8px 10px; background: linear-gradient(#5b5f70, #3b3e4b); border: 1px solid #15161b; color: #fff; font-size: 17px; }
+.mediaz-transport button:hover { background: linear-gradient(#6c7085, #474a59); }
+.mediaz-volume { display: flex; align-items: center; gap: 6px; margin: 0; color: #d8dbe6; font-weight: 400; }
+.mediaz-volume input { width: 120px; accent-color: #2fdc4b; }
+.mediaz-toggles { display: flex; gap: 4px; }
+.mediaz-toggles button { min-height: 38px; padding: 6px 10px; font-size: 13px; background: #2b2d36; border-color: #15161b; color: #c4c7d2; }
+.mediaz-toggles button[aria-pressed="true"] { color: #2fdc4b; border-color: #2fdc4b; }
+.mediaz-playlist { margin-top: 16px; padding: 14px; border: 1px solid var(--mac-separator); border-radius: var(--mac-radius-lg); background: var(--mac-surface); }
+.mediaz-list-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.mediaz-list-top h2 { margin: 0; font-size: 18px; }
+.mediaz-list-top input[type="search"] { flex: 1 1 180px; width: auto; }
+.mediaz-open { margin: 0; font-weight: 400; }
+.mediaz-count { color: var(--mac-muted); font-weight: 400; font-size: 14px; }
+.mediaz-tracks { margin: 12px 0 0; padding: 0; list-style: none; max-height: 50vh; overflow-y: auto; }
+.mediaz-track { display: flex; width: 100%; min-height: 40px; gap: 10px; padding: 8px 10px; border-radius: 6px; background: transparent; color: var(--mac-text); text-align: left; white-space: normal; }
+.mediaz-track:hover { background: var(--mac-fill); }
+.mediaz-track[aria-current="true"] { background: var(--mac-accent-tint); color: var(--mac-accent); font-weight: 600; }
+.mediaz-track-name { flex: 1; overflow-wrap: anywhere; }
+.mediaz-track-folder { color: var(--mac-muted); font-size: 13px; overflow-wrap: anywhere; }
+.mediaz-note, .mediaz-empty { margin: 12px 0 0; color: var(--mac-muted); font-size: 13px; }
+@media (max-width: 600px) {
+  .mediaz-time { font-size: 20px; }
+  .mediaz-display { grid-template-columns: auto 1fr; }
+  .mediaz-state { grid-column: 1 / -1; }
+  .mediaz-transport { flex: 1 1 100%; justify-content: space-between; }
+  .mediaz-transport button { flex: 1; min-width: 0; }
+}

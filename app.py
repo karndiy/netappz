@@ -199,6 +199,7 @@ TRANSLATIONS = {
                 "la": "Convertere"},
     "Support": {"th": "แจ้งซ่อม IT", "lo": "ແຈ້ງສ້ອມ IT", "zh": "IT 支持", "ru": "IT-поддержка", "es": "Soporte TI",
                 "la": "Auxilium IT"},
+    "Mediaz": {"th": "Mediaz", "lo": "Mediaz", "zh": "Mediaz", "ru": "Mediaz", "es": "Mediaz", "la": "Mediaz"},
     "Games": {"th": "เกม", "lo": "ເກມ", "zh": "游戏", "ru": "Игры", "es": "Juegos", "la": "Ludi"},
     "Missions": {"th": "ภารกิจ", "lo": "ພາລະກິດ", "zh": "任务", "ru": "Миссии", "es": "Misiones", "la": "Munera"},
     "Update log": {"th": "บันทึกอัปเดต", "lo": "ບັນທຶກການອັບເດດ", "zh": "更新日志", "ru": "Журнал обновлений",
@@ -266,11 +267,11 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.73.0"
+HELP_VERSION = "1.74.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
-        "summary": "Network Files is a shared space for your team: files, posts, notes, an AI chat, converters, missions and points, IT support and games.",
+        "summary": "Network Files is a shared space for your team: files, posts, notes, an AI chat, converters, missions and points, IT support, games and a media player.",
         "steps": [
             "Open the app at http://netappz.local from any phone, tablet or computer on the same network.",
             "Sign in with your username and password. No account yet? Choose Sign up on the sign-in page; an administrator may need to approve it before you can sign in.",
@@ -416,6 +417,18 @@ HELP_TOPICS = [
         "admin": ["Administrators can cancel any room that is waiting for a player."],
     },
     {
+        "key": "mediaz", "title": "Mediaz: music and video player", "icon": "🎧", "endpoint": "mediaz_page",
+        "summary": "A Winamp-style player for the songs and videos in Files, or on your own device.",
+        "steps": [
+            "Open Mediaz in the menu. The playlist lists every song and video in Files that you can see, folder by folder. Press one to play it.",
+            "Use the buttons for previous, play, pause, stop and next, or the keys Z, X, C, V and B as in Winamp. The space bar pauses. Drag the bar under the display to jump anywhere.",
+            "Shuffle (S) plays the list in a random order and Repeat (R) starts again at the end. The volume, Shuffle and Repeat are remembered on this device.",
+            "Videos show in the display; songs show moving spectrum bars. ⛶ shows a video full screen.",
+            "Open from this device adds songs and videos from your computer or phone to the playlist. They play in your browser and are not uploaded.",
+            "Mediaz plays whatever your browser can: MP3, M4A/AAC, WAV, FLAC, OGG/Opus, MP4 and WebM almost everywhere. Formats such as WMA, AVI or MKV only play on some devices; if one can't play, Mediaz says so and moves on.",
+        ],
+    },
+    {
         "key": "wallet", "title": "Wallet", "icon": "🪙", "endpoint": "wallet",
         "summary": "Your points account: balance, deposits, transfers, exchanges and the coin economy.",
         "steps": [
@@ -478,6 +491,16 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.74.0",
+        "date": "2026-11-18",
+        "changes": [
+            "New Mediaz page in the menu: a music and video player in the style of Winamp (request #48: add a menu named Mediaz to play media files like Winamp).",
+            "It lists every song and video in Files that you can see, with play, pause, stop, previous and next (also the keys Z, X, C, V and B), a position bar, volume, shuffle, repeat and search.",
+            "Videos play in the display and songs show moving spectrum bars. Open from this device plays your own files without uploading them.",
+            "It plays every format your browser can, such as MP3, M4A, WAV, FLAC, OGG, Opus, MP4 and WebM. Files also know more audio and video types now, such as Opus, WMA, MPEG and 3GP.",
+        ],
+    },
     {
         "version": "1.73.0",
         "date": "2026-11-10",
@@ -1290,7 +1313,7 @@ def duration_text(seconds):
     return f"{minutes} min"
 # Settings → Activity log: what people do in Notes and Chat.
 ACTIVITY_AREAS = {"notes": "Notes", "chat": "Chat", "feed": "Feed", "convert": "Convert", "files": "Files",
-                  "games": "Games", "support": "IT support"}
+                  "games": "Games", "support": "IT support", "mediaz": "Mediaz"}
 ACTIVITY_DETAIL = 300  # characters of a note title or chat message kept in the log
 ACTIVITY_KEEP_DAYS = 365
 # Settings → Chat AI: replies that failed, with the technical cause, for administrators.
@@ -1312,8 +1335,10 @@ FILE_KINDS = {
     "slides": ("Presentations", "📽️", (".ppt", ".pptx", ".odp", ".key")),
     "pdf": ("PDFs", "📕", (".pdf",)),
     "image": ("Images", "🖼️", (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp", ".svg", ".tif", ".tiff")),
-    "video": ("Videos", "🎬", (".mp4", ".m4v", ".mov", ".webm", ".avi", ".mkv", ".wmv")),
-    "audio": ("Audio", "🎵", (".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")),
+    "video": ("Videos", "🎬", (".mp4", ".m4v", ".mov", ".webm", ".avi", ".mkv", ".wmv", ".ogv", ".3gp", ".mpg",
+                               ".mpeg", ".ts", ".flv")),
+    "audio": ("Audio", "🎵", (".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg", ".oga", ".opus", ".weba", ".wma",
+                              ".aif", ".aiff", ".mid", ".midi", ".amr")),
     "archive": ("Archives", "🗜️", (".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz")),
     "code": ("Code", "💻", (".py", ".js", ".ts", ".html", ".css", ".json", ".xml", ".yml", ".yaml", ".sh", ".sql",
                             ".java", ".c", ".cpp", ".h", ".go", ".rs", ".php", ".rb")),
@@ -1323,6 +1348,17 @@ FILE_KIND_BY_EXTENSION = {ext: kind for kind, (_, _, exts) in FILE_KINDS.items()
 FILE_SORTS = {"name": "Name", "modified": "Last modified", "size": "File size"}
 FILE_VIEWS = ("list", "grid")
 FILE_SEARCH_LIMIT = 200
+# Mediaz (1.74.0): a Winamp-style player for the audio and video files in Files. It lists at most this many,
+# and sends each with a media type the browser understands, since Python doesn't know some of them.
+MEDIAZ_LIMIT = 1000
+MEDIAZ_TYPES = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac",
+                ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg", ".weba": "audio/webm",
+                ".wav": "audio/wav", ".wma": "audio/x-ms-wma", ".aif": "audio/aiff", ".aiff": "audio/aiff",
+                ".mid": "audio/midi", ".midi": "audio/midi", ".amr": "audio/amr",
+                ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+                ".ogv": "video/ogg", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo", ".wmv": "video/x-ms-wmv",
+                ".3gp": "video/3gpp", ".mpg": "video/mpeg", ".mpeg": "video/mpeg", ".ts": "video/mp2t",
+                ".flv": "video/x-flv"}
 
 
 def file_kind(path):
@@ -6105,6 +6141,48 @@ def create_app(test_config=None):
         )
         response.content_length = size
         return response
+
+    # ---------------------------------------------------------------- Mediaz
+
+    def mediaz_tracks():
+        """Every audio and video file in Files this person may see, in folder order."""
+        found = []
+        for directory, folders, names in os.walk(root):
+            folders[:] = sorted(name for name in folders if not (Path(directory) / name).is_symlink())
+            for name in sorted(names, key=str.lower):
+                path = Path(directory) / name
+                if not path.is_symlink() and file_kind(path) in ("audio", "video"):
+                    found.append(path)
+        tracks = []
+        for start in range(0, len(found), 500):  # A few hundred paths per query keeps SQLite happy.
+            chunk = {path.relative_to(root).as_posix(): path for path in found[start:start + 500]}
+            metas = file_store.for_paths(chunk)
+            for relative, path in chunk.items():
+                if not file_visible(metas.get(relative)):
+                    continue
+                folder = path.parent.relative_to(root).as_posix()
+                tracks.append({"path": relative, "name": path.stem, "kind": file_kind(path),
+                               "folder": "" if folder == "." else folder,
+                               "url": url_for("mediaz_play", relative=relative)})
+                if len(tracks) >= MEDIAZ_LIMIT:
+                    return tracks
+        return tracks
+
+    @app.get("/mediaz")
+    def mediaz_page():
+        return render_template("mediaz.html", tracks=mediaz_tracks(), limit=MEDIAZ_LIMIT,
+                               accept=",".join(["audio/*", "video/*", *MEDIAZ_TYPES]))
+
+    @app.get("/mediaz/play/<path:relative>")
+    def mediaz_play(relative):
+        """Streams one file to the player. Range requests let people jump anywhere in a song or video."""
+        target = resolve_path(relative)
+        relative = normalized_relative(relative)
+        if not target.is_file() or file_kind(target) not in ("audio", "video"):
+            abort(404)
+        if not file_visible(file_store.get(relative)):
+            abort(404)
+        return send_file(target, mimetype=MEDIAZ_TYPES.get(target.suffix.lower()), conditional=True)
 
     convert_tools = {
         "word2pdf": converters.WORD_EXTENSIONS,

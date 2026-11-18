@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="{{ lang }}" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mediaz · Network Files</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  {% include "_sidebar.html" %}
+  <main class="container mediaz-page">
+    <section class="heading missions-hero">
+      <div>
+        <h1>Mediaz</h1>
+        <p class="page-description">Play the music and videos in Files, or open some from this device, in a Winamp-style player with a playlist.</p>
+      </div>
+    </section>
+
+    {# The player, in the classic style: a lit display, the transport buttons and the playlist below. #}
+    <section class="mediaz-player" aria-label="Player">
+      <div class="mediaz-screen">
+        <video id="mediaz-media" playsinline preload="metadata"></video>
+        <canvas id="mediaz-visual" width="300" height="80" aria-hidden="true"></canvas>
+        <div class="mediaz-display">
+          <span class="mediaz-time" id="mediaz-time">00:00</span>
+          <div class="mediaz-title" aria-live="polite"><span id="mediaz-title">Choose a song or video below</span></div>
+          <span class="mediaz-state" id="mediaz-state">■ Stopped</span>
+        </div>
+      </div>
+      <input class="mediaz-seek" id="mediaz-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position">
+      <div class="mediaz-controls">
+        <div class="mediaz-transport">
+          <button type="button" data-action="prev" title="Previous (Z)" aria-label="Previous">⏮</button>
+          <button type="button" data-action="play" title="Play (X)" aria-label="Play">▶</button>
+          <button type="button" data-action="pause" title="Pause (C)" aria-label="Pause">⏸</button>
+          <button type="button" data-action="stop" title="Stop (V)" aria-label="Stop">⏹</button>
+          <button type="button" data-action="next" title="Next (B)" aria-label="Next">⏭</button>
+        </div>
+        <label class="mediaz-volume">🔊 <input id="mediaz-volume" type="range" min="0" max="100" value="80" aria-label="Volume"></label>
+        <div class="mediaz-toggles">
+          <button type="button" class="secondary" data-toggle="shuffle" aria-pressed="false" title="Shuffle (S)">🔀 Shuffle</button>
+          <button type="button" class="secondary" data-toggle="repeat" aria-pressed="false" title="Repeat (R)">🔁 Repeat</button>
+          <button type="button" class="secondary" data-action="fullscreen" title="Full screen video">⛶</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="mediaz-playlist" aria-labelledby="mediaz-list-heading">
+      <div class="mediaz-list-top">
+        <h2 id="mediaz-list-heading">Playlist <span class="mediaz-count" id="mediaz-count">{{ tracks|length }}</span></h2>
+        <input id="mediaz-filter" type="search" placeholder="Search the playlist" aria-label="Search the playlist">
+        <label class="button secondary mediaz-open">📂 Open from this device
+          <input id="mediaz-files" type="file" multiple accept="{{ accept }}" hidden>
+        </label>
+      </div>
+      {% if tracks|length >= limit %}
+        <p class="mediaz-note">Showing the first {{ limit }} songs and videos in Files.</p>
+      {% endif %}
+      <ol class="mediaz-tracks" id="mediaz-tracks">
+        {% for track in tracks %}
+          <li><button type="button" class="mediaz-track" data-url="{{ track.url }}" data-kind="{{ track.kind }}">
+            <span class="mediaz-track-icon" aria-hidden="true">{{ "🎬" if track.kind == "video" else "🎵" }}</span>
+            <span class="mediaz-track-name">{{ track.name }}</span>
+            <span class="mediaz-track-folder">{{ track.folder }}</span>
+          </button></li>
+        {% endfor %}
+      </ol>
+      <p class="mediaz-empty" id="mediaz-empty"{% if tracks %} hidden{% endif %}>No songs or videos yet. Upload some in <a href="{{ url_for('index') }}">Files</a>, or open them from this device.</p>
+      <p class="mediaz-note">Plays whatever this browser can: MP3, M4A/AAC, WAV, FLAC, OGG/Opus, MP4 and WebM almost everywhere. Some formats, like WMA, AVI or MKV, only play on some devices; Mediaz says so and moves on to the next one.</p>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='mediaz.js') }}" defer></script>
+</body>
+</html>
