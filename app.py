@@ -43,6 +43,7 @@ import converters
 import google_docs
 import pdf_editor
 import pdf_word
+import youtube
 
 
 # Settings that can be changed on the Settings page. A saved value overrides the
@@ -267,7 +268,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.74.0"
+HELP_VERSION = "1.75.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -418,13 +419,15 @@ HELP_TOPICS = [
     },
     {
         "key": "mediaz", "title": "Mediaz: music and video player", "icon": "🎧", "endpoint": "mediaz_page",
-        "summary": "A Winamp-style player for the songs and videos in Files, or on your own device.",
+        "summary": "A Winamp-style player for the songs and videos in Files, on your own device or on YouTube.",
         "steps": [
             "Open Mediaz in the menu. The playlist lists every song and video in Files that you can see, folder by folder. Press one to play it.",
             "Use the buttons for previous, play, pause, stop and next, or the keys Z, X, C, V and B as in Winamp. The space bar pauses. Drag the bar under the display to jump anywhere.",
             "Shuffle (S) plays the list in a random order and Repeat (R) starts again at the end. The volume, Shuffle and Repeat are remembered on this device.",
             "Videos show in the display; songs show moving spectrum bars. ⛶ shows a video full screen.",
             "Open from this device adds songs and videos from your computer or phone to the playlist. They play in your browser and are not uploaded.",
+            "YouTube: type words in Search YouTube, or paste a YouTube link, and press Search. Press a video to play it now, or ＋ to add it to the end of the playlist. The same buttons, keys and position bar control it.",
+            "YouTube videos play in YouTube's own player in the display, so they need an internet connection. Some videos can't be played outside YouTube; Mediaz says so and moves on.",
             "Mediaz plays whatever your browser can: MP3, M4A/AAC, WAV, FLAC, OGG/Opus, MP4 and WebM almost everywhere. Formats such as WMA, AVI or MKV only play on some devices; if one can't play, Mediaz says so and moves on.",
         ],
     },
@@ -491,6 +494,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.75.0",
+        "date": "2026-11-23",
+        "changes": [
+            "Mediaz can search YouTube and play its videos (request #50: upgrade Mediaz to use and search YouTube and play).",
+            "Type words or paste a YouTube link under YouTube, then press a video to play it or ＋ to add it to the playlist.",
+            "YouTube videos play in the display and work with the same play, pause, stop, next, position and volume controls as your own songs.",
+        ],
+    },
     {
         "version": "1.74.0",
         "date": "2026-11-18",
@@ -6183,6 +6195,18 @@ def create_app(test_config=None):
         if not file_visible(file_store.get(relative)):
             abort(404)
         return send_file(target, mimetype=MEDIAZ_TYPES.get(target.suffix.lower()), conditional=True)
+
+    @app.get("/mediaz/youtube")
+    def mediaz_youtube():
+        """Searches YouTube (or reads a pasted link) for videos to add to the playlist."""
+        query = request.args.get("q", "").strip()
+        if not query:
+            return jsonify(videos=[])
+        try:
+            videos = youtube.search(query)
+        except youtube.YouTubeError as error:
+            return jsonify(error=str(error)), 502
+        return jsonify(videos=videos)
 
     convert_tools = {
         "word2pdf": converters.WORD_EXTENSIONS,

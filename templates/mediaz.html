@@ -12,7 +12,7 @@
     <section class="heading missions-hero">
       <div>
         <h1>Mediaz</h1>
-        <p class="page-description">Play the music and videos in Files, or open some from this device, in a Winamp-style player with a playlist.</p>
+        <p class="page-description">Play the music and videos in Files, from this device or from YouTube, in a Winamp-style player with a playlist.</p>
       </div>
     </section>
 
@@ -20,6 +20,7 @@
     <section class="mediaz-player" aria-label="Player">
       <div class="mediaz-screen">
         <video id="mediaz-media" playsinline preload="metadata"></video>
+        <div class="mediaz-youtube-frame"><div id="mediaz-youtube"></div></div>
         <canvas id="mediaz-visual" width="300" height="80" aria-hidden="true"></canvas>
         <div class="mediaz-display">
           <span class="mediaz-time" id="mediaz-time">00:00</span>
@@ -43,6 +44,18 @@
           <button type="button" class="secondary" data-action="fullscreen" title="Full screen video">⛶</button>
         </div>
       </div>
+    </section>
+
+    {# YouTube: search, or paste a link; results go into the playlist and play in YouTube's own player. #}
+    <section class="mediaz-playlist mediaz-yt" aria-labelledby="mediaz-yt-heading">
+      <form class="mediaz-list-top" id="mediaz-yt-form" action="{{ url_for('mediaz_youtube') }}" method="get" role="search">
+        <h2 id="mediaz-yt-heading">▶ YouTube</h2>
+        <input id="mediaz-yt-query" name="q" type="search" maxlength="200" placeholder="Search YouTube or paste a link" aria-label="Search YouTube or paste a link" required>
+        <button type="submit">Search</button>
+      </form>
+      <p class="mediaz-note" id="mediaz-yt-status" aria-live="polite" hidden></p>
+      <ol class="mediaz-yt-results" id="mediaz-yt-results"></ol>
+      <p class="mediaz-note">Press a video to play it now, or ＋ to add it to the end of the playlist. YouTube videos play in YouTube's player and need an internet connection; some can't be played outside YouTube.</p>
     </section>
 
     <section class="mediaz-playlist" aria-labelledby="mediaz-list-heading">

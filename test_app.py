@@ -10,6 +10,7 @@ from unittest import mock
 import zipfile
 from pathlib import Path
 import urllib.error
+import urllib.request
 from urllib.parse import unquote
 
 from markupsafe import escape
@@ -2819,6 +2820,63 @@ class FileManagerTests(unittest.TestCase):
             shutil.rmtree(item) if item.is_dir() else item.unlink()
         page = self.client.get("/mediaz").get_data(as_text=True)
         self.assertIn('id="mediaz-empty">No songs or videos yet', page)
+
+    def test_mediaz_searches_youtube(self):
+        import youtube
+
+        # Request #50: the page has a YouTube search next to the playlist.
+        page = self.client.get("/mediaz").get_data(as_text=True)
+        self.assertIn('id="mediaz-yt-form" action="/mediaz/youtube"', page)
+        self.assertIn('id="mediaz-youtube"', page)
+
+        # Links and bare IDs are understood without asking YouTube.
+        for link in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10", "youtu.be/dQw4w9WgXcQ",
+                     "https://m.youtube.com/shorts/dQw4w9WgXcQ", "https://music.youtube.com/watch?list=x&v=dQw4w9WgXcQ",
+                     "dQw4w9WgXcQ"):
+            self.assertEqual(youtube.video_id(link), "dQw4w9WgXcQ", link)
+        for other in ("https://example.com/watch?v=dQw4w9WgXcQ", "never gonna", "", None):
+            self.assertIsNone(youtube.video_id(other))
+        with mock.patch.object(youtube, "fetch", side_effect=AssertionError("no search for a link")):
+            answer = self.client.get("/mediaz/youtube?q=https://youtu.be/dQw4w9WgXcQ").get_json()
+        self.assertEqual([video["id"] for video in answer["videos"]], ["dQw4w9WgXcQ"])
+
+        # Words are searched on YouTube's results page; live streams and repeats are left out.
+        def video(vid, title, length="3:33"):
+            item = {"videoId": vid, "title": {"runs": [{"text": title}]},
+                    "ownerText": {"runs": [{"text": "Channel " + title}]}}
+            if length:
+                item["lengthText"] = {"simpleText": length}
+            return {"videoRenderer": item}
+        data = {"contents": {"sections": [{"items": [
+            video("aaaaaaaaaaa", "First <b>song</b>"), {"channelRenderer": {"channelId": "x"}},
+            video("bbbbbbbbbbb", "Live now", length=None), video("aaaaaaaaaaa", "First again"),
+            {"shelf": {"items": [video("ccccccccccc", "Second", "1:02:03")]}}]}]}}
+        results_page = f'<html><script>var ytInitialData = {json.dumps(data)};</script></html>'
+        with mock.patch.object(youtube, "fetch", return_value=results_page) as fetch:
+            answer = self.client.get("/mediaz/youtube?q=thai pop").get_json()
+        self.assertIn("search_query=thai+pop", fetch.call_args[0][0])
+        self.assertEqual([(v["id"], v["title"], v["channel"], v["duration"]) for v in answer["videos"]],
+                         [("aaaaaaaaaaa", "First <b>song</b>", "Channel First <b>song</b>", "3:33"),
+                          ("ccccccccccc", "Second", "Channel Second", "1:02:03")])
+        self.assertEqual(answer["videos"][0]["thumbnail"], "https://i.ytimg.com/vi/aaaaaaaaaaa/mqdefault.jpg")
+
+        # An empty search gives nothing; a failed one says why.
+        self.assertEqual(self.client.get("/mediaz/youtube?q=+").get_json(), {"videos": []})
+        with mock.patch.object(youtube, "fetch", return_value="<html>nothing here</html>"):
+            response = self.client.get("/mediaz/youtube?q=songs")
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("could not read", response.get_json()["error"])
+        with mock.patch.object(urllib.request, "urlopen", side_effect=urllib.error.URLError("down")):
+            response = self.client.get("/mediaz/youtube?q=songs")
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Could not reach YouTube", response.get_json()["error"])
+
+        # Only people who are signed in can search.
+        with self.client.session_transaction() as sess:
+            sess.clear()
+        with mock.patch.object(youtube, "fetch", side_effect=AssertionError("signed out")):
+            response = self.client.get("/mediaz/youtube?q=songs")
+        self.assertIn(response.status_code, (302, 401))
 
     def test_side_menu_icons_and_light_dark_theme_setting(self):
         token = self._csrf()

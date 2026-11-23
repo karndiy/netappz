@@ -2002,6 +2002,10 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 .mediaz-screen video { display: none; width: 100%; max-height: 60vh; background: #000; }
 .mediaz-player.is-video .mediaz-screen video { display: block; }
 .mediaz-player.is-video #mediaz-visual { display: none; }
+.mediaz-youtube-frame { display: none; aspect-ratio: 16 / 9; max-height: 60vh; background: #000; }
+.mediaz-youtube-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+.mediaz-player.is-youtube .mediaz-youtube-frame { display: block; }
+.mediaz-player.is-youtube .mediaz-screen video, .mediaz-player.is-youtube #mediaz-visual { display: none; }
 #mediaz-visual { display: block; width: 100%; height: 80px; }
 .mediaz-display { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 8px 12px; background: #0b0f0b; font-family: var(--mac-mono); color: #2fdc4b; }
 .mediaz-time { font-size: 26px; letter-spacing: 1px; }
@@ -2030,6 +2034,16 @@ body:has(> .sidebar) .announcements { top: calc(var(--safe-top, 0px) + 14px); le
 .mediaz-track-name { flex: 1; overflow-wrap: anywhere; }
 .mediaz-track-folder { color: var(--mac-muted); font-size: 13px; overflow-wrap: anywhere; }
 .mediaz-note, .mediaz-empty { margin: 12px 0 0; color: var(--mac-muted); font-size: 13px; }
+.mediaz-yt-results { margin: 12px 0 0; padding: 0; list-style: none; max-height: 50vh; overflow-y: auto; }
+.mediaz-yt-results:empty { display: none; }
+.mediaz-yt-results li { display: flex; align-items: center; gap: 6px; }
+.mediaz-yt-result { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; padding: 6px; border-radius: 6px; background: transparent; color: var(--mac-text); text-align: left; white-space: normal; }
+.mediaz-yt-result:hover { background: var(--mac-fill); }
+.mediaz-yt-result img { flex: none; width: 120px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: #000; }
+.mediaz-yt-result span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.mediaz-yt-result strong { overflow-wrap: anywhere; }
+.mediaz-yt-result small { color: var(--mac-muted); }
+.mediaz-yt-add { flex: none; min-width: 40px; }
 @media (max-width: 600px) {
   .mediaz-time { font-size: 20px; }
   .mediaz-display { grid-template-columns: auto 1fr; }
