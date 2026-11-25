@@ -1,3 +1,4 @@
+import hashlib
 import hmac
 import io
 import json
@@ -268,7 +269,7 @@ TELEGRAM_USERS = re.compile(r"-?\d+(,-?\d+)*")
 # The Help page: how to use each part of the app, in plain words. Keep it in step with the app:
 # with every update, change the topics that update touches (or add one for a new page), then set
 # HELP_VERSION to the new version. A test fails until HELP_VERSION matches the newest entry below.
-HELP_VERSION = "1.75.0"
+HELP_VERSION = "1.76.0"
 HELP_TOPICS = [
     {
         "key": "start", "title": "Getting started", "icon": "👋", "endpoint": None,
@@ -314,7 +315,8 @@ HELP_TOPICS = [
             "Type narrows the list to folders, documents, spreadsheets, PDFs, images, videos and more; Owned by me shows only files you uploaded. Clear filters shows everything again.",
             "Sort by name, last modified or file size, from the sort button or by clicking a column heading. ☰ shows a list and ▦ shows a grid of cards; the app remembers your choice.",
             "Files you upload are yours: the Owner column says me, and each file shows how many times it was downloaded. 🔒 Private marks private files.",
-            "Click a file to download it. The ⋮ button on each item has Download (a ZIP for folders, without other people's private files), Make private or Make public, Rename and Delete.",
+            "Click a file to download it. The ⋮ button on each item has Details, Download (a ZIP for folders, without other people's private files), Make private or Make public, Rename and Delete.",
+            "Pictures show a small preview instead of an icon, in both the list and the grid. ⋮ → Details opens a panel with a bigger preview and the file's type, size, picture size in pixels, when a photo was taken and on what camera (if the photo says so), last modified, folder, owner, who can see it and downloads. For a folder it says how many folders and files are inside. ✕ or Escape closes it.",
             "Only the person who uploaded a file (or an administrator) can rename or delete it. Delete asks you to confirm first, and can't be undone.",
             "On a phone the list shows just the names, with the date and size underneath, and the grid shows two cards across.",
         ],
@@ -494,6 +496,15 @@ HELP_TOPICS = [
 
 # Patch notes, newest first. Add an entry for every change, and update HELP_TOPICS (above) to match.
 UPDATE_LOG = [
+    {
+        "version": "1.76.0",
+        "date": "2026-11-25",
+        "changes": [
+            "Pictures in Files show a small preview instead of an icon, in the list and the grid (request #51: upgrade Files to show a mini image for pictures and the file's details).",
+            "New ⋮ → Details on every file and folder: a panel with a bigger preview and the type, size, picture size, date taken and camera, last modified, folder, owner, who can see it and downloads.",
+            "Previews are made once on the server and don't count as downloads. Other people's private pictures stay hidden.",
+        ],
+    },
     {
         "version": "1.75.0",
         "date": "2026-11-23",
@@ -1360,6 +1371,10 @@ FILE_KIND_BY_EXTENSION = {ext: kind for kind, (_, _, exts) in FILE_KINDS.items()
 FILE_SORTS = {"name": "Name", "modified": "Last modified", "size": "File size"}
 FILE_VIEWS = ("list", "grid")
 FILE_SEARCH_LIMIT = 200
+# Pictures in Files show a small preview (1.76.0). Previews are JPEGs made once and kept until the picture changes;
+# small is for the list and grid, large for the Details panel. Bigger pictures than this just keep their icon.
+FILE_THUMB_SIZES = {"small": 240, "large": 800}
+FILE_THUMB_MAX_BYTES = 60 * 1024 * 1024
 # Mediaz (1.74.0): a Winamp-style player for the audio and video files in Files. It lists at most this many,
 # and sends each with a media type the browser understands, since Python doesn't know some of them.
 MEDIAZ_LIMIT = 1000
@@ -1377,6 +1392,11 @@ def file_kind(path):
     if path.is_dir():
         return "folder"
     return FILE_KIND_BY_EXTENSION.get(path.suffix.lower(), "other")
+
+
+def file_has_thumb(path):
+    """Pictures the server can shrink into a preview. SVG keeps its icon: it may hold scripts."""
+    return file_kind(path) == "image" and path.suffix.lower() != ".svg"
 REQUEST_KINDS = {"feature": "New feature or change", "problem": "Something isn't working"}
 # "queued" hands a request to Claude Code: scripts/claude-worker.sh picks it up (administrators only).
 MISSION_STATUSES = {"pending": "Waiting for approval", "approved": "Approved", "returned": "Sent back"}
@@ -3925,6 +3945,122 @@ def create_app(test_config=None):
             return f"{moment:%b} {moment.day}"
         return f"{moment:%b} {moment.day}, {moment.year}"
 
+    file_thumb_dir = Path(app.config["NOTES_DATABASE"]).expanduser().parent / "thumbs"
+
+    def file_thumbnail(target, size):
+        """A JPEG preview of a picture in Files, at most size px across, kept until the picture changes; None if unreadable."""
+        stat = target.stat()
+        if stat.st_size > FILE_THUMB_MAX_BYTES:
+            return None
+        key = f"{target.relative_to(root).as_posix()}\0{stat.st_mtime_ns}\0{stat.st_size}\0{size}"
+        cached = file_thumb_dir / f"{hashlib.sha256(key.encode()).hexdigest()[:40]}.jpg"
+        if cached.is_file():
+            return cached
+        from PIL import Image, ImageOps, UnidentifiedImageError
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+        try:
+            with Image.open(target) as image:
+                image.draft("RGB", (size, size))  # JPEGs decode at a smaller size straight away.
+                image = ImageOps.exif_transpose(image)
+                image.thumbnail((size, size), Image.LANCZOS)
+                image = image.convert("RGBA")
+                flat = Image.new("RGB", image.size, "white")  # See-through parts become white.
+                flat.paste(image, mask=image.getchannel("A"))
+        except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+            return None
+        file_thumb_dir.mkdir(parents=True, exist_ok=True)
+        partial = file_thumb_dir / f"{cached.stem}.{secrets.token_hex(4)}.tmp"
+        flat.save(partial, "JPEG", quality=82)
+        partial.replace(cached)
+        return cached
+
+    def picture_details(target):
+        """Width, height and, when the photo says so, when it was taken and on what camera."""
+        from PIL import Image, UnidentifiedImageError
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+        try:
+            with Image.open(target) as image:
+                width, height = image.size
+                exif = image.getexif()
+                orientation = exif.get(0x0112)
+                taken = exif.get_ifd(0x8769).get(0x9003) or exif.get(0x0132)
+                camera = " ".join(str(exif.get(tag) or "").strip("\0 ") for tag in (0x010F, 0x0110)).strip()
+        except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+            return {}
+        if orientation in (5, 6, 7, 8):  # Turned on its side; it shows the other way round.
+            width, height = height, width
+        details = {"dimensions": f"{width:,} × {height:,} px"}
+        if taken:
+            try:
+                details["taken"] = datetime.strptime(str(taken).strip("\0 "), "%Y:%m:%d %H:%M:%S").strftime("%b %d, %Y %H:%M")
+            except ValueError:
+                pass
+        if camera:
+            details["camera"] = camera[:80]
+        return details
+
+    def file_details(value):
+        """Everything the Details panel on the Files page shows about one file or folder."""
+        target = resolve_path(value)
+        relative = normalized_relative(value)
+        if not relative or not (target.is_file() or target.is_dir()):
+            abort(404)
+        meta = file_store.get(relative) if target.is_file() else None
+        if target.is_file() and not file_visible(meta):
+            abort(404)
+        stat = target.stat()
+        kind = file_kind(target)
+        location = PurePosixPath(relative).parent.as_posix()
+        details = {
+            "name": target.name,
+            "path": relative,
+            "is_dir": target.is_dir(),
+            "kind": kind,
+            "icon": FILE_KINDS[kind][1],
+            "kind_label": FILE_KINDS[kind][0],
+            "extension": target.suffix.lstrip(".").upper(),
+            "mime": None if target.is_dir() else mimetypes.guess_type(target.name)[0],
+            "size": None if target.is_dir() else stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%b %d, %Y %H:%M"),
+            "location": "" if location == "." else location,
+            "owner": meta["owner"] if meta else None,
+            "mine": bool(meta and meta["user_id"] == g.user["id"]),
+            "private": bool(meta and meta["visibility"] == "private"),
+            "downloads": meta["downloads"] if meta else 0,
+            "thumb": None,
+        }
+        if target.is_dir():
+            children = [child for child in target.iterdir() if not child.is_symlink()]
+            files = [child.relative_to(root).as_posix() for child in children if child.is_file()]
+            metas = file_store.for_paths(files)
+            details["folders"] = sum(1 for child in children if child.is_dir())
+            details["files"] = sum(1 for path in files if file_visible(metas.get(path)))
+        elif file_has_thumb(target):
+            details.update(picture_details(target))
+            details["thumb"] = url_for("file_thumb", relative=relative, size="large", v=int(stat.st_mtime))
+        return details
+
+    @app.get("/files/thumb/<path:relative>")
+    def file_thumb(relative):
+        """A small preview of a picture; it doesn't count as a download."""
+        target = resolve_path(relative)
+        relative = normalized_relative(relative)
+        if not target.is_file() or not file_has_thumb(target):
+            abort(404)
+        if not file_visible(file_store.get(relative)):
+            abort(404)
+        thumb = file_thumbnail(target, FILE_THUMB_SIZES.get(request.args.get("size"), FILE_THUMB_SIZES["small"]))
+        if thumb is None:
+            abort(404)
+        # The link carries the picture's time, so a changed picture gets a new address.
+        response = send_file(thumb, mimetype="image/jpeg", max_age=7 * 24 * 3600)
+        response.headers["Cache-Control"] = "private, max-age=604800"
+        return response
+
     def chosen_file_option(arg, session_key, choices, default):
         """Sort and view stick: the one in the link, else the one this person chose last time."""
         asked = request.args.get(arg, "")
@@ -3987,6 +4123,8 @@ def create_app(test_config=None):
                     "downloads": meta["downloads"] if meta else 0,
                     "can_manage": item.is_dir() or file_manageable(meta),
                     "can_share": item.is_file() and file_shareable(meta),
+                    "thumb": url_for("file_thumb", relative=item_relative, v=int(stat.st_mtime))
+                    if item.is_file() and file_has_thumb(item) else None,
                 }
             )
         sort_keys = {"name": lambda e: e["name"].casefold(), "modified": lambda e: e["mtime"],
@@ -3997,6 +4135,7 @@ def create_app(test_config=None):
         if truncated:
             entries = entries[:FILE_SEARCH_LIMIT]
 
+        info = file_details(request.args["info"]) if request.args.get("info") else None
         current = relative.as_posix() if relative.parts else ""
         parent = PurePosixPath(current).parent.as_posix() if current else None
         if parent == ".":
@@ -4004,6 +4143,7 @@ def create_app(test_config=None):
         return render_template(
             "index.html",
             entries=entries,
+            info=info,
             current=current,
             parent=parent,
             query=query,

@@ -135,7 +135,7 @@
       {% for entry in entries %}
         <div class="file-row kind-{{ entry.kind }}">
           <a class="file-name" href="{% if entry.is_dir %}{{ url_for('index', path=entry.path) }}{% else %}{{ url_for('download', relative=entry.path) }}{% endif %}"{% if not entry.is_dir %} data-download="{{ entry.name }}" data-size="{{ entry.size }}"{% endif %}>
-            <span class="file-icon" aria-hidden="true">{{ entry.icon }}</span>
+            <span class="file-icon{% if entry.thumb %} has-thumb{% endif %}" aria-hidden="true">{{ entry.icon }}{% if entry.thumb %}<img class="file-thumb" src="{{ entry.thumb }}" alt="" loading="lazy" decoding="async" onerror="this.remove()">{% endif %}</span>
             <span class="file-title">
               <span class="file-title-text">{{ entry.name }}</span>
               {% if entry.private %}<span class="file-badge private" title="Only the owner and administrators can see this file">🔒 Private</span>{% endif %}
@@ -152,6 +152,7 @@
           <details class="drive-popup file-menu">
             <summary class="file-menu-button" aria-label="More actions for {{ entry.name }}" title="More actions">⋮</summary>
             <div class="drive-menu-panel drive-menu-right file-actions">
+              <a class="drive-menu-item" href="{{ files_url(info=entry.path) }}">ℹ️ Details</a>
               {% if entry.is_dir %}
                 <a class="drive-menu-item" href="{{ url_for('index', path=entry.path) }}">📂 Open</a>
                 <a class="drive-menu-item download-link" href="{{ url_for('download', relative=entry.path) }}" data-download="{{ entry.name }}.zip">⬇️ Download ZIP</a>
@@ -199,6 +200,52 @@
         </div>
       {% endfor %}
     </section>
+    {% if info %}
+      {# Details (1.76.0): a bigger preview for pictures and everything known about the item. #}
+      <aside class="drive-info" aria-label="Details of {{ info.name }}">
+        <header class="drive-info-head">
+          <span class="file-icon kind-{{ info.kind }}" aria-hidden="true">{{ info.icon }}</span>
+          <h2>{{ info.name }}</h2>
+          <a class="drive-info-close" id="drive-info-close" href="{{ files_url() }}" aria-label="Close details" title="Close">✕</a>
+        </header>
+        <div class="drive-info-preview kind-{{ info.kind }}">
+          {% if info.thumb %}
+            <img src="{{ info.thumb }}" alt="Preview of {{ info.name }}">
+          {% else %}
+            <span aria-hidden="true">{{ info.icon }}</span>
+          {% endif %}
+        </div>
+        <dl class="drive-info-data">
+          <dt>Type</dt>
+          <dd>{% if info.is_dir %}Folder{% else %}{{ info.extension or 'File' }}{% if info.mime %} · {{ info.mime }}{% endif %}{% endif %}</dd>
+          {% if info.is_dir %}
+            <dt>Contains</dt>
+            <dd>{{ info.folders }} folder{{ '' if info.folders == 1 else 's' }}, {{ info.files }} file{{ '' if info.files == 1 else 's' }}</dd>
+          {% else %}
+            <dt>Size</dt>
+            <dd>{{ info.size|filesizeformat }} ({{ "{:,}".format(info.size) }} bytes)</dd>
+          {% endif %}
+          {% if info.dimensions %}<dt>Dimensions</dt><dd>{{ info.dimensions }}</dd>{% endif %}
+          {% if info.taken %}<dt>Taken</dt><dd>{{ info.taken }}</dd>{% endif %}
+          {% if info.camera %}<dt>Camera</dt><dd>{{ info.camera }}</dd>{% endif %}
+          <dt>Modified</dt><dd>{{ info.modified }}</dd>
+          <dt>Location</dt><dd><a href="{{ url_for('index', path=info.location or None) }}">/{{ info.location }}</a></dd>
+          {% if not info.is_dir %}
+            <dt>Owner</dt><dd>{{ 'me' if info.mine else info.owner or '—' }}</dd>
+            <dt>Who can see</dt><dd>{{ '🔒 Private: only the owner and administrators' if info.private else '🌐 Everyone' }}</dd>
+            <dt>Downloads</dt><dd>{{ "{:,}".format(info.downloads) }}</dd>
+          {% endif %}
+        </dl>
+        <div class="drive-info-actions">
+          {% if info.is_dir %}
+            <a class="button secondary" href="{{ url_for('index', path=info.path) }}">📂 Open</a>
+            <a class="button" href="{{ url_for('download', relative=info.path) }}" data-download="{{ info.name }}.zip">⬇️ Download ZIP</a>
+          {% else %}
+            <a class="button" href="{{ url_for('download', relative=info.path) }}" data-download="{{ info.name }}" data-size="{{ info.size }}">⬇️ Download</a>
+          {% endif %}
+        </div>
+      </aside>
+    {% endif %}
     {% if truncated %}<p class="drive-count">Showing the first {{ entries|length }} results. Type more of the name to narrow the search.</p>{% endif %}
 
     <div class="drive-drop" id="drive-drop" hidden>
@@ -378,7 +425,12 @@
       document.addEventListener("click", function (event) {
         if (!event.target.closest(".drive-popup")) closeAll();
       });
-      document.addEventListener("keydown", function (event) { if (event.key === "Escape") closeAll(); });
+      document.addEventListener("keydown", function (event) {
+        if (event.key !== "Escape") return;
+        var info = document.getElementById("drive-info-close");
+        if (info && !drive.querySelector(".drive-popup[open]")) info.click();
+        closeAll();
+      });
       // Drag files from the computer onto the page to upload them into this folder.
       var depth = 0;
       function hasFiles(event) { return Array.prototype.indexOf.call(event.dataTransfer.types, "Files") !== -1; }

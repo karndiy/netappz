@@ -443,6 +443,70 @@ class FileManagerTests(unittest.TestCase):
         self.client.post("/delete", data={"_csrf_token": token, "path": "renamed.txt"})
         self.assertFalse((self.root / "renamed.txt").exists())
 
+    def test_files_show_picture_previews_and_details(self):
+        from PIL import Image
+
+        users = self.app.extensions["users"]
+        files = self.app.extensions["files"]
+        buffer = io.BytesIO()
+        exif = Image.Exif()
+        exif[0x010F], exif[0x0110] = "Acme", "Snap 1"
+        exif.get_ifd(0x8769)[0x9003] = "2026:01:02 03:04:05"
+        Image.new("RGBA", (640, 480), (255, 0, 0, 128)).convert("RGB").save(buffer, "JPEG", exif=exif)
+        (self.root / "photos").mkdir()
+        (self.root / "photos" / "red.jpg").write_bytes(buffer.getvalue())
+        buffer = io.BytesIO()
+        Image.new("RGBA", (50, 900), (0, 0, 255, 0)).save(buffer, "PNG")
+        (self.root / "photos" / "tall.png").write_bytes(buffer.getvalue())
+        (self.root / "photos" / "broken.png").write_bytes(b"not a picture")
+        (self.root / "photos" / "logo.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+        (self.root / "photos" / "notes.txt").write_text("hello")
+
+        page = self.client.get("/files?path=photos").get_data(as_text=True)
+        thumbs = re.findall(r'class="file-thumb" src="([^"]+)"', page)
+        self.assertEqual(len(thumbs), 3)  # The jpg, png and broken png; not SVG or text.
+        self.assertTrue(thumbs[1].startswith("/files/thumb/photos/red.jpg?v="))
+        self.assertIn("ℹ️ Details", page)
+        self.assertNotIn('class="drive-info"', page)
+
+        response = self.client.get(thumbs[1])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/jpeg")
+        with Image.open(io.BytesIO(response.data)) as thumb:
+            self.assertEqual(thumb.size, (240, 180))
+        response.close()
+        response = self.client.get("/files/thumb/photos/tall.png?size=large")
+        with Image.open(io.BytesIO(response.data)) as thumb:
+            self.assertEqual((thumb.size, thumb.getpixel((20, 20))), ((44, 800), (255, 255, 255)))
+        response.close()
+        self.assertEqual(len(list((Path(self.temp_dir.name) / "thumbs").glob("*.jpg"))), 2)
+        self.assertEqual(self.client.get("/files/thumb/photos/red.jpg").status_code, 200)  # From the cache.
+        self.assertEqual(self.client.get("/files/thumb/photos/broken.png").status_code, 404)
+        self.assertEqual(self.client.get("/files/thumb/photos/logo.svg").status_code, 404)
+        self.assertEqual(self.client.get("/files/thumb/photos/notes.txt").status_code, 404)
+        self.assertEqual(self.client.get("/files/thumb/../outside.jpg").status_code, 400)
+        self.assertIsNone(files.get("photos/red.jpg"))  # Previews aren't downloads.
+
+        page = self.client.get("/files?path=photos&info=photos/red.jpg").get_data(as_text=True)
+        info = page.split('class="drive-info"')[1].split("</aside>")[0]
+        self.assertIn("/files/thumb/photos/red.jpg?size=large", info)
+        for text in ("JPG · image/jpeg", "640 × 480 px", "Jan 02, 2026 03:04", "Acme Snap 1", "/photos", "🌐 Everyone"):
+            self.assertIn(text, info)
+        self.assertIn('href="/files?path=photos" aria-label="Close details"', info)
+        info = self.client.get("/files?info=photos").get_data(as_text=True).split('class="drive-info"')[1]
+        self.assertIn("0 folders, 5 files", info)
+        self.assertIn("Download ZIP", info)
+        self.assertEqual(self.client.get("/files?info=photos/missing.jpg").status_code, 404)
+        self.assertEqual(self.client.get("/files?info=../x").status_code, 400)
+
+        # Someone else can't see a private picture's preview or details.
+        files.claim("photos/red.jpg", self.admin_id, "private")
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = users.add("member", "member-password")
+        self.assertEqual(self.client.get("/files/thumb/photos/red.jpg").status_code, 404)
+        self.assertEqual(self.client.get("/files?info=photos/red.jpg").status_code, 404)
+        self.assertIn("4 files", self.client.get("/files?info=photos").get_data(as_text=True))
+
     def test_files_page_searches_filters_sorts_and_switches_view_like_drive(self):
         token = self._csrf()
         (self.root / "docs" / "deep").mkdir(parents=True)
